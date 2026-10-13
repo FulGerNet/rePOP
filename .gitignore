@@ -1,0 +1,17 @@
+# The user's own game files.
+/Assets/
+# C lifted from those files by tools/recomp.ps1.
+/src/*/gen/
+# Analysis databases, Ghidra projects and notes that quote the binaries.
+/research/
+# Outputs.
+/bin/
+/build*/
+/logs/
+/xbox_kernel.log
+__pycache__/
+*.pyc
+.pytest_cache/
+*.user
+.vs/
+/third_party/xboxrecomp/tools/*/output/
