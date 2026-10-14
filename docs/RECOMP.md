@@ -97,7 +97,16 @@ on the host GPU keyed by guest offset and width, and a texture stage that
 names a surface samples that render target. Other textures are decoded from
 guest memory by the software path's decoder and cached with a per-frame
 fingerprint. `RECOMP_HW_SCALE` sets the internal resolution multiple
-(default 2); `RECOMP_HW_NOCULL=1` ignores cull state. Without `RECOMP_HW` the
+(default 2) of the display surface and anything as wide; smaller render
+targets (the glow chain, shadow buffers) stay at the guest's resolution
+(`RECOMP_HW_FX_SCALE`, default 1), because their filters are fixed tap
+offsets in guest texels: rendered at 2x, the demo's glow blur covered half
+the area and left sharp copies of the scene about ten pixels off (measured by
+cross-correlating the glow layer with the scene, before: ~(+25, +19) host
+pixels in the composite; after: ~0.1). Compiled shaders are cached in
+`bin\shadercache` (`RECOMP_HW_SHADER_CACHE=<dir>`, `0` for none), so a vertex
+program's first use costs no compile after the first run.
+`RECOMP_HW_NOCULL=1` ignores cull state. Without `RECOMP_HW` the
 original software rasteriser runs (about 1 fps).
 
 `RECOMP_HW_ASPECT=<w:h>` (`run.ps1 -Aspect 16:9`) widens the picture Hor+:
@@ -106,12 +115,17 @@ The executables are built with `RESOT_ASPECT=16:9` (CMake cache variable),
 which `port/windows/src/main.c` puts in `RECOMP_HW_ASPECT` at start-up when
 the variable is not already set; an empty `RESOT_ASPECT` builds 4:3.
 
-- The target's entry hooks widen each camera's horizontal field of view
-  before the title builds its projection and its culling from it (demo:
-  `sub_000EF340`, `sub_0008A820`; fov at camera `+0x0C`). The original is
-  remembered per camera, so the widening does not compound. The widening
-  raises the vertical field too; a hook on the routine the finished matrix is
-  handed to (`sub_000EF140`, from `0x000EF5AA`) restores its y scale.
+- The target's hook on the routine the finished projection is handed to
+  (`sub_000EF140`, from `0x000EF5AA`) divides its x scale by the widening;
+  the camera's field of view is left alone, because Jade places its in-camera
+  2D from it.
+- Culling: Jade's `CAM_Engine_ComputePlans` (demo `sub_0008A500`) builds the
+  side planes of the frustum from half the field of view. Entry hooks on the
+  cosine and sine it calls (`sub_000319B0` returning to `0x0008A525`,
+  `sub_00031A00` returning to `0x0008A54C`) hand it `atan(widen * tan h)`
+  instead, so objects in the new side strips are not culled. Some sets were
+  only modelled for 4:3 (the demo's menu garden ends at the lower left) and
+  show the clear colour there.
 - Host surfaces get the extra width; the guest still renders 640 pixels
   across, now covering the wider field.
 - On the full 640x480 display surface only, a vertex with `w == 1` (the
@@ -119,6 +133,8 @@ the variable is not already set; an empty `RESOT_ASPECT` builds 4:3.
   unless it lies on the surface's edge (fades, post-processing quads). Render
   targets of other sizes (the glow chain) are left alone.
 - The window keeps the picture's shape; movies stay 4:3 in the middle.
+  Alt+Enter or F11 switches between the window and a borderless window over
+  the monitor (a maximised window keeps its title bar and so gets bars).
 
 Not implemented: stencil, cube maps (face 0 only), depth textures (shadow
 maps), bump-env and dot-product texture modes, points and lines. Nothing is
@@ -150,9 +166,18 @@ the heap played white noise once the contiguous arena had grown past the
 heap's start.
 
 **Input** (`usb/`, `input/`): XAPI is linked into the XBE and drives the OHCI
-controller at `0xFED00000` itself, so the pad is a USB device model
-(`RECOMP_USB`), fed from XInput or the keyboard (`RECOMP_KEYBOARD`), or from a
-script (`RECOMP_PAD_SCRIPT=<ms>:<button>[:<hold ms>],...`).
+controller at `0xFED00000` itself. The emulated USB pad behind it
+(`RECOMP_USB`, `run.ps1 -UsbPad`) failed to enumerate in most starts, so the
+demo's `target_hooks.c` replaces XAPI's input entry points instead
+(`XGetDevices`, `XGetDeviceChanges`, `XInputOpen`, `XInputClose`,
+`XInputGetCapabilities`, `XInputGetState`, `XInputSetState`; addresses in the
+file): port 0 always has a gamepad, read by `xbox_HlePadState` from the first
+XInput pad, else a WinMM joystick, with the keyboard and mouse buttons merged
+(`RECOMP_KEYBOARD=0` turns those off), and the title's rumble goes to the
+XInput pad. A script (`RECOMP_PAD_SCRIPT=<ms>:<button>[:<hold ms>],...`,
+timed from the title's first poll) or `RECOMP_PAD_LIVE` still applies on
+top. With `RECOMP_USB=1` the original routines run (they are kept as
+`sub_X_gen`).
 
 **Lifter** (`tools/recomp/lifter.py`): `pushfd`/`popfd`/`cpuid` are
 translated; the CPU reported is a Pentium III (MMX, SSE, no SSE2).
@@ -192,6 +217,23 @@ Diagnostics added by the host (`port/windows/src/main.c`), all off unless set:
 | `RECOMP_SYNC_TRACE=1` | mutex, event, thread-resume and unbounded-wait calls with thread id and guest caller |
 | `RECOMP_OVL_DUMP=prefix` | raw YUY2 of the first 400 distinct movie frames |
 | `RESOT_LOG_UNBUFFERED=1` | write every diagnostic line at once (default: buffered, flushed four times a second) |
+| `RECOMP_HW_GLOW_DUMP=prefix` | with the frame trace: the display surface before the first batch that samples another render target into it and at the flip, and every smaller render target, as BMPs at host resolution |
+| `RECOMP_NV2A_ACK_SPIN=1` | the NV2A busy-bit thread spins (`Sleep(0)`) as before instead of sleeping until kicked |
+
+The frame trace (`RECOMP_FRAME_TRACE`) also gives, per batch on the hardware
+path, the pixels it left on the host GPU (an occlusion query), its screen
+bounding box, w, fog and diffuse-alpha ranges, cull, alpha-test, colour-mask
+and fog state, and each texture stage's filter.
+
+**CPU use.** XDK Direct3D's KickOff (demo `sub_0029D0C0`, `sub_0029D170`)
+sets the write-combine flush bit at NV `+0x100410` and spins until the GPU
+clears it; here the runtime's executor thread clears it between segments,
+after Present, so the title thread spun for most of every frame, and the
+executor thread itself looped on `Sleep(0)`. The demo's `target_hooks.c`
+defines both routines by hand, the same stores in the same order, with the
+wait in `xbox_Nv2aWaitClear` (sleeps on an event the executor thread sets
+when it clears a bit) and `xbox_Nv2aKick` after the new DMA_PUT; the executor
+thread sleeps until kicked or for 1 ms.
 
 A title's own assertion text (`[GUEST] ...ASSERT...`) is followed by the
 recent indirect-call targets and the return addresses on the guest stack.

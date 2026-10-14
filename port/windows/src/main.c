@@ -647,6 +647,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         _putenv_s("RECOMP_HW_ASPECT", RESOT_DEFAULT_ASPECT);
 #endif
 
+    /* Full screen (a borderless window over the monitor) unless
+     * RECOMP_HW_FULLSCREEN=0 asks for a window (run.ps1 -Windowed). The
+     * keyboard and mouse play as the pad unless RECOMP_KEYBOARD=0. */
+    if (!getenv("RECOMP_HW_FULLSCREEN"))
+        _putenv_s("RECOMP_HW_FULLSCREEN", "1");
+    if (!getenv("RECOMP_KEYBOARD"))
+        _putenv_s("RECOMP_KEYBOARD", "1");
+
     /* Diagnostics are buffered and flushed four times a second (and by the
      * crash handler). Unbuffered, every fprintf was one or more blocking
      * writes to the pipe run.ps1 redirects stderr into, on whichever thread

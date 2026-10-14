@@ -556,6 +556,70 @@ static void pad_script_apply(int pad, uint8_t *out)
     }
 }
 
+/* RE-SoT: the pad without the USB bus.
+ *
+ * The emulated OHCI pad had to be enumerated by XAPI's USB stack first, and
+ * that failed in most starts (the title then saw no controller at all). A
+ * target can instead replace the title's XAPI input entry points
+ * (XGetDevices, XInputOpen, XInputGetState, XInputSetState, ...; demo:
+ * source/xbox-demo/target_hooks.c) and answer them from here: the host's
+ * keyboard, mouse, XInput pad or joystick (src/input), with RECOMP_PAD_SCRIPT
+ * and RECOMP_PAD_LIVE still applied on top. `out` receives the title's
+ * XINPUT_STATE: packet number, buttons, eight analog buttons, four thumb
+ * axes (22 bytes, packed). Returns 0, or ERROR_DEVICE_NOT_CONNECTED. */
+uint32_t xbox_HlePadState(uint32_t port, uint8_t *out)
+{
+    static uint32_t packet[XBOX_MAX_CONTROLLERS];
+    static uint8_t last[XBOX_MAX_CONTROLLERS][20];
+    XBOX_INPUT_STATE st;
+    uint8_t rep[20];
+    uint16_t buttons;
+    int i;
+
+    if (port >= XBOX_MAX_CONTROLLERS)
+        return 1167;                                 /* ERROR_DEVICE_NOT_CONNECTED */
+    memset(rep, 0, sizeof rep);
+    rep[1] = 20;
+    if (xbox_InputGetState(port, &st) == 0) {
+        const XBOX_GAMEPAD *g = &st.Gamepad;
+        rep[2] = (uint8_t)(g->wButtons & 0xFF);
+        rep[3] = (uint8_t)(g->wButtons >> 8);
+        for (i = 0; i < 8; i++)
+            rep[4 + i] = g->bAnalogButtons[i];
+        memcpy(&rep[12], &g->sThumbLX, 2);
+        memcpy(&rep[14], &g->sThumbLY, 2);
+        memcpy(&rep[16], &g->sThumbRX, 2);
+        memcpy(&rep[18], &g->sThumbRY, 2);
+    } else if (port != 0) {
+        return 1167;
+    }
+    pad_script_apply((int)port, rep);
+    /* The title's input layer looks for a new packet number. */
+    if (memcmp(rep, last[port], sizeof rep) != 0 || packet[port] == 0) {
+        packet[port]++;
+        memcpy(last[port], rep, sizeof rep);
+    }
+    buttons = (uint16_t)(rep[2] | (rep[3] << 8));
+    memcpy(out, &packet[port], 4);
+    memcpy(out + 4, &buttons, 2);
+    memcpy(out + 6, &rep[4], 8);
+    memcpy(out + 14, &rep[12], 8);
+    return 0;
+}
+
+/* RE-SoT: the title's rumble, to whichever host pad is port 0. */
+void xbox_HlePadRumble(uint32_t port, uint16_t left, uint16_t right)
+{
+    XBOX_VIBRATION v;
+    static uint16_t last_l = 1, last_r = 1;
+    if (port != 0 || (left == last_l && right == last_r))
+        return;                                      /* only changes go out */
+    last_l = left; last_r = right;
+    v.wLeftMotorSpeed = left;
+    v.wRightMotorSpeed = right;
+    xbox_InputSetState(0, &v);
+}
+
 int usb_gamepad_report(int pad, uint8_t *out, int max)
 {
     XBOX_INPUT_STATE state;

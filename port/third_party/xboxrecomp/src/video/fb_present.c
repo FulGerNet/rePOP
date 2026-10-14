@@ -140,8 +140,58 @@ int xbox_FramebufferKeyDown(int vk)
     return s_key_down[vk] != 0;
 }
 
+/* RE-SoT: Alt+Enter or F11 switches between the window and a borderless
+ * window over the whole monitor. A maximised window keeps its title bar, so
+ * its client area is not the picture's shape and the picture gets bars at
+ * the sides; over the whole monitor it fills a 16:9 screen. */
+static void fb_toggle_fullscreen(HWND h)
+{
+    static WINDOWPLACEMENT saved = { sizeof(WINDOWPLACEMENT) };
+    static int have_saved;
+    MONITORINFO mi;
+    /* Started with -Fullscreen, the window is already a popup. */
+    int full = !(GetWindowLongPtrA(h, GWL_STYLE) & WS_CAPTION);
+
+    if (!full) {
+        mi.cbSize = sizeof mi;
+        if (!GetMonitorInfoA(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi))
+            return;
+        have_saved = GetWindowPlacement(h, &saved);
+        SetWindowLongPtrA(h, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        SetWindowPos(h, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
+                     mi.rcMonitor.right - mi.rcMonitor.left,
+                     mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED);
+    } else {
+        SetWindowLongPtrA(h, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+        if (have_saved) {
+            SetWindowPlacement(h, &saved);
+            SetWindowPos(h, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
+                         | SWP_FRAMECHANGED);
+        } else {
+            RECT r = { 0, 0, 1280, 720 };   /* never windowed yet: 1280x720 */
+            AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+            SetWindowPos(h, NULL, 100, 100, r.right - r.left, r.bottom - r.top,
+                         SWP_NOZORDER | SWP_FRAMECHANGED);
+        }
+    }
+}
+
 static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
+    switch (m) {
+    case WM_SYSKEYDOWN:
+        if (w == VK_RETURN && (l & (1 << 29)) && !(l & (1 << 30))) {
+            fb_toggle_fullscreen(h);    /* Alt+Enter, not the key repeat */
+            return 0;
+        }
+        break;
+    case WM_KEYDOWN:
+        if (w == VK_F11 && !(l & (1 << 30))) {
+            fb_toggle_fullscreen(h);
+            return 0;
+        }
+        break;
+    }
     switch (m) {
     case WM_CLOSE:
     case WM_DESTROY:
@@ -175,6 +225,21 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         if ((unsigned)w < 256)
             s_key_down[w] = 0;
         return m == WM_SYSKEYUP ? DefWindowProcA(h, m, w, l) : 0;
+
+    /* RE-SoT: the mouse buttons are recorded like keys (VK_LBUTTON,
+     * VK_RBUTTON), so the input layer maps them the same way. The capture
+     * keeps the release from being lost if it happens outside the window. */
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+        s_key_down[m == WM_LBUTTONDOWN ? VK_LBUTTON : VK_RBUTTON] = 1;
+        SetCapture(h);
+        return 0;
+    case WM_LBUTTONUP:
+    case WM_RBUTTONUP:
+        s_key_down[m == WM_LBUTTONUP ? VK_LBUTTON : VK_RBUTTON] = 0;
+        if (!s_key_down[VK_LBUTTON] && !s_key_down[VK_RBUTTON])
+            ReleaseCapture();
+        return 0;
 
     /* Alt-tabbing away with a key held would leave it held for ever. */
     case WM_KILLFOCUS:

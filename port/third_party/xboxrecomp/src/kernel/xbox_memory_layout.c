@@ -155,6 +155,35 @@ static size_t xbox_TiledApertureSize(void)
 static HANDLE g_nv2a_ack_thread = NULL;
 static volatile LONG g_nv2a_ack_stop = 0;
 
+/* RE-SoT: the ack thread used to spin (Sleep(0) between ticks) and the title,
+ * waiting in XDK D3D's KickOff for the flush bit to clear, spun on another
+ * core: about one and a half cores busy at 60 fps, most of it waiting for the
+ * executor to come back from Present. Now the thread sleeps until it is
+ * kicked or a millisecond has passed, and a title routine that waits on a busy
+ * bit through xbox_Nv2aWaitClear sleeps until the thread has cleared it (the
+ * targets replace their KickOff with such a routine, source/<target>/
+ * target_hooks.c). Anything that still sets a bit and spins is served within
+ * a millisecond, as before within one tick. */
+static HANDLE g_nv2a_kick_ev, g_nv2a_ack_ev;
+
+void xbox_Nv2aKick(void)
+{
+    if (g_nv2a_kick_ev)
+        SetEvent(g_nv2a_kick_ev);
+}
+
+void xbox_Nv2aWaitClear(uint32_t va, uint32_t mask)
+{
+    volatile uint32_t *r = (volatile uint32_t *)((uintptr_t)va + g_memory_offset);
+    while (*r & mask) {
+        xbox_Nv2aKick();
+        if (g_nv2a_ack_ev)
+            WaitForSingleObject(g_nv2a_ack_ev, 1);
+        else
+            Sleep(0);
+    }
+}
+
 /*
  * NV2A busy-bit acknowledgement.
  *
@@ -877,13 +906,17 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
 {
     volatile uint32_t *regs = (volatile uint32_t *)param;
     while (!InterlockedCompareExchange(&g_nv2a_ack_stop, 0, 0)) {
+        int acked = 0;
         for (size_t i = 0; i < sizeof(NV2A_ACK) / sizeof(NV2A_ACK[0]); i++) {
             volatile uint32_t *r =
                 (volatile uint32_t *)((char *)regs + NV2A_ACK[i].offset);
             if (*r & NV2A_ACK[i].busy_mask) {
                 *r &= ~NV2A_ACK[i].busy_mask;
+                acked = 1;
             }
         }
+        if (acked && g_nv2a_ack_ev)
+            SetEvent(g_nv2a_ack_ev);           /* RE-SoT: wake a waiting title */
         for (size_t i = 0; i < sizeof(NV2A_IDLE) / sizeof(NV2A_IDLE[0]); i++) {
             volatile uint32_t *r =
                 (volatile uint32_t *)((char *)regs + NV2A_IDLE[i].offset);
@@ -1082,7 +1115,12 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
         *(volatile uint32_t *)((uintptr_t)(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT)
                                + g_memory_offset) = GetTickCount();
 
-        Sleep(0);  /* yield; the waiter is spinning on another core */
+        /* RE-SoT: sleep until kicked (a new PUT, a busy bit) or for a
+         * millisecond, instead of yielding in a loop on a core of its own. */
+        if (g_nv2a_kick_ev)
+            WaitForSingleObject(g_nv2a_kick_ev, 1);
+        else
+            Sleep(0);
     }
     return 0;
 }
@@ -1092,6 +1130,11 @@ static void xbox_Nv2aAckStart(void)
     dsp_ack_init();
     poke_init();
     g_nv2a_ack_stop = 0;
+    /* RE-SoT: RECOMP_NV2A_ACK_SPIN=1 keeps the old spinning loop. */
+    if (!getenv("RECOMP_NV2A_ACK_SPIN")) {
+        g_nv2a_kick_ev = CreateEventA(NULL, FALSE, FALSE, NULL);
+        g_nv2a_ack_ev = CreateEventA(NULL, FALSE, FALSE, NULL);
+    }
     g_nv2a_ack_thread = CreateThread(NULL, 0, nv2a_ack_thread,
                                      g_nv2a_memory, 0, NULL);
     if (g_nv2a_ack_thread) {

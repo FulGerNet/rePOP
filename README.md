@@ -88,7 +88,7 @@ In short, on Windows:
 
 ```powershell
 .\tools\recomp.ps1 -Target xbox-demo      # analyse, lift and build
-.\tools\run.ps1 -Pad                      # play the demo
+.\tools\run.ps1                           # play the demo, full screen
 .\tools\shortcut.ps1                      # desktop shortcut that does the same
 ```
 
@@ -100,14 +100,14 @@ In short, on Windows:
 
 | Component | Xbox demo | Xbox retail |
 | --- | --- | --- |
-| Lift and build | 🟢 11,364 functions, 0 failed | ⚪ |
+| Lift and build | 🟢 11,215 functions (2 of them written by hand: the D3D KickOff), 0 failed | ⚪ |
 | Boot to first frame | 🟢 | ⚪ |
 | Movies (Bink via overlay) | 🟢 picture; 🟡 sound produced, not checked by ear | ⚪ |
 | Menus | 🟢 main and pause | ⚪ |
 | In-level rendering | 🟡 no shadows, stencil or cube maps | ⚪ |
-| Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); level, HUD, ledge prompts, pause menu looked at in frame dumps; culling at the new sides not checked | ⚪ |
-| Frame rate | 🟢 55-60 fps (vsync) in the level sections recorded, dips during loads | ⚪ |
-| Controller / keyboard | 🟡 menus work, gameplay not validated by play; the emulated pad fails to enumerate in about one start in four | ⚪ |
+| Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or Alt+Enter/F11; culling widened to the new sides; the menu garden is not modelled past its 4:3 edge | ⚪ |
+| Frame rate | 🟢 60 fps (vsync) in every 5 s window after start-up in the runs of 2026-10-14 (afternoon); about half a core in the menu, one core in the intro scene | ⚪ |
+| Controller / keyboard | 🟡 keyboard, mouse buttons, XInput pad or joystick through XAPI replaced on port 0 (no USB enumeration); gameplay not validated by play | ⚪ |
 | Audio | 🟡 DirectSound runs on the emulated APU, no DSP effects; not checked by ear | ⚪ |
 | Save / load, memory unit | ⚪ | ⚪ |
 | Xbox Live (retail only) | n/a | ⚪ not planned |

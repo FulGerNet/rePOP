@@ -6137,7 +6137,9 @@ loc_0029890B: ;
     esp += 4; return; /* ret */
 
 loc_0029891C: ;
-    PUSH32(esp, 0x00298921u); RECOMP_ABI_CALL(0x0029D170u, sub_0029D170); /* call 0x0029D170 */
+    { uint32_t _icall_esp = g_esp;
+    PUSH32(esp, 0x00298921u); RECOMP_ICALL_SAFE(0x0029D170u, _icall_esp); /* manual call 0x0029D170 */
+    }
 
 loc_00298921: ;
     POP32(esp, edi);

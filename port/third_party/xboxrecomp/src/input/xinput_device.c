@@ -32,18 +32,19 @@ static DWORD g_last_packet[XBOX_MAX_CONTROLLERS] = { 0 };
  * The whole point of a recompilation is to be able to look at the thing
  * running, and a build nobody can press a button in cannot be looked at.
  *
- * Off by default, because a keyboard silently acting as player 1 is
- * surprising when a real pad is what you meant to use. RECOMP_KEYBOARD=1
- * turns it on. It only ever answers for port 0, and is merged on top of a
- * pad connected there, so a real controller keeps working.
+ * RE-SoT: on unless RECOMP_KEYBOARD=0 (port/windows/src/main.c sets it). It
+ * only ever answers for port 0, and is merged on top of a pad connected
+ * there, so a real controller keeps working. The layout is a PC game's, with
+ * the mouse buttons:
  *
- * The keys are the ones a Dreamcast or Saturn emulator would pick, which is
- * the closest thing to a convention here:
- *
- *   arrows        d-pad             Enter      START
- *   Z X A S       A B X Y           Backspace  BACK
- *   Q E           white black       1 3        triggers
- *   numpad 8/2/4/6 left thumb       I/K/J/L    right thumb
+ *   W A S D       left thumb        Enter         START
+ *   Space, left mouse button  A     Esc/Backspace BACK
+ *   Q             B                 F             X
+ *   E             Y                 R             left trigger
+ *   right mouse button  right trigger
+ *   arrows        d-pad             I J K L       right thumb
+ *   Z C           white black       Shift Ctrl    left / right thumb click
+ *   numpad 8/2/4/6 left thumb as well
  *
  * Keys come from the framebuffer window, which only receives them while it
  * has the focus, so typing in another window does not drive the game.
@@ -53,7 +54,7 @@ static BOOL keyboard_enabled(void)
     static int on = -1;
     if (on < 0) {
         const char *v = getenv("RECOMP_KEYBOARD");
-        on = (v && *v && *v != '0') ? 1 : 0;
+        on = (v && *v == '0') ? 0 : 1;            /* RE-SoT: on by default */
     }
     return on ? TRUE : FALSE;
 }
@@ -96,26 +97,31 @@ static void keyboard_state(XBOX_INPUT_STATE *pState)
     if (key_down(VK_LEFT))   b |= XBOX_GAMEPAD_DPAD_LEFT;
     if (key_down(VK_RIGHT))  b |= XBOX_GAMEPAD_DPAD_RIGHT;
     if (key_down(VK_RETURN)) b |= XBOX_GAMEPAD_START;
-    if (key_down(VK_BACK))   b |= XBOX_GAMEPAD_BACK;
+    if (key_down(VK_BACK) || key_down(VK_ESCAPE)) b |= XBOX_GAMEPAD_BACK;
     if (key_down(VK_SHIFT))  b |= XBOX_GAMEPAD_LEFT_THUMB;
     if (key_down(VK_CONTROL))b |= XBOX_GAMEPAD_RIGHT_THUMB;
     pState->Gamepad.wButtons = b;
 
     /* Analog on the console, so a key is 255 rather than a flag -- a title
-     * that reads these as a pressure never sees a press if they are 1. */
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_A]        = key_down('Z') ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_B]        = key_down('X') ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_X]        = key_down('A') ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_Y]        = key_down('S') ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE]    = key_down('Q') ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_BLACK]    = key_down('E') ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] = key_down('1') ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] = key_down('3') ? 255 : 0;
+     * that reads these as a pressure never sees a press if they are 1.
+     * VK_LBUTTON/VK_RBUTTON are recorded by the window like keys. */
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_A] =
+        (key_down(VK_SPACE) || key_down(VK_LBUTTON)) ? 255 : 0;
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_B]        = key_down('Q') ? 255 : 0;
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_X]        = key_down('F') ? 255 : 0;
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_Y]        = key_down('E') ? 255 : 0;
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE]    = key_down('Z') ? 255 : 0;
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_BLACK]    = key_down('C') ? 255 : 0;
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] = key_down('R') ? 255 : 0;
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] = key_down(VK_RBUTTON) ? 255 : 0;
 
-    /* W/A/S/D would collide with the face buttons above, so the left thumb
-     * shares the arrow keys' row on the numeric pad instead. */
-    pState->Gamepad.sThumbLX = axis_from_keys(VK_NUMPAD4, VK_NUMPAD6);
-    pState->Gamepad.sThumbLY = axis_from_keys(VK_NUMPAD2, VK_NUMPAD8);
+    /* W A S D, and the numeric pad's 8 4 2 6. */
+    pState->Gamepad.sThumbLX = axis_from_keys('A', 'D');
+    pState->Gamepad.sThumbLY = axis_from_keys('S', 'W');
+    if (!pState->Gamepad.sThumbLX)
+        pState->Gamepad.sThumbLX = axis_from_keys(VK_NUMPAD4, VK_NUMPAD6);
+    if (!pState->Gamepad.sThumbLY)
+        pState->Gamepad.sThumbLY = axis_from_keys(VK_NUMPAD2, VK_NUMPAD8);
     pState->Gamepad.sThumbRX = axis_from_keys('J', 'L');
     pState->Gamepad.sThumbRY = axis_from_keys('K', 'I');
 
@@ -133,6 +139,138 @@ void xbox_InputInit(void)
     }
 }
 
+/* RE-SoT: a joystick that is not an XInput device (a DirectInput pad or
+ * stick), through WinMM. The layout is the common one for such pads: buttons
+ * 1-4 A B X Y, 5/6 white/black, 7/8 the triggers, 9 BACK, 10 START, 11/12 the
+ * thumb clicks, the hat the d-pad, X/Y the left thumb, Z/R (or U/R) the right.
+ * Only asked when no XInput pad answers, because XInput pads are WinMM
+ * joysticks too and would otherwise press everything twice. */
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
+
+static SHORT joy_axis(DWORD v, DWORD lo, DWORD hi, int invert)
+{
+    long c = (long)(lo + hi) / 2, half = (long)(hi - lo) / 2, x;
+    if (half <= 0)
+        return 0;
+    x = ((long)v - c) * 32767 / half;
+    if (invert) x = -x;
+    if (x > -4000 && x < 4000) x = 0;             /* dead zone */
+    if (x > 32767) x = 32767;
+    if (x < -32768) x = -32768;
+    return (SHORT)x;
+}
+
+static int joystick_state(XBOX_INPUT_STATE *pState)
+{
+    static int id = -2;
+    static DWORD retry;
+    static JOYCAPSA caps;
+    JOYINFOEX ji;
+    WORD b = 0;
+    int i;
+
+    if (id == -1 && GetTickCount() - retry < 2000)
+        return 0;                                  /* look again now and then */
+    if (id < 0) {
+        UINT n = joyGetNumDevs(), j;
+        id = -1;
+        retry = GetTickCount();
+        for (j = 0; j < n && j < 16; j++) {
+            memset(&ji, 0, sizeof ji);
+            ji.dwSize = sizeof ji;
+            ji.dwFlags = JOY_RETURNALL;
+            if (joyGetPosEx(j, &ji) == JOYERR_NOERROR
+                && joyGetDevCapsA(j, &caps, sizeof caps) == JOYERR_NOERROR) {
+                id = (int)j;
+                break;
+            }
+        }
+        if (id < 0)
+            return 0;
+    }
+    memset(&ji, 0, sizeof ji);
+    ji.dwSize = sizeof ji;
+    ji.dwFlags = JOY_RETURNALL;
+    if (joyGetPosEx((UINT)id, &ji) != JOYERR_NOERROR) {
+        id = -1;
+        retry = GetTickCount();
+        return 0;
+    }
+    memset(pState, 0, sizeof(*pState));
+    for (i = 0; i < 8; i++) {
+        static const int slot[8] = { XBOX_BUTTON_A, XBOX_BUTTON_B, XBOX_BUTTON_X,
+                                     XBOX_BUTTON_Y, XBOX_BUTTON_WHITE, XBOX_BUTTON_BLACK,
+                                     XBOX_BUTTON_LTRIGGER, XBOX_BUTTON_RTRIGGER };
+        if (ji.dwButtons & (1u << i))
+            pState->Gamepad.bAnalogButtons[slot[i]] = 255;
+    }
+    if (ji.dwButtons & (1u << 8))  b |= XBOX_GAMEPAD_BACK;
+    if (ji.dwButtons & (1u << 9))  b |= XBOX_GAMEPAD_START;
+    if (ji.dwButtons & (1u << 10)) b |= XBOX_GAMEPAD_LEFT_THUMB;
+    if (ji.dwButtons & (1u << 11)) b |= XBOX_GAMEPAD_RIGHT_THUMB;
+    if ((caps.wCaps & JOYCAPS_HASPOV) && ji.dwPOV != JOY_POVCENTERED) {
+        DWORD p = ji.dwPOV;                        /* hundredths of a degree */
+        if (p >= 31500 || p <= 4500)  b |= XBOX_GAMEPAD_DPAD_UP;
+        if (p >= 4500 && p <= 13500)  b |= XBOX_GAMEPAD_DPAD_RIGHT;
+        if (p >= 13500 && p <= 22500) b |= XBOX_GAMEPAD_DPAD_DOWN;
+        if (p >= 22500 && p <= 31500) b |= XBOX_GAMEPAD_DPAD_LEFT;
+    }
+    pState->Gamepad.wButtons = b;
+    pState->Gamepad.sThumbLX = joy_axis(ji.dwXpos, caps.wXmin, caps.wXmax, 0);
+    pState->Gamepad.sThumbLY = joy_axis(ji.dwYpos, caps.wYmin, caps.wYmax, 1);
+    if (caps.wNumAxes >= 4) {
+        if (caps.wCaps & JOYCAPS_HASZ)
+            pState->Gamepad.sThumbRX = joy_axis(ji.dwZpos, caps.wZmin, caps.wZmax, 0);
+        else if (caps.wCaps & JOYCAPS_HASU)
+            pState->Gamepad.sThumbRX = joy_axis(ji.dwUpos, caps.wUmin, caps.wUmax, 0);
+        if (caps.wCaps & JOYCAPS_HASR)
+            pState->Gamepad.sThumbRY = joy_axis(ji.dwRpos, caps.wRmin, caps.wRmax, 1);
+    }
+    return 1;
+}
+
+/* RE-SoT: port 0 is the first XInput pad connected on any of the four
+ * indexes, not only index 0 (a pad that Windows numbered 1 used to be
+ * ignored). */
+static DWORD xinput_get_any(DWORD dwPort, XINPUT_STATE *xi)
+{
+    static DWORD preferred, last_scan;
+    static int have = 1;
+    DWORD i;
+
+    if (dwPort != 0)
+        return XInputGetState(dwPort, xi);
+    if (have && XInputGetState(preferred, xi) == ERROR_SUCCESS)
+        return ERROR_SUCCESS;
+    /* Asking XInput about empty slots is slow, so with no pad the four
+     * indexes are looked at every two seconds, not every frame. */
+    if (!have && GetTickCount() - last_scan < 2000)
+        return ERROR_DEVICE_NOT_CONNECTED;
+    last_scan = GetTickCount();
+    for (i = 0; i < XUSER_MAX_COUNT; i++)
+        if (XInputGetState(i, xi) == ERROR_SUCCESS) {
+            preferred = i;
+            have = 1;
+            return ERROR_SUCCESS;
+        }
+    have = 0;
+    return ERROR_DEVICE_NOT_CONNECTED;
+}
+
+static void merge_state(XBOX_INPUT_STATE *dst, const XBOX_INPUT_STATE *src)
+{
+    int i;
+    dst->Gamepad.wButtons |= src->Gamepad.wButtons;
+    for (i = 0; i < 8; i++)
+        if (src->Gamepad.bAnalogButtons[i] > dst->Gamepad.bAnalogButtons[i])
+            dst->Gamepad.bAnalogButtons[i] = src->Gamepad.bAnalogButtons[i];
+    if (src->Gamepad.sThumbLX) dst->Gamepad.sThumbLX = src->Gamepad.sThumbLX;
+    if (src->Gamepad.sThumbLY) dst->Gamepad.sThumbLY = src->Gamepad.sThumbLY;
+    if (src->Gamepad.sThumbRX) dst->Gamepad.sThumbRX = src->Gamepad.sThumbRX;
+    if (src->Gamepad.sThumbRY) dst->Gamepad.sThumbRY = src->Gamepad.sThumbRY;
+}
+
 DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
 {
     XINPUT_STATE xi_state;
@@ -141,7 +279,23 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
     if (dwPort >= XBOX_MAX_CONTROLLERS || !pState)
         return ERROR_DEVICE_NOT_CONNECTED;
 
-    result = XInputGetState(dwPort, &xi_state);
+    result = xinput_get_any(dwPort, &xi_state);
+    if (result != ERROR_SUCCESS && dwPort == 0) {
+        /* RE-SoT: no XInput pad: a WinMM joystick, with the keyboard and
+         * mouse merged on top. */
+        XBOX_INPUT_STATE joy;
+        int have_joy = joystick_state(&joy);
+        if (have_joy || keyboard_enabled()) {
+            if (keyboard_enabled())
+                keyboard_state(pState);
+            else
+                memset(pState, 0, sizeof(*pState));
+            if (have_joy)
+                merge_state(pState, &joy);
+            g_controller_connected[0] = TRUE;
+            return ERROR_SUCCESS;
+        }
+    }
     if (result != ERROR_SUCCESS) {
         g_controller_connected[dwPort] = FALSE;
         if (dwPort == 0 && keyboard_enabled()) {
@@ -192,16 +346,8 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
      * and there is no special case left to get wrong. */
     if (dwPort == 0 && keyboard_enabled()) {
         XBOX_INPUT_STATE kb;
-        int i;
         keyboard_state(&kb);
-        pState->Gamepad.wButtons |= kb.Gamepad.wButtons;
-        for (i = 0; i < 8; i++)
-            if (kb.Gamepad.bAnalogButtons[i] > pState->Gamepad.bAnalogButtons[i])
-                pState->Gamepad.bAnalogButtons[i] = kb.Gamepad.bAnalogButtons[i];
-        if (kb.Gamepad.sThumbLX) pState->Gamepad.sThumbLX = kb.Gamepad.sThumbLX;
-        if (kb.Gamepad.sThumbLY) pState->Gamepad.sThumbLY = kb.Gamepad.sThumbLY;
-        if (kb.Gamepad.sThumbRX) pState->Gamepad.sThumbRX = kb.Gamepad.sThumbRX;
-        if (kb.Gamepad.sThumbRY) pState->Gamepad.sThumbRY = kb.Gamepad.sThumbRY;
+        merge_state(pState, &kb);
         /* The input layer records edges, so an unchanged packet number is
          * read as the same state and the press never happens. */
         pState->dwPacketNumber = kb.dwPacketNumber;
@@ -219,6 +365,13 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
 
     xi_vib.wLeftMotorSpeed = pVibration->wLeftMotorSpeed;
     xi_vib.wRightMotorSpeed = pVibration->wRightMotorSpeed;
+    if (dwPort == 0) {                    /* RE-SoT: whichever pad is port 0 */
+        XINPUT_STATE xi;
+        DWORD i;
+        for (i = 0; i < XUSER_MAX_COUNT; i++)
+            if (XInputGetState(i, &xi) == ERROR_SUCCESS)
+                return XInputSetState(i, &xi_vib);
+    }
     return XInputSetState(dwPort, &xi_vib);
 }
 

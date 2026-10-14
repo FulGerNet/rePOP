@@ -30,7 +30,8 @@
  * widened by the target's hooks (src/<target>/target_hooks.c): Hor+, more
  * picture at the sides only.
  * RECOMP_HW_VSYNC=0 presents without waiting; RECOMP_HW_FULLSCREEN=1 makes
- * the window borderless over its monitor.
+ * the window borderless over its monitor (0: a window; Alt+Enter or F11
+ * switches while running).
  *
  * Known gaps: stencil, cube maps (face 0 only), bump-env and dot-product
  * texture modes, point/line primitives, guest-visible framebuffer contents
@@ -62,6 +63,7 @@ extern int   xbox_FramebufferOverlayGet(const uint32_t **px, uint32_t *w,
 
 typedef struct {
     uint32_t offset, w, h;              /* guest (resolved) address and size */
+    uint32_t sc;                        /* host pixels per guest pixel (before widening) */
     ID3D11Texture2D *tex;
     ID3D11RenderTargetView *rtv;
     ID3D11ShaderResourceView *srv;
@@ -114,6 +116,7 @@ typedef struct {
 
 static struct {
     int tried, ok, scale, nocull;
+    int fx_scale;                       /* the same for surfaces smaller than the display */
     int vsync, cpu_vsh;
     float aspect;                       /* shown width / height */
     float widen;                        /* host surface width multiple over 4:3 */
@@ -350,13 +353,75 @@ static const char s_hw_hlsl[] =
 "    if (!ok) discard; }\n"
 "  return o; }\n";
 
+/* RE-SoT: compiled shaders are kept on disk (bin\shadercache, or
+ * RECOMP_HW_SHADER_CACHE=<dir>; "0" turns it off), keyed by a hash of the
+ * HLSL, the entry point and the profile. D3DCompile takes tens of
+ * milliseconds per vertex program, and every program the title uses for the
+ * first time used to cost a dropped frame or two -- on every run. */
+static const char *hw_shader_cache_dir(void)
+{
+    static const char *dir = (const char *)-1;
+    if (dir == (const char *)-1) {
+        dir = getenv("RECOMP_HW_SHADER_CACHE");
+        if (!dir)
+            dir = "bin\\shadercache";
+        if (!*dir || strcmp(dir, "0") == 0)
+            dir = NULL;
+        else
+            CreateDirectoryA(dir, NULL);
+    }
+    return dir;
+}
+
+static void hw_shader_cache_path(char *path, size_t cap, const char *src, size_t len,
+                                 const char *entry, const char *target)
+{
+    uint64_t h = 1469598103934665603ull;
+    size_t i;
+    for (i = 0; i < len; i++)
+        h = (h ^ (uint8_t)src[i]) * 1099511628211ull;
+    for (i = 0; entry[i]; i++)
+        h = (h ^ (uint8_t)entry[i]) * 1099511628211ull;
+    for (i = 0; target[i]; i++)
+        h = (h ^ (uint8_t)target[i]) * 1099511628211ull;
+    snprintf(path, cap, "%s\\%016llx.cso", hw_shader_cache_dir(), (unsigned long long)h);
+}
+
 static ID3DBlob *hw_compile_src(const char *src, size_t len, const char *entry,
                                 const char *target)
 {
     ID3DBlob *code = NULL, *err = NULL;
-    HRESULT hr = D3DCompile(src, len, "nv2a_hw", NULL, NULL, entry, target,
-                            D3DCOMPILE_OPTIMIZATION_LEVEL1
-                            | D3DCOMPILE_IEEE_STRICTNESS, 0, &code, &err);
+    HRESULT hr;
+    char path[MAX_PATH];
+    FILE *f;
+
+    if (hw_shader_cache_dir()) {
+        hw_shader_cache_path(path, sizeof path, src, len, entry, target);
+        f = fopen(path, "rb");
+        if (f) {
+            long n;
+            fseek(f, 0, SEEK_END);
+            n = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (n > 0 && SUCCEEDED(D3DCreateBlob((SIZE_T)n, &code))
+                && fread(ID3D10Blob_GetBufferPointer(code), 1, (size_t)n, f) == (size_t)n) {
+                fclose(f);
+                return code;
+            }
+            if (code) { ID3D10Blob_Release(code); code = NULL; }
+            fclose(f);
+        }
+    }
+    hr = D3DCompile(src, len, "nv2a_hw", NULL, NULL, entry, target,
+                    D3DCOMPILE_OPTIMIZATION_LEVEL1
+                    | D3DCOMPILE_IEEE_STRICTNESS, 0, &code, &err);
+    if (SUCCEEDED(hr) && hw_shader_cache_dir()) {
+        f = fopen(path, "wb");
+        if (f) {
+            fwrite(ID3D10Blob_GetBufferPointer(code), 1, ID3D10Blob_GetBufferSize(code), f);
+            fclose(f);
+        }
+    }
     if (FAILED(hr)) {
         fprintf(stderr, "  [HW] shader %s failed: %s\n", entry,
                 err ? (const char *)ID3D10Blob_GetBufferPointer(err) : "?");
@@ -383,10 +448,23 @@ static ID3DBlob *hw_compile(const char *entry, const char *target)
     return hw_compile_src(src, len, entry, target);
 }
 
-/* Host pixels across a guest width. */
-static uint32_t hw_px(uint32_t guest_x)
+/* Host pixels across a guest width, on a surface rendered `sc` times the
+ * guest resolution. */
+static uint32_t hw_px(uint32_t guest_x, uint32_t sc)
 {
-    return (uint32_t)((float)guest_x * (float)s_hw.scale * s_hw.widen + 0.5f);
+    return (uint32_t)((float)guest_x * (float)sc * s_hw.widen + 0.5f);
+}
+
+/* RE-SoT: how much finer than the guest a surface is rendered. The display
+ * surface (and anything as wide) gets RECOMP_HW_SCALE. Smaller surfaces are
+ * the title's post-processing chain (the demo's glow: 640 -> 320 -> 160 ->
+ * 80 and back) and shadow buffers; their filters are fixed tap offsets in
+ * guest texels, so at twice the resolution each blur covered half the area
+ * and left sharp, shifted copies of the scene -- "layers out of register".
+ * They stay at the guest's own resolution (RECOMP_HW_FX_SCALE to change). */
+static uint32_t hw_surface_scale(uint32_t w)
+{
+    return w >= 640 ? (uint32_t)s_hw.scale : (uint32_t)s_hw.fx_scale;
 }
 
 static void hw_resize_backbuffer(void)
@@ -450,6 +528,10 @@ static int hw_init(void)
     s_hw.scale = e ? atoi(e) : 2;
     if (s_hw.scale < 1) s_hw.scale = 1;
     if (s_hw.scale > 8) s_hw.scale = 8;
+    e = getenv("RECOMP_HW_FX_SCALE");
+    s_hw.fx_scale = e ? atoi(e) : 1;
+    if (s_hw.fx_scale < 1) s_hw.fx_scale = 1;
+    if (s_hw.fx_scale > s_hw.scale) s_hw.fx_scale = s_hw.scale;
     s_hw.nocull = getenv("RECOMP_HW_NOCULL") != NULL;
     s_hw.cpu_vsh = getenv("RECOMP_HW_CPU_VSH") != NULL;
     e = getenv("RECOMP_HW_VSYNC");
@@ -467,7 +549,8 @@ static int hw_init(void)
     s_hw.widen = s_hw.aspect / (4.0f / 3.0f);
     if (s_hw.widen < 1.0f) s_hw.widen = 1.0f;
 
-    if (getenv("RECOMP_HW_FULLSCREEN")) {
+    e = getenv("RECOMP_HW_FULLSCREEN");          /* RE-SoT: "0" is a window */
+    if (e && *e && strcmp(e, "0") != 0) {
         MONITORINFO mi;
         mi.cbSize = sizeof mi;
         if (GetMonitorInfoA(MonitorFromWindow(s_hw.hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
@@ -666,8 +749,8 @@ static HwSurface *hw_surface(void)
         memset(s, 0, sizeof *s);
     }
     memset(&td, 0, sizeof td);
-    td.Width = hw_px(w);
-    td.Height = h * (uint32_t)s_hw.scale;
+    td.Width = hw_px(w, hw_surface_scale(w));
+    td.Height = h * hw_surface_scale(w);
     td.MipLevels = 1; td.ArraySize = 1;
     td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     td.SampleDesc.Count = 1;
@@ -680,10 +763,10 @@ static HwSurface *hw_surface(void)
         static const float black[4] = {0, 0, 0, 1};
         ID3D11DeviceContext_ClearRenderTargetView(s_hw.ctx, s->rtv, black);
     }
-    s->offset = off; s->w = w; s->h = h;
+    s->offset = off; s->w = w; s->h = h; s->sc = hw_surface_scale(w);
     s->drawn_frame = s_hw.frame;
-    fprintf(stderr, "  [HW] surface 0x%08X %ux%u (format %08X pitch %08X clip %ux%u+%u+%u mask %08X zeta %08X)\n",
-            off, w, h, s_gpu.format, s_gpu.pitch, s_gpu.clip_w, s_gpu.clip_h,
+    fprintf(stderr, "  [HW] surface 0x%08X %ux%u x%u (format %08X pitch %08X clip %ux%u+%u+%u mask %08X zeta %08X)\n",
+            off, w, h, s->sc, s_gpu.format, s_gpu.pitch, s_gpu.clip_w, s_gpu.clip_h,
             s_gpu.clip_x, s_gpu.clip_y, s_gpu.color_mask, s_gpu.zeta_offset);
     return s;
 }
@@ -711,8 +794,8 @@ static HwDepth *hw_depth(const HwSurface *s)
         memset(d, 0, sizeof *d);
     }
     memset(&td, 0, sizeof td);
-    td.Width = hw_px(s->w);
-    td.Height = s->h * (uint32_t)s_hw.scale;
+    td.Width = hw_px(s->w, s->sc);
+    td.Height = s->h * s->sc;
     td.MipLevels = 1; td.ArraySize = 1;
     td.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
     td.SampleDesc.Count = 1;
@@ -1008,14 +1091,14 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     d = hw_depth(s);
     ID3D11DeviceContext_OMSetRenderTargets(s_hw.ctx, 1, &s->rtv, d ? d->dsv : NULL);
     vp.TopLeftX = 0; vp.TopLeftY = 0;
-    vp.Width = (float)hw_px(s->w);
-    vp.Height = (float)(s->h * (uint32_t)s_hw.scale);
+    vp.Width = (float)hw_px(s->w, s->sc);
+    vp.Height = (float)(s->h * s->sc);
     vp.MinDepth = 0; vp.MaxDepth = 1;
     ID3D11DeviceContext_RSSetViewports(s_hw.ctx, 1, &vp);
-    sc.left = (LONG)hw_px(s_gpu.clip_x);
-    sc.top = (LONG)(s_gpu.clip_y * (uint32_t)s_hw.scale);
-    sc.right = (LONG)hw_px(s_gpu.clip_x + s_gpu.clip_w);
-    sc.bottom = (LONG)((s_gpu.clip_y + s_gpu.clip_h) * (uint32_t)s_hw.scale);
+    sc.left = (LONG)hw_px(s_gpu.clip_x, s->sc);
+    sc.top = (LONG)(s_gpu.clip_y * s->sc);
+    sc.right = (LONG)hw_px(s_gpu.clip_x + s_gpu.clip_w, s->sc);
+    sc.bottom = (LONG)((s_gpu.clip_y + s_gpu.clip_h) * s->sc);
     ID3D11DeviceContext_RSSetScissorRects(s_hw.ctx, 1, &sc);
 
     {
@@ -1125,6 +1208,131 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
         s_hw.biggest_area = area;
     }
     return s;
+}
+
+/* RE-SoT: RECOMP_HW_GLOW_DUMP=<prefix>, under the frame trace: the display
+ * surface as it is just before the first batch that samples another render
+ * target into it (the title's glow composite), and as it is at the flip, at
+ * host resolution. The two differ only by the post-processing, so they show
+ * whether it lands where the scene is. */
+static void hw_dump_surface(ID3D11Texture2D *tex, const char *path)
+{
+    D3D11_TEXTURE2D_DESC td;
+    D3D11_MAPPED_SUBRESOURCE map;
+    ID3D11Texture2D *stage = NULL;
+    FILE *f;
+    uint32_t y, x, row, hdr[13];
+    uint8_t *line;
+
+    ID3D11Texture2D_GetDesc(tex, &td);
+    td.Usage = D3D11_USAGE_STAGING; td.BindFlags = 0;
+    td.CPUAccessFlags = D3D11_CPU_ACCESS_READ; td.MiscFlags = 0;
+    if (FAILED(ID3D11Device_CreateTexture2D(s_hw.dev, &td, NULL, &stage)))
+        return;
+    ID3D11DeviceContext_CopyResource(s_hw.ctx, (ID3D11Resource *)stage, (ID3D11Resource *)tex);
+    if (SUCCEEDED(ID3D11DeviceContext_Map(s_hw.ctx, (ID3D11Resource *)stage, 0,
+                                          D3D11_MAP_READ, 0, &map))) {
+        f = fopen(path, "wb");
+        row = (td.Width * 3 + 3) & ~3u;
+        line = (uint8_t *)calloc(1, row);
+        if (f && line) {
+            memset(hdr, 0, sizeof hdr);
+            hdr[0] = 54 + row * td.Height;             /* file size (after "BM") */
+            hdr[2] = 54; hdr[3] = 40; hdr[4] = td.Width; hdr[5] = td.Height;
+            hdr[6] = 1 | (24u << 16); hdr[8] = row * td.Height;
+            fwrite("BM", 1, 2, f);
+            fwrite(hdr, 4, 13, f);
+            for (y = 0; y < td.Height; y++) {
+                const uint8_t *src = (const uint8_t *)map.pData
+                                   + (size_t)(td.Height - 1 - y) * map.RowPitch;
+                for (x = 0; x < td.Width; x++)
+                    memcpy(line + x * 3, src + x * 4, 3);
+                fwrite(line, 1, row, f);
+            }
+        }
+        if (f) fclose(f);
+        free(line);
+        ID3D11DeviceContext_Unmap(s_hw.ctx, (ID3D11Resource *)stage, 0);
+    }
+    ID3D11Texture2D_Release(stage);
+}
+
+static void hw_glow_dump_check(const HwSurface *s, int at_flip)
+{
+    static const char *prefix = (const char *)-1;
+    static int before_done;
+    char path[600];
+    uint32_t i;
+
+    if (prefix == (const char *)-1)
+        prefix = getenv("RECOMP_HW_GLOW_DUMP");
+    if (!prefix || !s || (s_ftrace != 2 && !(at_flip && before_done == 1)))
+        return;
+    if (at_flip) {
+        if (before_done == 1) {
+            snprintf(path, sizeof path, "%s_after.bmp", prefix);
+            hw_dump_surface(s->tex, path);
+            for (i = 0; i < HW_MAX_SURFACES; i++)
+                if (s_hw.surf[i].tex && s_hw.surf[i].w < 640) {
+                    snprintf(path, sizeof path, "%s_%08X_%u.bmp", prefix,
+                             s_hw.surf[i].offset, s_hw.surf[i].w);
+                    hw_dump_surface(s_hw.surf[i].tex, path);
+                }
+            before_done = 2;
+        }
+        return;
+    }
+    if (before_done || s->w != 640 || !s_gpu.texs[0].valid)
+        return;
+    for (i = 0; i < HW_MAX_SURFACES; i++)
+        if (s_hw.surf[i].tex && &s_hw.surf[i] != s
+            && s_hw.surf[i].offset == s_gpu.texs[0].offset) {
+            snprintf(path, sizeof path, "%s_before.bmp", prefix);
+            hw_dump_surface(s->tex, path);
+            before_done = 1;
+            return;
+        }
+}
+
+/* RE-SoT: under the frame trace, how many pixels each batch really left on
+ * the host GPU (an occlusion query around the draw) and the state that can
+ * remove all of them. A batch with triangles and no pixels is geometry that
+ * is missing from the picture; the state says which stage removed it. */
+static ID3D11Query *s_hw_trace_q;
+
+static void hw_trace_begin(void)
+{
+    if (s_ftrace != 2)
+        return;
+    if (!s_hw_trace_q) {
+        D3D11_QUERY_DESC qd;
+        qd.Query = D3D11_QUERY_OCCLUSION;
+        qd.MiscFlags = 0;
+        ID3D11Device_CreateQuery(s_hw.dev, &qd, &s_hw_trace_q);
+    }
+    if (s_hw_trace_q)
+        ID3D11DeviceContext_Begin(s_hw.ctx, (ID3D11Asynchronous *)s_hw_trace_q);
+}
+
+static void hw_trace_end(void)
+{
+    UINT64 px = 0;
+    DWORD t0 = GetTickCount();
+
+    if (s_ftrace != 2 || !s_hw_trace_q)
+        return;
+    ID3D11DeviceContext_End(s_hw.ctx, (ID3D11Asynchronous *)s_hw_trace_q);
+    /* The first batch of a frame waits behind the whole previous frame. */
+    while (ID3D11DeviceContext_GetData(s_hw.ctx, (ID3D11Asynchronous *)s_hw_trace_q,
+                                       &px, sizeof px, 0) == S_FALSE
+           && GetTickCount() - t0 < 2000)
+        ;
+    fprintf(stderr, "[FTRACE]     hw px %llu | cull %u face %X front %X | atest %u"
+                    " func %X ref %X | cmask %08X | zbuf %s | fog %u mode %X %g %g\n",
+            (unsigned long long)px, s_hw.cull_enable, s_hw.cull_face, s_hw.front_face,
+            s_gpu.alpha_test, s_gpu.alpha_func, s_gpu.alpha_ref, s_gpu.color_mask,
+            s_gpu.zeta_offset ? "yes" : "no", s_gpu.fog_enable, s_gpu.fog_mode,
+            s_gpu.fog_param[0], s_gpu.fog_param[1]);
 }
 
 /* Reserve `bytes` at the ring's write position (aligned to `align`), wrapping
@@ -1237,6 +1445,7 @@ static int hw_draw_program_batch(void)
     uint8_t slot_attr[HW_VSP_SLOTS];
     const HwVsp *prog;
     uint32_t n = s_gpu.idx_count, mask = 0, nslot = 0, a, i, nv = 0, ni = 0;
+    HwSurface *bound;
     float (*vout)[4];
     uint16_t *iout;
     LARGE_INTEGER t0, t1;
@@ -1304,11 +1513,39 @@ static int hw_draw_program_batch(void)
         fprintf(stderr, "[FTRACE]     gpu batch n %u: first %g %g %g w %g, last %g %g %g w %g\n",
                 n, o0.pos[0], o0.pos[1], o0.pos[2], o0.pos[3],
                 o1.pos[0], o1.pos[1], o1.pos[2], o1.pos[3]);
+        {
+            /* Where the whole batch lands, and its fog and w ranges. */
+            float lo[4] = {1e30f, 1e30f, 1e30f, 1e30f}, hi[4] = {-1e30f, -1e30f, -1e30f, -1e30f};
+            float flo = 1e30f, fhi = -1e30f, alo = 1e30f, ahi = -1e30f;
+            uint32_t c;
+            for (k = 0; k < n; k++) {
+                for (c = 0; c < NV2A_VSH_INPUTS; c++)
+                    fetch_attr(&s_gpu.attr[c], s_gpu.idx[k], in[c]);
+                nv2a_vsh_run((const float (*)[4])in, &o0);
+                for (c = 0; c < 4; c++) {
+                    if (o0.pos[c] < lo[c]) lo[c] = o0.pos[c];
+                    if (o0.pos[c] > hi[c]) hi[c] = o0.pos[c];
+                }
+                if (o0.fog[0] < flo) flo = o0.fog[0];
+                if (o0.fog[0] > fhi) fhi = o0.fog[0];
+                if (o0.d0[3] < alo) alo = o0.d0[3];
+                if (o0.d0[3] > ahi) ahi = o0.d0[3];
+                if (n <= 4)
+                    fprintf(stderr, "[FTRACE]     vtx %u pos %g %g t0 %g %g t1 %g %g"
+                                    " t2 %g %g t3 %g %g\n", k, o0.pos[0], o0.pos[1],
+                            o0.tex[0][0], o0.tex[0][1], o0.tex[1][0], o0.tex[1][1],
+                            o0.tex[2][0], o0.tex[2][1], o0.tex[3][0], o0.tex[3][1]);
+            }
+            fprintf(stderr, "[FTRACE]     bbox x %g..%g y %g..%g z %g..%g w %g..%g"
+                            " fog %g..%g d0.a %g..%g\n",
+                    lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], lo[3], hi[3],
+                    flo, fhi, alo, ahi);
+        }
     }
 
     QueryPerformanceCounter(&t0);
     EnterCriticalSection(&s_hw.lock);
-    if (!hw_bind_draw_state(prog)
+    if (!(bound = hw_bind_draw_state(prog))
         || !hw_ring_map(s_hw.vb, &s_hw.vb_off, HW_VB_BYTES,
                         n * (uint32_t)sizeof(HwVertex), sizeof(HwVertex), &vmap)) {
         LeaveCriticalSection(&s_hw.lock);
@@ -1375,8 +1612,11 @@ static int hw_draw_program_batch(void)
     ID3D11DeviceContext_Unmap(s_hw.ctx, (ID3D11Resource *)s_hw.vb, 0);
     if (ni) {
         ID3D11DeviceContext_IASetIndexBuffer(s_hw.ctx, s_hw.ib, DXGI_FORMAT_R16_UINT, 0);
+        hw_glow_dump_check(bound, 0);
+        hw_trace_begin();
         ID3D11DeviceContext_DrawIndexed(s_hw.ctx, ni, s_hw.ib_off / 2,
                                         (INT)(s_hw.vb_off / (uint32_t)sizeof(HwVertex)));
+        hw_trace_end();
         s_hw.draws++;
         s_hw.gpu_vsh_batches++;
         s_hw.tris += ni / 3;
@@ -1421,6 +1661,12 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
         }
         s_hw.batch_full_width = i == n && lo <= 8.0f && hi >= 632.0f;
     }
+    if (s_ftrace == 2 && n <= 4)
+        for (i = 0; i < n; i++)
+            fprintf(stderr, "[FTRACE]     cpu vtx %u pos %g %g %g w %g t0 %g %g %g %g t1 %g %g\n",
+                    i, v[i].pos[0], v[i].pos[1], v[i].pos[2], v[i].pos[3],
+                    v[i].tex[0][0], v[i].tex[0][1], v[i].tex[0][2], v[i].tex[0][3],
+                    v[i].tex[1][0], v[i].tex[1][1]);
 
 #define HW_TRI(a, b, c) do { hw_put_vertex(&o[count], &v[a]); \
         hw_put_vertex(&o[count + 1], &v[b]); \
@@ -1462,12 +1708,16 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
     LARGE_INTEGER t0, t1;
     QueryPerformanceCounter(&t0);
     EnterCriticalSection(&s_hw.lock);
-    if (hw_bind_draw_state(NULL)
+    HwSurface *bound;
+    if ((bound = hw_bind_draw_state(NULL)) != NULL
         && hw_ring_map(s_hw.vb, &s_hw.vb_off, HW_VB_BYTES,
                        (uint32_t)sizeof(HwVertex) * count, sizeof(HwVertex), &map)) {
         memcpy((uint8_t *)map.pData + s_hw.vb_off, o, sizeof(HwVertex) * count);
         ID3D11DeviceContext_Unmap(s_hw.ctx, (ID3D11Resource *)s_hw.vb, 0);
+        hw_glow_dump_check(bound, 0);
+        hw_trace_begin();
         ID3D11DeviceContext_Draw(s_hw.ctx, count, s_hw.vb_off / (uint32_t)sizeof(HwVertex));
+        hw_trace_end();
         s_hw.vb_off += (uint32_t)sizeof(HwVertex) * count;
         s_hw.cpu_vsh_batches++;
         s_hw.draws++;
@@ -1547,14 +1797,14 @@ static void hw_clear(uint32_t param)
             ID3D11Device_CreateBlendState(s_hw.dev, &bd, &bs);
             ID3D11DeviceContext_OMSetRenderTargets(s_hw.ctx, 1, &s->rtv, NULL);
             vp.TopLeftX = 0; vp.TopLeftY = 0;
-            vp.Width = (float)hw_px(s->w);
-            vp.Height = (float)(s->h * (uint32_t)s_hw.scale);
+            vp.Width = (float)hw_px(s->w, s->sc);
+            vp.Height = (float)(s->h * s->sc);
             vp.MinDepth = 0; vp.MaxDepth = 1;
             ID3D11DeviceContext_RSSetViewports(s_hw.ctx, 1, &vp);
-            sc.left = (LONG)hw_px(x0);
-            sc.top = (LONG)(y0 * (uint32_t)s_hw.scale);
-            sc.right = (LONG)hw_px(x1);
-            sc.bottom = (LONG)(y1 * (uint32_t)s_hw.scale);
+            sc.left = (LONG)hw_px(x0, s->sc);
+            sc.top = (LONG)(y0 * s->sc);
+            sc.right = (LONG)hw_px(x1, s->sc);
+            sc.bottom = (LONG)(y1 * s->sc);
             ID3D11DeviceContext_RSSetScissorRects(s_hw.ctx, 1, &sc);
             ID3D11DeviceContext_RSSetState(s_hw.ctx, s_hw.rs[0]);
             ID3D11DeviceContext_OMSetBlendState(s_hw.ctx, bs, bf, 0xFFFFFFFFu);
@@ -1664,6 +1914,7 @@ static void hw_present_locked(int vsync)
 static void hw_flip(void)
 {
     EnterCriticalSection(&s_hw.lock);
+    hw_glow_dump_check(s_hw.biggest, 1);
     if (s_hw.biggest)
         s_hw.front = s_hw.biggest;
     s_hw.biggest = NULL;

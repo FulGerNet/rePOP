@@ -38,33 +38,50 @@ cmake -S . -B build -DRESOT_ASPECT=""     # then .\tools\recomp.ps1 -BuildOnly
 ## Run
 
 ```powershell
-.\tools\run.ps1 -Pad                      # the demo
-.\tools\run.ps1 -Target xbox-retail -Pad
+.\tools\run.ps1                           # the demo, full screen
+.\tools\run.ps1 -Windowed                 # in a window
+.\tools\run.ps1 -Target xbox-retail
 ```
 
 Start the game through the script, not by double-clicking the executable: the
 runtime is configured through environment variables the script sets.
 `.\tools\shortcut.ps1` puts a desktop shortcut, "reSOT - Xbox demo", that
-runs `run.ps1 -Pad` with a double click (`-Target xbox-retail` for the
-retail build, `-Arguments '-Fullscreen'` for extra switches). `-Pad`
-plugs in an emulated Xbox controller; an XInput pad works, and so does the
-keyboard while the game window has the focus:
+runs `run.ps1` with a double click, full screen (`-Target xbox-retail` for
+the retail build, `-Arguments '-Windowed'` for extra switches).
 
-| Keyboard | Xbox pad |
+The game always has a controller on port 0, without the emulated USB bus:
+an XInput pad (an Xbox controller, on any of Windows' four slots), else any
+other joystick or pad Windows sees, with the keyboard and mouse merged on
+top while the game window has the focus (`RECOMP_KEYBOARD=0` turns them
+off):
+
+| Keyboard and mouse | Xbox pad |
 | --- | --- |
-| Enter / Backspace | Start / Back |
+| W A S D (or numpad 8 4 2 6) | Left stick |
+| Enter | Start |
+| Esc, Backspace | Back |
+| Space, left mouse button | A |
+| Q | B |
+| F | X |
+| E | Y |
+| R | Left trigger |
+| Right mouse button | Right trigger |
 | Arrow keys | D-pad |
-| Z, X, A, S | A, B, X, Y |
-| Q, E | White, Black |
-| 1, 3 | Left trigger, right trigger |
-| Numpad 8 2 4 6 | Left stick |
 | I K J L | Right stick |
+| Z, C | White, Black |
 | Shift, Ctrl | Left / right stick click |
+
+The left mouse button presses A, which confirms the highlighted menu entry;
+the menus do not follow the pointer. A joystick that is not an XInput device
+uses buttons 1-4 as A B X Y, 5/6 white/black, 7/8 the triggers, 9 Back,
+10 Start, its hat as the d-pad. `-UsbPad` brings back the old emulated USB
+pad, for comparison.
 
 `-Aspect 16:9` (or any `w:h`; 16:9 is the default build's) widens the
 picture Hor+: more scene at the sides, the same vertical view, the 2D at its
-original 4:3 size. `-Fullscreen`
-opens a borderless window over the monitor, `-NoVsync` stops waiting for the
+original 4:3 size. The game opens as a borderless window over the whole
+monitor; `-Windowed` opens a window instead, and Alt+Enter or F11 switch
+between the two while it runs. `-NoVsync` stops waiting for the
 display, `-NoAudio` leaves the sound hardware out.
 
 Diagnostics go to `logs/<target>-err.txt`. Useful switches: `-Software` (CPU

@@ -7,6 +7,78 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-14 (evening): xbox-demo, input without USB, full screen by default
+
+Build: `recomp.ps1 -Target xbox-demo -SkipAnalysis` ("Excluding 2 functions
+... 7 wrapped as sub_X_gen"; 11,213 of 11,215 lifted, 0 failed).
+
+Observed:
+
+- `run.ps1 -Seconds 50 -Set @{RECOMP_PAD_SCRIPT='22000:start:800,28000:a:800,34000:a:800'}`,
+  three starts: the log has `[BOOT] input: XAPI pad on port 0 ... (no USB)`,
+  the three script steps at 22, 28 and 34 s, and `video\loading.int` opened
+  (the game was entered) in 3 of 3. With the USB pad, 2 of 5 starts had
+  enumerated earlier the same day.
+- Real input events (`SendInput` to the game window): Enter at 22 s and two
+  left mouse clicks at 28 and 34 s entered the game (`loading.int`).
+- `run.ps1` with no switch: the game window is 0,0-1920,1080 with style
+  `0x94000000` (popup, no frame) on a 1920x1080 monitor.
+- `tools\shortcut.ps1` recreated the desktop shortcut; its arguments are
+  `-File ...\run.ps1 -Target xbox-demo`.
+
+Not checked: an XInput pad or another joystick (none connected here); the
+other keys and the right mouse button in play; rumble; `-Windowed` and
+Alt+Enter/F11 by a person; gameplay by a person.
+
+## 2026-10-14 (afternoon): xbox-demo, glow alignment, CPU use, wide culling
+
+Builds: `recomp.ps1 -Target xbox-demo -SkipAnalysis` (11,213 of 11,215
+functions lifted, the other two are the hand-written KickOff in
+`target_hooks.c`; 0 failed), then `-BuildOnly`. `python tools/check-hlsl.py`
+passed before each build.
+
+Glow ("layers out of register", reported by the user):
+
+- `run.ps1 -Seconds 27 -Pad -Set @{RECOMP_FRAME_TRACE='logstflag';
+  RECOMP_HW_GLOW_DUMP='...\glow'}` with the flag file created at 24 s, on the
+  "Press Start" screen. With every surface at scale 2, the 160x120 glow
+  layer had doubled edges and comb-like stripes, and the composite's
+  difference from the scene correlated best at about (+25, +19) host pixels.
+  The blur's tap offsets are symmetric (-7..+7 texels, equal weights in the
+  80x60 pass), so the cause is the resolution, not the taps.
+- After rendering the smaller targets at scale 1: the glow layer is a smooth
+  blur, and its offset from the scene measures 0.1 guest pixel (160x120
+  layer) and 0.1 (composite).
+
+CPU (Task Manager-style process times, 10 s windows):
+
+- Before: 140% of one core on the "Press Start" screen; the profiler put
+  90% of the title thread in `sub_0029D0C0` (KickOff spin) and the NV2A
+  thread looped on `Sleep(0)`.
+- After: about 57% of one core on the same screen (title thread 23%,
+  executor 12%, the rest below 9% each), 100-117% during the 185 s run below
+  (intro scene).
+
+Run: `run.ps1 -Seconds 185 -SnapshotEvery 15 -Pad` with the menu presses of
+the entry below. 35 renderer windows of 5 s: one at start-up (0.1 fps), one
+at 55 fps, the other 33 at 59.8-60.2 fps. The game reached the playable
+balcony scene after the intro and stayed there (the script does not walk
+the Prince in). Two `[ICALL] Failed to resolve VA 0x002AEE97` lines, which
+also appear in a trace taken before these changes.
+
+Wide picture: `run.ps1 -Fullscreen` on a 1920x1080 monitor, screen captured
+at 24 s: the picture fills the screen. The culling hook logs
+`culling half-angle 0.7854 -> 0.9273 rad`. Black areas remain at the lower
+left of the menu garden in 16:9; the user confirmed the set has no model
+there.
+
+Pad enumeration, 35 s starts: 2 of 5 enumerated with the new NV2A thread,
+1 of 5 with `RECOMP_NV2A_ACK_SPIN=1` (the old loop), so this is not caused by
+the change, but it is worse than the "one start in four" noted below.
+
+Not checked: Alt+Enter/F11 by a person; the level sections past the
+balcony; gameplay by a person; sound; the console.
+
 ## 2026-10-14: xbox-demo, 16:9 default build, icon, scripted tour
 
 Build: `recomp.ps1 -BuildOnly` after the repository moved to `source/` and

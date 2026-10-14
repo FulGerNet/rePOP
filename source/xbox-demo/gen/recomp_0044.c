@@ -1,100 +1,11 @@
 /**
  * PoP SoT xbox-demo - Recompiled code chunk 44
- * Functions: 215 (0x00315F28 - 0x00656D65)
+ * Functions: 213 (0x00315F77 - 0x00656D65)
  */
 
 #define RECOMP_GENERATED_CODE
 #include "recomp_funcs.h"
 #include <math.h>
-
-/**
- * sub_00315F28
- * Original: 0x00315F28 - 0x00315F42 (26 bytes, 10 insns)
- * Category: game_input
- * CC: cdecl, 0 params, returns int_or_void
- * Frame: fpo_leaf
- */
-void sub_00315F28(void)
-{
-    int _flags = 0; /* fallback flag var */
-    uint32_t _fa = 0, _fb = 0;
-    int32_t _fas = 0, _fbs = 0;
-    (void)_fa; (void)_fb; (void)_fas; (void)_fbs;
-
-loc_00315F28: ;
-    eax = MEM32(ecx + 0xC);
-    edx = 0x80000;
-    _fa = (uint32_t)(edx) & 0xFFFFFFFFu; _fb = (uint32_t)(eax) & 0xFFFFFFFFu;
-    _fas = (int32_t)(int32_t)(_fa); _fbs = (int32_t)(int32_t)(_fb); /* test edx, eax (32-bit) */
-    if (TEST_NZ(_fa, _fb)) goto loc_00315F41; /* jne: not equal / not zero */
-
-loc_00315F34: ;
-    PUSH32(esp, ecx);
-    eax = eax | edx;
-    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* or result */
-    PUSH32(esp, 0);
-    MEM32(ecx + 0xC) = eax;
-    PUSH32(esp, 0x00315F41u); RECOMP_ABI_CALL(0x00315E56u, sub_00315E56); /* call 0x00315E56 */
-
-loc_00315F41: ;
-    esp += 4; return; /* ret */
-
-}
-
-/**
- * sub_00315F42
- * Original: 0x00315F42 - 0x00315F77 (53 bytes, 19 insns)
- * Category: game_input
- * CC: cdecl, 1 params, returns int_or_void
- * Frame: fpo_leaf
- */
-void sub_00315F42(void)
-{
-    int _flags = 0; /* fallback flag var */
-    uint32_t _fa = 0, _fb = 0;
-    int32_t _fas = 0, _fbs = 0;
-    (void)_fa; (void)_fb; (void)_fas; (void)_fbs;
-
-loc_00315F42: ;
-    ecx = MEM32(esp + 4);
-    PUSH32(esp, esi);
-    PUSH32(esp, 0x00315F4Cu); RECOMP_ABI_CALL(0x003189B7u, sub_003189B7); /* call 0x003189B7 */
-
-loc_00315F4C: ;
-    esi = eax;
-    ecx = MEM32(esi + 8);
-    _fa = (uint32_t)(ecx) & 0xFFFFFFFFu; _fb = (uint32_t)(0) & 0xFFFFFFFFu;
-    _fas = (int32_t)(int32_t)(_fa); _fbs = (int32_t)(int32_t)(_fb); /* cmp ecx, 0 (32-bit) */
-    if (CMP_EQ(_fa, _fb)) goto loc_00315F69; /* je: equal / zero */
-
-loc_00315F55: ;
-    eax = MEM32(ecx + 0xC);
-    _fa = (uint32_t)(LO8(eax)) & 0xFFu; _fb = (uint32_t)(4) & 0xFFu;
-    _fas = (int32_t)(int8_t)(_fa); _fbs = (int32_t)(int8_t)(_fb); /* test LO8(eax), 4 (8-bit) */
-    if (TEST_NZ(_fa, _fb)) goto loc_00315F69; /* jne: not equal / not zero */
-
-loc_00315F5C: ;
-    eax = eax | 2;
-    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* or result */
-    MEM32(ecx + 0xC) = eax;
-    PUSH32(esp, 0x00315F67u); RECOMP_ABI_CALL(0x00315F28u, sub_00315F28); /* call 0x00315F28 */
-
-loc_00315F67: ;
-    goto loc_00315F73;
-
-loc_00315F69: ;
-    ecx = MEM32(esi);
-    PUSH32(esp, 0x00315F70u); RECOMP_ABI_CALL(0x00317E9Eu, sub_00317E9E); /* call 0x00317E9E */
-
-loc_00315F70: ;
-    MEM32(esi) = MEM32(esi) & 0;
-    _fa = (uint32_t)(MEM32(esi)) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* and result */
-
-loc_00315F73: ;
-    POP32(esp, esi);
-    esp += 8; return; /* ret 4 */
-
-}
 
 /**
  * sub_00315F77
@@ -183,12 +94,12 @@ loc_00315FD1: ;
 }
 
 /**
- * sub_00315FD6
+ * sub_00315FD6_gen
  * Original: 0x00315FD6 - 0x00315FF8 (34 bytes, 11 insns)
  * CC: cdecl, 1 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00315FD6(void)
+void sub_00315FD6_gen(void)
 {
     uint32_t _fa = 0, _fb = 0;
     int32_t _fas = 0, _fbs = 0;
@@ -219,12 +130,12 @@ loc_00315FF2: ;
 }
 
 /**
- * sub_00315FF8
+ * sub_00315FF8_gen
  * Original: 0x00315FF8 - 0x00316065 (109 bytes, 47 insns)
  * CC: cdecl, 3 params, returns int_or_void
  * Frame: standard_frame
  */
-void sub_00315FF8(void)
+void sub_00315FF8_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* prologue saves caller's frame */
@@ -19417,13 +19328,13 @@ loc_0031C449: ;
 }
 
 /**
- * sub_0031C450
+ * sub_0031C450_gen
  * Original: 0x0031C450 - 0x0031C4A6 (86 bytes, 34 insns)
  * Category: game_input
  * CC: cdecl, 4 params, returns int_or_void
  * Frame: standard_frame
  */
-void sub_0031C450(void)
+void sub_0031C450_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* prologue saves caller's frame */
@@ -19514,13 +19425,13 @@ loc_0031C4A2: ;
 }
 
 /**
- * sub_0031C4A6
+ * sub_0031C4A6_gen
  * Original: 0x0031C4A6 - 0x0031C4B2 (12 bytes, 3 insns)
  * Category: game_input
  * CC: cdecl, 1 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0031C4A6(void)
+void sub_0031C4A6_gen(void)
 {
 
 loc_0031C4A6: ;
@@ -19533,13 +19444,13 @@ loc_0031C4AF: ;
 }
 
 /**
- * sub_0031C4B2
+ * sub_0031C4B2_gen
  * Original: 0x0031C4B2 - 0x0031C68A (472 bytes, 145 insns)
  * Category: game_input
  * CC: cdecl, 2 params, returns int_or_void
  * Frame: standard_frame
  */
-void sub_0031C4B2(void)
+void sub_0031C4B2_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* prologue saves caller's frame */
@@ -19795,12 +19706,12 @@ loc_0031C680: ;
 }
 
 /**
- * sub_0031C68A
+ * sub_0031C68A_gen
  * Original: 0x0031C68A - 0x0031C6FD (115 bytes, 41 insns)
  * CC: cdecl, 2 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0031C68A(void)
+void sub_0031C68A_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;
@@ -19900,13 +19811,13 @@ loc_0031C6F6: ;
 }
 
 /**
- * sub_0031C6FD
+ * sub_0031C6FD_gen
  * Original: 0x0031C6FD - 0x0031C730 (51 bytes, 17 insns)
  * Category: game_input
  * CC: cdecl, 2 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0031C6FD(void)
+void sub_0031C6FD_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;

@@ -1,10 +1,10 @@
 # Runs a recompiled target with the runtime switches it needs and captures its
 # diagnostics under logs/. -Seconds 0 runs until the game exits.
 #
-#   .\tools\run.ps1 -Pad                         # demo, keyboard as the Xbox pad
-#   .\tools\run.ps1 -Pad -Aspect 16:9            # widescreen, 2D kept at its 4:3 size
-#   .\tools\run.ps1 -Pad -Aspect 16:9 -Fullscreen
-#   .\tools\run.ps1 -Target xbox-retail -Pad
+#   .\tools\run.ps1                              # the demo, full screen; keyboard, mouse or pad
+#   .\tools\run.ps1 -Windowed                    # in a window (Alt+Enter / F11 switch while running)
+#   .\tools\run.ps1 -Aspect 4:3                  # the original picture shape
+#   .\tools\run.ps1 -Target xbox-retail
 #   .\tools\run.ps1 -Seconds 180 -SnapshotEvery 5 -Pad `
 #       -Set @{RECOMP_PAD_SCRIPT='30000:start:800,36000:a:800'}
 param(
@@ -16,9 +16,11 @@ param(
     [switch]$Software,          # software NV2A rasteriser instead of Direct3D 11
     [int]$SnapshotEvery = 0,    # seconds; keeps numbered copies of the window dump
     [switch]$Abi,               # run the <name>-abi.exe diagnostic build
-    [switch]$Pad,               # emulated pad on the OHCI controller, driven by the keyboard
+    [switch]$Pad,               # accepted for old command lines; the pad is always there now
+    [switch]$UsbPad,            # the old way: a pad device on the emulated USB controller
     [string]$Aspect = '',       # picture shape, '16:9' or a ratio such as 2.39; default 4:3
-    [switch]$Fullscreen,        # borderless window over the monitor
+    [switch]$Fullscreen,        # the default; kept for old command lines
+    [switch]$Windowed,          # a window instead of the whole monitor
     [switch]$NoVsync,           # present without waiting for the display
     [switch]$NoAudio,           # leave the APU unmapped: DirectSound finds no device
     [hashtable]$Set = @{}       # extra RECOMP_* switches
@@ -43,9 +45,9 @@ if (-not $NoAudio -and $dspDoorbell.ContainsKey($Target)) {
 }
 if ($Software) { $settings.Remove('RECOMP_HW') }
 if ($Watchdog) { $settings.RECOMP_WATCHDOG_SECS = "$Watchdog" }
-if ($Pad) { $settings.RECOMP_USB = '1'; $settings.RECOMP_KEYBOARD = '1' }
+if ($UsbPad) { $settings.RECOMP_USB = '1' }
 if ($Aspect) { $settings.RECOMP_HW_ASPECT = $Aspect }
-if ($Fullscreen) { $settings.RECOMP_HW_FULLSCREEN = '1' }
+$settings.RECOMP_HW_FULLSCREEN = if ($Windowed) { '0' } else { '1' }
 if ($NoVsync) { $settings.RECOMP_HW_VSYNC = '0' }
 if ($SnapshotEvery) { $DumpFrames = $true; $settings.RECOMP_FB_WINDOW_DUMP_EVERY = '60' }
 New-Item -ItemType Directory -Force "$root\logs\fb" | Out-Null

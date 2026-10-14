@@ -2522,9 +2522,10 @@ static void draw_primitive(void)
                         s_gpu.rc.stage_program, s_gpu.rc.final0, s_gpu.rc.final1);
                 for (st = 0; st < 4; st++)
                     if ((s_gpu.rc.stage_program >> (st * 5)) & 0x1F)
-                        fprintf(stderr, " | t%d %08X %ux%u fmt %02X%s", st,
+                        fprintf(stderr, " | t%d %08X %ux%u fmt %02X filt %08X%s", st,
                                 s_gpu.texs[st].offset, s_gpu.texs[st].width,
                                 s_gpu.texs[st].height, s_gpu.texs[st].color,
+                                s_gpu.texs[st].filter,
                                 s_gpu.texs[st].valid ? "" : " (invalid)");
                 fputc(10, stderr);
                 for (st = 0; st < (int)(s_gpu.rc.control & 0xFF) && st < 8; st++)
@@ -2544,7 +2545,10 @@ static void draw_primitive(void)
         }
     }
 
-    if (getenv("RECOMP_PB_EXEC_VERBOSE")) {
+    static int pb_verbose = -1;           /* RE-SoT: not a getenv per draw */
+    if (pb_verbose < 0)
+        pb_verbose = getenv("RECOMP_PB_EXEC_VERBOSE") != NULL;
+    if (pb_verbose) {
         static int shown;
         if (shown++ < 6) {
             fprintf(stderr, "  [GPU] prim %u, %u indices, pos attr:"
@@ -3214,7 +3218,10 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
         }
         s_gpu.drawn_stale = 1;
 
-        if (getenv("RECOMP_PB_EXEC_VERBOSE")) {
+        static int flip_verbose = -1;     /* RE-SoT: not a getenv per flip */
+        if (flip_verbose < 0)
+            flip_verbose = getenv("RECOMP_PB_EXEC_VERBOSE") != NULL;
+        if (flip_verbose) {
             static unsigned n;
             if (n++ < 8) {
                 fprintf(stderr, "  [GPU] flip %u: read=%u write=%u\n",
