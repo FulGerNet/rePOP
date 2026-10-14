@@ -15,7 +15,7 @@ Addresses observed at runtime (`--log`) are added through the same gates, and
 for those an interior address is accepted as an alias entry.
 
 Normally run through `tools/recomp.ps1 -Seeds` (or `-Observed run.log`), which
-prepares the unseeded baseline it needs. By hand, from third_party/xboxrecomp
+prepares the unseeded baseline it needs. By hand, from port/third_party/xboxrecomp
 so `tools.disasm` resolves:
 
     python <reSOT>/tools/seed-scan.py default.xbe --analysis-json A.json \
@@ -90,16 +90,28 @@ def main():
         # in two and the lifted halves no longer shared a frame.
         if va not in engine.instructions:
             return False
+        # The first routine of a section has nothing in front of it. Bink's
+        # colour converters each open a section of their own (BINK32, BINK16,
+        # BINKYUY2 ...) and are reached only through BINKDATA's tables.
+        if any(lo == va for lo, _ in code):
+            return True
         for back in range(1, 16):
             prev = engine.instructions.get(va - back)
             if prev is not None and prev.end_address == va:
+                # Not `jmp`: the case blocks of a switch follow one, and taking
+                # those as routines split Bink's block decoder and D3D.
                 return prev.is_ret or prev.is_nop or prev.mnemonic == "int3"
         return False
 
     def consider(va, note, allow_interior):
         if va in known or va in added or not in_code(va):
             return
-        if interior(va) and not allow_interior and not after_boundary(va):
+        # A static candidate must start where a routine can start, wherever it
+        # lies. The boundary test used to apply only inside detected functions;
+        # 0x000E001A (a number in a DirectSound table) fell in a stretch the
+        # detector had left unclaimed, was accepted in the middle of a `je`,
+        # and the sound engine's stream reader around it was never lifted.
+        if not allow_interior and not after_boundary(va):
             return
         if engine.probes_as_function_body(va):
             added[va] = note
@@ -121,8 +133,14 @@ def main():
     # Codec tables and image data hold numbers that merely look like addresses
     # (0x00190004 came out of a WMA table), so a codec's data section may only
     # name code of its own library: BINKDATA holds Bink's blitter tables.
+    # The same holds for every prebuilt XDK library: its tables can name its
+    # own routines, never the title's .text, which did not exist when it was
+    # built. Shader tokens in XGRPH, HID tables in XPP and DirectSound's
+    # coefficient tables had put 80-odd entries into the middle of game code.
     not_pointers = {".text", "$$XTIMAGE", ".XTLID"}
-    own_code = {"BINKDATA": "BINK", "WMADEC": "WMADEC", "DOLBY": "DOLBY"}
+    own_code = {"BINKDATA": "BINK", "WMADEC": "WMADEC", "DOLBY": "DOLBY",
+                "D3D": "D3D", "D3DX": "D3D", "XGRPH": "XGRPH", "DSOUND": "DSOUND",
+                "XPP": "XPP"}
 
     def section_name(va):
         for sec in image.sections:
@@ -133,7 +151,7 @@ def main():
     for s in ([] if args.observed_only else image.sections):
         if s.name in not_pointers:
             continue
-        family = own_code.get(s.name)
+        family = own_code.get(s.name) or ("BINK" if s.name.startswith("BINK") else None)
         data = image.get_section_data(s)
         base = s.virtual_addr
         for off in range((-base) % 4, len(data) - 3, 4):

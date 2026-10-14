@@ -1,0 +1,9 @@
+# Files that a shell runs directly must keep LF line endings in a Windows
+# checkout (core.autocrlf): a CRLF shebang line does not start.
+*.sh text eol=lf
+port/third_party/xboxrecomp/tools/conformance/msvc-wine/wrappers/* text eol=lf
+port/third_party/xboxrecomp/tools/conformance/msvc-wine/fixinclude text eol=lf
+port/third_party/xboxrecomp/tools/conformance/msvc-wine/lowercase text eol=lf
+# Binary test fixtures.
+*.xbe binary
+*.wma binary

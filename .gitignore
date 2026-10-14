@@ -1,7 +1,7 @@
 # The user's own game files.
 /Assets/
 # C lifted from those files by tools/recomp.ps1.
-/src/*/gen/
+/source/*/gen/
 # Analysis databases, Ghidra projects and notes that quote the binaries.
 /research/
 # Outputs.
@@ -9,9 +9,18 @@
 /build*/
 /logs/
 /xbox_kernel.log
+/port/third_party/xboxrecomp/tools/*/output/
+# Executables and debug databases, wherever they land.
+*.exe
+*.pdb
+*.xbe
+# (but xboxrecomp's synthetic conformance image, built by its mkxbe.py)
+!/port/third_party/xboxrecomp/tools/conformance/test.xbe
+# Caches and IDE files.
 __pycache__/
 *.pyc
 .pytest_cache/
 *.user
 .vs/
-/third_party/xboxrecomp/tools/*/output/
+.idea/
+compile_commands.json

@@ -1,9 +1,15 @@
 """Compile the HLSL embedded in the NV2A Direct3D 11 backend without a build.
 
-The shaders live as a C string in third_party/xboxrecomp/src/kernel/
+The shaders live as C strings in port/third_party/xboxrecomp/src/kernel/
 nv2a_hw_d3d11.inc and are compiled by the game at start-up, so a typo costs a
-full rebuild and a run to discover. This extracts the string and feeds each
-entry point to d3dcompiler_47.dll.
+full rebuild and a run to discover. This extracts the strings and feeds each
+entry point to d3dcompiler_47.dll, the way the backend assembles them:
+
+    common + main                     vs_main, vs_blit, ps_main, ps_blit, ps_solid
+    common + program head + body + tail    vs_prog (a translated vertex program)
+
+The body of vs_prog comes from the title's own vertex programs at run time;
+here a stand-in exercises every helper the translator can emit.
 
     python tools/check-hlsl.py
 """
@@ -13,38 +19,59 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "third_party/xboxrecomp/src/kernel/nv2a_hw_d3d11.inc"
+SOURCE = ROOT / "port/third_party/xboxrecomp/src/kernel/nv2a_hw_d3d11.inc"
 ENTRIES = [("vs_main", "vs_4_0"), ("vs_blit", "vs_4_0"), ("ps_main", "ps_4_0"),
            ("ps_blit", "ps_4_0"), ("ps_solid", "ps_4_0")]
+SAMPLE_BODY = """  v[0] = i.a0; v[3] = i.a1; v[9] = i.a2;
+ { float4 a = (v[0].xyzw), b = (c[96].xyzw), cc = (-c[vsh_cidx(a0 + 4)].wzyx);
+   float4 m = dot(a, b).xxxx; float4 l = vsh_rcc(cc.x).xxxx;
+   a0 = (int)floor(a.x + 0.001);
+   R[12].x = m.x; R[1].w = l.w; }
+ { float4 a = (R[12].xyzw), b = (v[3].xyzw), cc = (v[9].xyzw);
+   float4 m = a * b + cc; float4 l = vsh_lit(cc) + vsh_log(cc) + vsh_rcp(cc.x).xxxx;
+   o[3].xyzw = m.xyzw; o[5].x = l.x; o[9].xy = l.xy; }
+"""
 
 
-def embedded_hlsl():
-    text = SOURCE.read_text(encoding="utf-8")
-    start = text.index("static const char s_hw_hlsl[] =")
+def embedded(text, name):
+    start = text.index("static const char %s[] =" % name)
     end = text.index('";', start)
     body = text[start:end + 1]
     parts = re.findall(r'"((?:[^"\\]|\\.)*)"', body)
     return "".join(parts).encode("utf-8").decode("unicode_escape")
 
 
+def compile_entry(dll, hlsl, entry, target):
+    hlsl = hlsl.encode("ascii")
+    code, errors = ctypes.c_void_p(), ctypes.c_void_p()
+    # OPTIMIZATION_LEVEL1 | IEEE_STRICTNESS, as hw_compile_src passes.
+    hr = dll.D3DCompile(hlsl, ctypes.c_size_t(len(hlsl)), b"nv2a_hw", None, None,
+                        entry.encode(), target.encode(), (1 << 14) | (1 << 13), 0,
+                        ctypes.byref(code), ctypes.byref(errors))
+    message = ""
+    if errors:
+        # ID3DBlob::GetBufferPointer is slot 3 of the object's vtable.
+        vtable = ctypes.cast(ctypes.cast(errors, ctypes.POINTER(ctypes.c_void_p))[0],
+                             ctypes.POINTER(ctypes.c_void_p))
+        get_ptr = ctypes.WINFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)(vtable[3])
+        message = ctypes.string_at(get_ptr(errors)).decode(errors="replace").strip()
+    if hr & 0x80000000:
+        print("FAIL %-8s %s\n%s" % (entry, target, message))
+        return 1
+    print("ok   %-8s %s %s" % (entry, target, message))
+    return 0
+
+
 def main():
-    hlsl = embedded_hlsl().encode("ascii")
+    text = SOURCE.read_text(encoding="utf-8")
+    common = embedded(text, "s_hw_hlsl_vs_common")
     dll = ctypes.WinDLL("d3dcompiler_47.dll")
     failed = 0
     for entry, target in ENTRIES:
-        code, errors = ctypes.c_void_p(), ctypes.c_void_p()
-        hr = dll.D3DCompile(hlsl, ctypes.c_size_t(len(hlsl)), b"nv2a_hw", None, None,
-                            entry.encode(), target.encode(), 1 << 14, 0,
-                            ctypes.byref(code), ctypes.byref(errors))
-        message = ""
-        if errors:
-            get_ptr = ctypes.WINFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)(3, "GetBufferPointer")
-            message = ctypes.string_at(get_ptr(errors)).decode(errors="replace").strip()
-        if hr & 0x80000000:
-            failed += 1
-            print("FAIL %-8s %s\n%s" % (entry, target, message))
-        else:
-            print("ok   %-8s %s %s" % (entry, target, message))
+        failed += compile_entry(dll, common + embedded(text, "s_hw_hlsl"), entry, target)
+    program = (common + embedded(text, "s_hw_hlsl_vsp_head") + SAMPLE_BODY
+               + embedded(text, "s_hw_hlsl_vsp_tail"))
+    failed += compile_entry(dll, program, "vs_prog", "vs_4_0")
     return 1 if failed else 0
 
 

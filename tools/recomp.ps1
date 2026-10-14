@@ -5,9 +5,9 @@
 #   .\tools\recomp.ps1 -BuildOnly                        # rebuild what is lifted
 #   .\tools\recomp.ps1 -Target xbox-demo -Seeds          # rebuild the seed list
 #
-# Pipeline (third_party/xboxrecomp): parse Assets/<target>/default.xbe, detect
+# Pipeline (port/third_party/xboxrecomp): parse Assets/<target>/default.xbe, detect
 # functions, recover calling conventions, lift every executable section to C
-# under src/<target>/gen. The generated C is derived from the user's own XBE:
+# under source/<target>/gen. The generated C is derived from the user's own XBE:
 # it is ignored by Git and must never be committed. Analysis databases go to
 # research/<target>/recomp.
 param(
@@ -17,21 +17,24 @@ param(
     [int]$Split = 250,
     [switch]$SkipAnalysis,
     [switch]$BuildOnly,
-    [switch]$Seeds,          # regenerate src/<target>/seed_functions.json from an unseeded disassembly
+    [switch]$Seeds,          # regenerate source/<target>/seed_functions.json from an unseeded disassembly
     [string[]]$Observed = @(),   # run logs whose unresolved call targets become seeds
     [switch]$AbiCheck        # build the <name>-abi.exe diagnostic variant instead
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$toolkit = "$root\third_party\xboxrecomp"
+$toolkit = "$root\port\third_party\xboxrecomp"
 $hashes = @{
     'xbox-demo'   = '79C1A47828630AB0D4E5DD19B1FD036FFA58EA2C0FE729B0D3456DAC3E79D4F5'
     'xbox-retail' = '753C58B191279BF4D1A8B28A936DF36AA222ED566487AB1FBDFCD090E91EE379'
 }
 $xbe = "$root\Assets\$Target\default.xbe"
 $out = "$root\research\$Target\recomp"
-$src = "$root\src\$Target"
+$src = "$root\source\$Target"
 $seedFile = "$src\seed_functions.json"
+# Hand-written code the lifter must know about: a target's own entry hooks
+# (sub_XXXXXXXX_enter, with that XBE's addresses) when it has any.
+$manual = if (Test-Path "$src\target_hooks.c") { "$src\target_hooks.c" } else { "$root\port\game\recomp_manual.c" }
 
 function Invoke-Native([string]$Exe, [string[]]$Arguments, [string]$WorkingDirectory) {
     # The tools report progress on stderr; Windows PowerShell would turn that
@@ -95,7 +98,7 @@ if (-not $BuildOnly) {
     Invoke-Tool @('-m', 'tools.recomp', $xbe, '--game-name', "PoP SoT $Target", '--all', '--split', "$Split",
         '--gen-dir', "$src\gen", '--disasm-dir', "$out\disasm",
         '--func-id-dir', "$out\func_id", '--abi-dir', "$out\abi",
-        '--exclude-manual', "$root\src\common\recomp_manual.c")
+        '--exclude-manual', $manual)
 }
 
 $build = if ($AbiCheck) { "$root\build-abi" } else { "$root\build" }
