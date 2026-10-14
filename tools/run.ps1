@@ -43,6 +43,13 @@ if (-not $NoAudio -and $dspDoorbell.ContainsKey($Target)) {
     $settings.RECOMP_AC97_READY = '1'                    # report the codec, emulate the APU
     $settings.RECOMP_APU_DSP_ACK = $dspDoorbell[$Target]
 }
+# Give freed memory back to the guest heap. Without it NtFreeVirtualMemory
+# returns nothing: on xbox-demo the heap went from 29 to 48 of its 48.5 MB
+# over the first two levels, and on the second Inter_11 movie the Bink worker
+# (thread routine 0x002AE6C0) got no stack, ran inline on the game thread and
+# never returned -- the freeze at the third level.
+$heapReclaim = @('xbox-demo')
+if ($heapReclaim -contains $Target) { $settings.RECOMP_HEAP_RECLAIM = '1' }
 if ($Software) { $settings.Remove('RECOMP_HW') }
 if ($Watchdog) { $settings.RECOMP_WATCHDOG_SECS = "$Watchdog" }
 if ($UsbPad) { $settings.RECOMP_USB = '1' }

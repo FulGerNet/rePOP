@@ -21,7 +21,7 @@ not a person.*
 
 | Target | Source executable | State |
 | --- | --- | --- |
-| `xbox-demo` | E3 2003 demo, `default.xbe` built 2003-07-18 | Runs: movies, menus, pause menu and the level sections reached by a scripted pad, at 55-60 fps with vsync, with sound and a Hor+ 16:9 picture (the default build). Sound and gameplay not checked by a person; not validated against the console |
+| `xbox-demo` | E3 2003 demo, `default.xbe` built 2003-07-18 | Runs: movies, menus, pause menu and the level sections reached by a scripted pad, at 55-60 fps with vsync, with sound and a Hor+ 16:9 picture (the default build); played by a person to the third level and its movie without a freeze (guest heap reclaim on). Sound not checked by a person; not validated against the console |
 | `xbox-retail` | NTSC retail, title `0x5553001D`, `default.xbe` built 2003-10-20 | Not started: files staged, entry point and D3D fence layout located. Planned after the demo |
 
 The goal is both games fully playable from the user's own disc files, with
@@ -104,10 +104,10 @@ In short, on Windows:
 | Boot to first frame | 🟢 | ⚪ |
 | Movies (Bink via overlay) | 🟢 picture; 🟡 sound produced, not checked by ear | ⚪ |
 | Menus | 🟢 main and pause | ⚪ |
-| In-level rendering | 🟡 no shadows, stencil or cube maps | ⚪ |
+| In-level rendering | 🟡 character shadows drawn (projected silhouettes); no stencil or cube maps | ⚪ |
 | Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or Alt+Enter/F11; culling widened to the new sides; the menu garden is not modelled past its 4:3 edge | ⚪ |
 | Frame rate | 🟢 60 fps (vsync) in every 5 s window after start-up in the runs of 2026-10-14 (afternoon); about half a core in the menu, one core in the intro scene | ⚪ |
-| Controller / keyboard | 🟡 keyboard, mouse buttons, XInput pad or joystick through XAPI replaced on port 0 (no USB enumeration); gameplay not validated by play | ⚪ |
+| Controller / keyboard | 🟡 keyboard in the PC version's layout, mouse buttons and mouse camera, XInput pad or joystick through XAPI replaced on port 0 (no USB enumeration); played to the third level by a person, the camera keys' Xbox buttons not confirmed | ⚪ |
 | Audio | 🟡 DirectSound runs on the emulated APU, no DSP effects; not checked by ear | ⚪ |
 | Save / load, memory unit | ⚪ | ⚪ |
 | Xbox Live (retail only) | n/a | ⚪ not planned |

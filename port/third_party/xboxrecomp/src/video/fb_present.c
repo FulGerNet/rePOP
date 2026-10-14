@@ -140,6 +140,51 @@ int xbox_FramebufferKeyDown(int vk)
     return s_key_down[vk] != 0;
 }
 
+/* RE-SoT: the mouse's movement, in raw counts, since the input layer last
+ * took it; the camera is driven by it as the PC version's is. Raw input
+ * rather than WM_MOUSEMOVE, which stops at the screen's edge. */
+static volatile LONG s_mouse_dx, s_mouse_dy;
+
+void xbox_FramebufferTakeMouse(int *dx, int *dy)
+{
+    *dx = (int)InterlockedExchange(&s_mouse_dx, 0);
+    *dy = (int)InterlockedExchange(&s_mouse_dy, 0);
+}
+
+/* RE-SoT: WM_KEYDOWN says VK_SHIFT/VK_CONTROL/VK_MENU for either side, and
+ * with NumLock off the numeric pad arrives as the navigation keys. The
+ * keyboard layout binds the left and right keys and the pad separately
+ * (Left Shift walks, Right Shift rewinds, Keypad 1 cancels, End is the
+ * alternate view), so the side is taken from the scan code and the
+ * extended-key flag (bit 24) before the key is recorded. */
+static unsigned fb_vk_sided(WPARAM w, LPARAM l)
+{
+    unsigned scan = (unsigned)(l >> 16) & 0xFF;
+    int ext = (l & (1 << 24)) != 0;
+
+    switch (w) {
+    case VK_SHIFT:   return scan == 0x36 ? VK_RSHIFT : VK_LSHIFT;
+    case VK_CONTROL: return ext ? VK_RCONTROL : VK_LCONTROL;
+    case VK_MENU:    return ext ? VK_RMENU : VK_LMENU;
+    }
+    if (!ext) {                     /* the pad's keys, NumLock off */
+        switch (w) {
+        case VK_INSERT: return VK_NUMPAD0;
+        case VK_END:    return VK_NUMPAD1;
+        case VK_DOWN:   return VK_NUMPAD2;
+        case VK_NEXT:   return VK_NUMPAD3;
+        case VK_LEFT:   return VK_NUMPAD4;
+        case VK_CLEAR:  return VK_NUMPAD5;
+        case VK_RIGHT:  return VK_NUMPAD6;
+        case VK_HOME:   return VK_NUMPAD7;
+        case VK_UP:     return VK_NUMPAD8;
+        case VK_PRIOR:  return VK_NUMPAD9;
+        case VK_DELETE: return VK_DECIMAL;
+        }
+    }
+    return (unsigned)w;
+}
+
 /* RE-SoT: Alt+Enter or F11 switches between the window and a borderless
  * window over the whole monitor. A maximised window keeps its title bar, so
  * its client area is not the picture's shape and the picture gets bars at
@@ -200,6 +245,7 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
+        w = fb_vk_sided(w, l);
         if ((unsigned)w < 256)
             s_key_down[w] = 1;
         /* RECOMP_KEY_TRACE: each key as it arrives, edge-triggered.
@@ -221,29 +267,69 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         return m == WM_SYSKEYDOWN ? DefWindowProcA(h, m, w, l) : 0;
 
     case WM_KEYUP:
-    case WM_SYSKEYUP:
-        if ((unsigned)w < 256)
-            s_key_down[w] = 0;
+    case WM_SYSKEYUP: {
+        WPARAM vk = fb_vk_sided(w, l);
+        if ((unsigned)vk < 256)
+            s_key_down[vk] = 0;
+        /* Both Shifts held and one let go: Windows may send the release
+         * only for the generic key, so the pair is re-read from the state. */
+        if (w == VK_SHIFT) {
+            s_key_down[VK_LSHIFT] = (GetKeyState(VK_LSHIFT) & 0x8000) != 0;
+            s_key_down[VK_RSHIFT] = (GetKeyState(VK_RSHIFT) & 0x8000) != 0;
+        }
         return m == WM_SYSKEYUP ? DefWindowProcA(h, m, w, l) : 0;
+    }
 
     /* RE-SoT: the mouse buttons are recorded like keys (VK_LBUTTON,
-     * VK_RBUTTON), so the input layer maps them the same way. The capture
-     * keeps the release from being lost if it happens outside the window. */
+     * VK_RBUTTON, VK_MBUTTON), so the input layer maps them the same way.
+     * The capture keeps the release from being lost if it happens outside
+     * the window. */
     case WM_LBUTTONDOWN:
     case WM_RBUTTONDOWN:
-        s_key_down[m == WM_LBUTTONDOWN ? VK_LBUTTON : VK_RBUTTON] = 1;
+    case WM_MBUTTONDOWN:
+        s_key_down[m == WM_LBUTTONDOWN ? VK_LBUTTON
+                   : m == WM_RBUTTONDOWN ? VK_RBUTTON : VK_MBUTTON] = 1;
         SetCapture(h);
         return 0;
     case WM_LBUTTONUP:
     case WM_RBUTTONUP:
-        s_key_down[m == WM_LBUTTONUP ? VK_LBUTTON : VK_RBUTTON] = 0;
-        if (!s_key_down[VK_LBUTTON] && !s_key_down[VK_RBUTTON])
+    case WM_MBUTTONUP:
+        s_key_down[m == WM_LBUTTONUP ? VK_LBUTTON
+                   : m == WM_RBUTTONUP ? VK_RBUTTON : VK_MBUTTON] = 0;
+        if (!s_key_down[VK_LBUTTON] && !s_key_down[VK_RBUTTON]
+            && !s_key_down[VK_MBUTTON])
             ReleaseCapture();
         return 0;
+
+    /* RE-SoT: mouse movement for the camera, only while the window has the
+     * focus (raw input is registered without RIDEV_INPUTSINK). */
+    case WM_INPUT: {
+        RAWINPUT ri;
+        UINT size = sizeof ri;
+        if (GetRawInputData((HRAWINPUT)l, RID_INPUT, &ri, &size,
+                            sizeof(RAWINPUTHEADER)) != (UINT)-1
+            && ri.header.dwType == RIM_TYPEMOUSE
+            && !(ri.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
+            InterlockedExchangeAdd(&s_mouse_dx, ri.data.mouse.lLastX);
+            InterlockedExchangeAdd(&s_mouse_dy, ri.data.mouse.lLastY);
+        }
+        break;                      /* DefWindowProc does the cleanup */
+    }
+
+    /* RE-SoT: the pointer is hidden over the picture, since the mouse turns
+     * the camera rather than pointing at anything. */
+    case WM_SETCURSOR:
+        if (LOWORD(l) == HTCLIENT) {
+            SetCursor(NULL);
+            return TRUE;
+        }
+        break;
 
     /* Alt-tabbing away with a key held would leave it held for ever. */
     case WM_KILLFOCUS:
         memset((void *)s_key_down, 0, sizeof s_key_down);
+        InterlockedExchange(&s_mouse_dx, 0);
+        InterlockedExchange(&s_mouse_dy, 0);
         return 0;
     }
     return DefWindowProcA(h, m, w, l);
@@ -558,6 +644,17 @@ static DWORD WINAPI fb_thread(LPVOID unused)
     }
     hdc = GetDC(hwnd);
     s_hwnd = hwnd;
+    {
+        /* RE-SoT: raw mouse movement for the camera (WM_INPUT above). */
+        RAWINPUTDEVICE rid;
+        rid.usUsagePage = 0x01;     /* generic desktop */
+        rid.usUsage     = 0x02;     /* mouse */
+        rid.dwFlags     = 0;
+        rid.hwndTarget  = hwnd;
+        if (!RegisterRawInputDevices(&rid, 1, sizeof rid))
+            fprintf(stderr, "  [FBWIN] raw mouse input unavailable (%lu)\n",
+                    (unsigned long)GetLastError());
+    }
 
     memset(&bi, 0, sizeof(bi));
     bi.bmiHeader.biSize        = sizeof(bi.bmiHeader);
@@ -675,6 +772,7 @@ void xbox_FramebufferWindowSet(uint32_t fb_va, uint32_t pitch) { (void)fb_va; (v
 void xbox_FramebufferWindowPresent(uint32_t fb_va, uint32_t pitch) { (void)fb_va; (void)pitch; }
 void xbox_FramebufferWindowStart(void) {}
 int xbox_FramebufferKeyDown(int vk) { (void)vk; return 0; }
+void xbox_FramebufferTakeMouse(int *dx, int *dy) { *dx = 0; *dy = 0; }
 void xbox_FramebufferWindowSetTitle(const uint16_t *n, int m) { (void)n; (void)m; }
 void xbox_FramebufferWindowFrameStats(uint32_t draws) { (void)draws; }
 #endif

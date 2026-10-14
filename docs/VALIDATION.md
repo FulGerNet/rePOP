@@ -7,6 +7,96 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-15: xbox-demo, character shadows
+
+Build: `recomp.ps1 -Target xbox-demo -BuildOnly` (`check-hlsl.py`: all ok).
+
+How the demo draws them, from frame traces (`RECOMP_FRAME_TRACE`,
+`RECOMP_FRAME_TRACE_METHODS`) in the first level: each character is drawn
+again into a 256x256 swizzled R5G6B5 target (`0x0080C000`, `0x0082C000`,
+`0x0084C000`, surface format `08080213`), cleared to black, with one
+diffuse colour for the batch and no diffuse array (the vertex program copies
+`v3` to `oD0`). The floor under it is then drawn with that target as a
+projected texture (stage program 1) and blend `ZERO / ONE_MINUS_SRC_COLOR`:
+the lighter the silhouette, the darker the floor.
+
+Observed:
+
+- Before: `RECOMP_HW_GLOW_DUMP` showed the silhouettes at 0-1 of 255 on
+  black; the traced caster batches had `d0 0 0 0 1`. An attribute with no
+  array read 0,0,0,1, not the value the `SET_VERTEX_DATA*` methods set.
+- Now the vertex shaders get those values (`cur[16]` in the constant
+  buffer) and the interpreter's `fetch_attr` returns them. Same run
+  (`run.ps1 -Seconds 152` with the scripted pad, trace at 145 s): the
+  silhouettes are white in the dumps.
+- The person playing reported the shadows visible.
+
+Not checked: whether shadow intensity and softness match the console; other
+uses of constant attribute values elsewhere in the game (they now take the
+value set instead of 0,0,0,1).
+
+## 2026-10-14 (late night): xbox-demo, missing triangles in models
+
+Build: `recomp.ps1 -Target xbox-demo -BuildOnly`.
+
+Observed:
+
+- Before: a person saw models with triangles missing (Farah's arm and
+  torso, the sides of a balcony). The `[GPU]` report listed method `0x1808`
+  (`NV097_ARRAY_ELEMENT32`, the odd last index of an index list) as
+  unhandled 556,550 times, and a counter added to the executor showed
+  8,388,608 index words dropped past the 4096-index batch limit in 150 s.
+- The executor now takes `ARRAY_ELEMENT32` and holds 65,536 indices a
+  batch. `run.ps1 -Seconds 150 -SnapshotEvery 10 -Set
+  @{RECOMP_PAD_SCRIPT='30000:start:800,36000:a:800,62000:start:800,70000:start:800,78000:start:800'}`:
+  no index overflow reported, 58-60 fps in the level (`[HW]` 291-608 draws,
+  20-38 thousand triangles a frame).
+- The person playing reported, with ARRAY_ELEMENT32 alone, some models
+  whole and the balcony's sides still missing; with the larger limit as
+  well, the balcony whole.
+
+Not checked: every model in every level; shadows (not drawn, see the README).
+
+## 2026-10-14 (night): xbox-demo, PC keyboard layout, freeze at the third level
+
+Build: `recomp.ps1 -Target xbox-demo -BuildOnly` (runtime only: the PC
+version's keyboard layout, left/right Shift and Ctrl told apart, the numeric
+pad with NumLock off, middle mouse button, raw mouse movement as the right
+stick).
+
+Observed:
+
+- A person played `run.ps1 -Set @{RESOT_THREAD_DUMP_SECS='15'; RESOT_PROFILE_MS='5'}`
+  to the third level, where the game froze without starting its movie. The
+  log: on the second `video\Intersti\Inter_11.int`, Bink's second worker
+  thread (`PsCreateSystemThreadEx #20`, routine `0x0027FAE5`, ctx
+  `0x002AE6C0`) got `xbox_HeapAlloc: out of memory (requested 524288, used
+  50401280/50855936)` for its stack and ran inline on the game thread, which
+  then looped in `sub_002AE6C0` on `NtReleaseMutant` failures at 0 fps. The
+  heap's high-water mark went from 29 MB (allocation #512) to 48 MB
+  (allocation #1024) across the level loads: without `RECOMP_HEAP_RECLAIM`,
+  `NtFreeVirtualMemory` gives nothing back.
+- `run.ps1` now sets `RECOMP_HEAP_RECLAIM=1` for xbox-demo. `run.ps1
+  -Seconds 150 -SnapshotEvery 10 -Set @{RECOMP_PAD_SCRIPT='30000:start:800,
+  36000:a:800,62000:start:800,70000:start:800,78000:start:800'}`: no out of
+  memory, the heap's bump pointer at about 10 MB after 32 allocations and
+  never at #512 in 150 s, the level rendered at 58-60 fps (snapshot at 150 s:
+  the Prince and a soldier in the first level). Nine `NtReleaseMutant(0)
+  failed` at sound start-up are in both runs, before and after the change.
+
+- With the change, a person played the same diagnostic run to the third
+  level: the movie started and the game did not freeze (their report). The
+  log (23,811 lines) has the interstitial movies `Inter_11/21/31` opened
+  eight times each, no `out of memory`, no worker run inline, heap frees
+  matched (`frees=2048 matched=2048`); 59.7 fps in the level, and 0 fps on
+  the renderer at the end while the profile shows the movie overlay
+  (`yuv_to_rgb`, `overlay_latch`) -- the movie, not a stall.
+
+Not checked: whether the movie and the third level play correctly beyond
+starting; the keyboard layout by a person, in particular that
+White, Black and the right stick click are the game's camera look,
+alternate view and camera reset; the mouse speed's feel.
+
 ## 2026-10-14 (evening): xbox-demo, input without USB, full screen by default
 
 Build: `recomp.ps1 -Target xbox-demo -SkipAnalysis` ("Excluding 2 functions

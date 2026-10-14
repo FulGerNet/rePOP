@@ -218,6 +218,7 @@ Diagnostics added by the host (`port/windows/src/main.c`), all off unless set:
 | `RECOMP_OVL_DUMP=prefix` | raw YUY2 of the first 400 distinct movie frames |
 | `RESOT_LOG_UNBUFFERED=1` | write every diagnostic line at once (default: buffered, flushed four times a second) |
 | `RECOMP_HW_GLOW_DUMP=prefix` | with the frame trace: the display surface before the first batch that samples another render target into it and at the flip, and every smaller render target, as BMPs at host resolution |
+| `RECOMP_HW_VSH_DUMP=all` | every vertex program's HLSL translation, headed `[VSH key]`; the frame trace's `gpu batch` lines name the key, the first vertex's `d0` and fog (without `all`: only translations that fail to compile) |
 | `RECOMP_NV2A_ACK_SPIN=1` | the NV2A busy-bit thread spins (`Sleep(0)`) as before instead of sleeping until kicked |
 
 The frame trace (`RECOMP_FRAME_TRACE`) also gives, per batch on the hardware

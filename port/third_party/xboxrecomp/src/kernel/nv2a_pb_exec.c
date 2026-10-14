@@ -188,6 +188,7 @@ static int surface_write_refused(uint32_t base, uint32_t bytes, const char *what
 #define NV097_FLIP_INCREMENT_WRITE        0x012C
 #define NV097_FLIP_STALL                  0x0130
 #define NV097_ARRAY_ELEMENT16             0x1800
+#define NV097_ARRAY_ELEMENT32             0x1808  /* RE-SoT: the odd last index */
 /* Draw a run of vertices straight out of the arrays, with no index list:
  * bits 0..23 are the first vertex, bits 24..31 the count minus one. It may
  * appear several times inside one BEGIN_END to draw a longer run. */
@@ -225,7 +226,12 @@ typedef struct {
 } VertexAttr;
 
 #define NV_VERTEX_ATTRS 16
-#define NV_MAX_INDICES  4096
+/* RE-SoT: was 4096. The demo's level geometry sends longer index lists in
+ * one BEGIN/END, and everything past the 4096th index was dropped (8.4
+ * million index words in 150 s of the first level): meshes lost their tail.
+ * 65536 is what a 16-bit index can name, and the vertex ring (16 MB) still
+ * holds a whole batch at 128 bytes a vertex. */
+#define NV_MAX_INDICES  65536
 #define NV_MAX_INLINE   65536           /* dwords of INLINE_ARRAY per batch */
 
 /* Texture stage 0, decoded from what the title programmed.
@@ -460,6 +466,16 @@ static void note_unhandled(uint32_t method, uint32_t param)
     }
 }
 
+/* RE-SoT: a batch with more indices than NV_MAX_INDICES loses the rest. Said
+ * once per batch-overflow count milestone so it can be seen if it happens. */
+static void note_index_overflow(void)
+{
+    static uint32_t n;
+    if (++n == 1 || (n & (n - 1)) == 0)
+        fprintf(stderr, "  [GPU] index list longer than %u: rest of batch dropped"
+                        " (%u times)\n", (unsigned)NV_MAX_INDICES, n);
+}
+
 /* Read attribute `a` of vertex `index` as floats. Only the float and the
  * normalised-byte types appear in practice; anything else returns 0 so a
  * caller sees a degenerate vertex rather than reading past the array. */
@@ -471,6 +487,14 @@ static int fetch_attr(const VertexAttr *a, uint32_t index, float out[4])
 
     out[0] = out[1] = out[2] = 0.0f;
     out[3] = 1.0f;
+    /* RE-SoT: an attribute with no array reads its current value, the one the
+     * SET_VERTEX_DATA* methods left (see hw_bind_draw_state). Still returns
+     * 0, so callers asking "is there an array" get the same answer. */
+    if (a >= s_gpu.attr && a < s_gpu.attr + NV_VERTEX_ATTRS
+        && (!a->size || !a->stride || (!s_gpu.inline_active && !a->offset))) {
+        memcpy(out, s_gpu.imm_attr[a - s_gpu.attr], 4 * sizeof(float));
+        return 0;
+    }
     if (!a->size || !a->stride)
         return 0;
     if (s_gpu.inline_active) {
@@ -3117,6 +3141,8 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
             break;
         for (i = 0; i < count && s_gpu.idx_count < NV_MAX_INDICES; i++)
             s_gpu.idx[s_gpu.idx_count++] = (uint16_t)(start + i);
+        if (i < count)
+            note_index_overflow();
         break;
     }
 
@@ -3125,7 +3151,21 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
         if (s_gpu.prim && s_gpu.idx_count + 2 <= NV_MAX_INDICES) {
             s_gpu.idx[s_gpu.idx_count++] = (uint16_t)(param & 0xFFFF);
             s_gpu.idx[s_gpu.idx_count++] = (uint16_t)(param >> 16);
+        } else if (s_gpu.prim) {
+            note_index_overflow();
         }
+        break;
+
+    case NV097_ARRAY_ELEMENT32:
+        /* RE-SoT: one index per word. XDK D3D sends an index list as pairs
+         * through ARRAY_ELEMENT16 and the odd one left at the end through
+         * this method; it was unhandled (556,550 times in a run through the
+         * demo), so every strip with an odd index count lost its last
+         * triangle -- the holes in the characters' meshes. */
+        if (s_gpu.prim && s_gpu.idx_count < NV_MAX_INDICES)
+            s_gpu.idx[s_gpu.idx_count++] = (uint16_t)(param & 0xFFFF);
+        else if (s_gpu.prim)
+            note_index_overflow();
         break;
 
     case NV097_SET_FLIP_READ:

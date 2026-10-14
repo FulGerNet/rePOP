@@ -34,17 +34,30 @@ static DWORD g_last_packet[XBOX_MAX_CONTROLLERS] = { 0 };
  *
  * RE-SoT: on unless RECOMP_KEYBOARD=0 (port/windows/src/main.c sets it). It
  * only ever answers for port 0, and is merged on top of a pad connected
- * there, so a real controller keeps working. The layout is a PC game's, with
- * the mouse buttons:
+ * there, so a real controller keeps working. The layout is the PC version's
+ * default one (its Controls - Keyboard screen), each action on the Xbox
+ * button that does it:
  *
- *   W A S D       left thumb        Enter         START
- *   Space, left mouse button  A     Esc/Backspace BACK
- *   Q             B                 F             X
- *   E             Y                 R             left trigger
- *   right mouse button  right trigger
- *   arrows        d-pad             I J K L       right thumb
- *   Z C           white black       Shift Ctrl    left / right thumb click
- *   numpad 8/2/4/6 left thumb as well
+ *   Move            W A S D / arrows          left thumb (arrows: d-pad too)
+ *   Walk toggle     Left Shift / Keypad .     left thumb at walking deflection
+ *   Jump            Space / Right Ctrl        A
+ *   Special action  right mouse button        right trigger
+ *   Sword attack    left mouse button         X
+ *   Use dagger      E / middle mouse button   Y
+ *   Cancel          C / Keypad 1              B
+ *   Rewind          R / Right Shift           left trigger
+ *   Camera look     F / Delete                white
+ *   Alternate view  Q / End                   black
+ *   Reset camera    X                         right thumb click
+ *   Start           Esc (and Enter)           START
+ *   (back)          Backspace                 BACK
+ *   mouse movement                            right thumb (the camera)
+ *
+ * The camera's three (look, alternate view, reset) are on the buttons the
+ * Xbox pad has left once the others are placed; that they are the right
+ * ones is to be seen in play. RECOMP_MOUSE_SPEED (1-100, default 43, the PC
+ * version's default) scales the mouse; RECOMP_WALK_DEFLECTION (default
+ * 12000) is how far the stick is pushed while walking.
  *
  * Keys come from the framebuffer window, which only receives them while it
  * has the focus, so typing in another window does not drive the game.
@@ -76,54 +89,114 @@ static BOOL key_down(int vk)
     return xbox_FramebufferKeyDown(vk) ? TRUE : FALSE;
 }
 
-/* A thumb axis from two keys, at the full deflection a digital key implies. */
-static SHORT axis_from_keys(int negative, int positive)
+static int env_int(const char *name, int def, int lo, int hi)
 {
-    int v = 0;
-    if (key_down(negative)) v -= 32767;
-    if (key_down(positive)) v += 32767;
-    return (SHORT)v;
+    const char *v = getenv(name);
+    int x = (v && *v) ? atoi(v) : def;
+    return x < lo ? lo : x > hi ? hi : x;
+}
+
+/* Walk toggle: each press flips it, as the PC version's key does. */
+static BOOL walk_toggled(void)
+{
+    static BOOL on, was;
+    BOOL now = key_down(VK_LSHIFT) || key_down(VK_DECIMAL);
+    if (now && !was)
+        on = !on;
+    was = now;
+    return on;
+}
+
+extern void xbox_FramebufferTakeMouse(int *dx, int *dy);
+
+/* The mouse as the right thumb. The title polls more than once a frame at
+ * times, and taking the movement on every poll would show the camera a
+ * deflection on one and none on the next; it is taken at most every 15 ms
+ * and the deflection held in between. Full deflection is a rate of movement
+ * (counts per millisecond), so the feel does not change with the frame rate. */
+static void mouse_thumb(SHORT *rx, SHORT *ry)
+{
+    static DWORD last;
+    static SHORT hx, hy;
+    DWORD now = GetTickCount();
+    DWORD dt = now - last;
+
+    if (dt >= 15) {
+        int dx, dy;
+        double per_ms, k;
+        xbox_FramebufferTakeMouse(&dx, &dy);
+        if (dt > 100)
+            dt = 100;                       /* first poll, or after a stall */
+        /* At speed 43 a full deflection is ~1.5 counts per millisecond. */
+        k = 32767.0 * env_int("RECOMP_MOUSE_SPEED", 43, 1, 100) / (43.0 * 1.5);
+        per_ms = (double)dx / dt * k;
+        hx = (SHORT)(per_ms > 32767 ? 32767 : per_ms < -32767 ? -32767 : per_ms);
+        per_ms = -(double)dy / dt * k;      /* screen y is down, the stick's up */
+        hy = (SHORT)(per_ms > 32767 ? 32767 : per_ms < -32767 ? -32767 : per_ms);
+        last = now;
+    }
+    *rx = hx;
+    *ry = hy;
 }
 
 static void keyboard_state(XBOX_INPUT_STATE *pState)
 {
     static DWORD packet;
     WORD b = 0;
+    BOOL up = key_down(VK_UP), down = key_down(VK_DOWN);
+    BOOL left = key_down(VK_LEFT), right = key_down(VK_RIGHT);
+    int lx = 0, ly = 0;
 
     memset(pState, 0, sizeof(*pState));
 
-    if (key_down(VK_UP))     b |= XBOX_GAMEPAD_DPAD_UP;
-    if (key_down(VK_DOWN))   b |= XBOX_GAMEPAD_DPAD_DOWN;
-    if (key_down(VK_LEFT))   b |= XBOX_GAMEPAD_DPAD_LEFT;
-    if (key_down(VK_RIGHT))  b |= XBOX_GAMEPAD_DPAD_RIGHT;
-    if (key_down(VK_RETURN)) b |= XBOX_GAMEPAD_START;
-    if (key_down(VK_BACK) || key_down(VK_ESCAPE)) b |= XBOX_GAMEPAD_BACK;
-    if (key_down(VK_SHIFT))  b |= XBOX_GAMEPAD_LEFT_THUMB;
-    if (key_down(VK_CONTROL))b |= XBOX_GAMEPAD_RIGHT_THUMB;
+    /* The arrows are also the d-pad, which is what the menus read on the
+     * console; the PC layout leaves Menu Up/Down/Left/Right unbound. */
+    if (up)    b |= XBOX_GAMEPAD_DPAD_UP;
+    if (down)  b |= XBOX_GAMEPAD_DPAD_DOWN;
+    if (left)  b |= XBOX_GAMEPAD_DPAD_LEFT;
+    if (right) b |= XBOX_GAMEPAD_DPAD_RIGHT;
+    if (key_down(VK_ESCAPE) || key_down(VK_RETURN)) b |= XBOX_GAMEPAD_START;
+    if (key_down(VK_BACK))   b |= XBOX_GAMEPAD_BACK;
+    if (key_down('X'))       b |= XBOX_GAMEPAD_RIGHT_THUMB;   /* reset camera */
     pState->Gamepad.wButtons = b;
 
     /* Analog on the console, so a key is 255 rather than a flag -- a title
      * that reads these as a pressure never sees a press if they are 1.
-     * VK_LBUTTON/VK_RBUTTON are recorded by the window like keys. */
+     * The mouse buttons are recorded by the window like keys. */
+#define PRESS(cond) ((cond) ? 255 : 0)
     pState->Gamepad.bAnalogButtons[XBOX_BUTTON_A] =
-        (key_down(VK_SPACE) || key_down(VK_LBUTTON)) ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_B]        = key_down('Q') ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_X]        = key_down('F') ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_Y]        = key_down('E') ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE]    = key_down('Z') ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_BLACK]    = key_down('C') ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] = key_down('R') ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] = key_down(VK_RBUTTON) ? 255 : 0;
+        PRESS(key_down(VK_SPACE) || key_down(VK_RCONTROL));              /* jump */
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_B] =
+        PRESS(key_down('C') || key_down(VK_NUMPAD1));                    /* cancel */
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_X] =
+        PRESS(key_down(VK_LBUTTON));                                     /* sword */
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_Y] =
+        PRESS(key_down('E') || key_down(VK_MBUTTON));                    /* dagger */
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE] =
+        PRESS(key_down('F') || key_down(VK_DELETE));                     /* look */
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_BLACK] =
+        PRESS(key_down('Q') || key_down(VK_END));                        /* alt view */
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] =
+        PRESS(key_down('R') || key_down(VK_RSHIFT));                     /* rewind */
+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] =
+        PRESS(key_down(VK_RBUTTON));                                     /* special */
+#undef PRESS
 
-    /* W A S D, and the numeric pad's 8 4 2 6. */
-    pState->Gamepad.sThumbLX = axis_from_keys('A', 'D');
-    pState->Gamepad.sThumbLY = axis_from_keys('S', 'W');
-    if (!pState->Gamepad.sThumbLX)
-        pState->Gamepad.sThumbLX = axis_from_keys(VK_NUMPAD4, VK_NUMPAD6);
-    if (!pState->Gamepad.sThumbLY)
-        pState->Gamepad.sThumbLY = axis_from_keys(VK_NUMPAD2, VK_NUMPAD8);
-    pState->Gamepad.sThumbRX = axis_from_keys('J', 'L');
-    pState->Gamepad.sThumbRY = axis_from_keys('K', 'I');
+    /* W A S D and the arrows. */
+    if (key_down('A') || left)  lx -= 32767;
+    if (key_down('D') || right) lx += 32767;
+    if (key_down('S') || down)  ly -= 32767;
+    if (key_down('W') || up)    ly += 32767;
+    lx = lx < -32767 ? -32767 : lx > 32767 ? 32767 : lx;
+    ly = ly < -32767 ? -32767 : ly > 32767 ? 32767 : ly;
+    if (walk_toggled() && (lx || ly)) {
+        int w = env_int("RECOMP_WALK_DEFLECTION", 12000, 1000, 32767);
+        lx = lx * w / 32767;
+        ly = ly * w / 32767;
+    }
+    pState->Gamepad.sThumbLX = (SHORT)lx;
+    pState->Gamepad.sThumbLY = (SHORT)ly;
+    mouse_thumb(&pState->Gamepad.sThumbRX, &pState->Gamepad.sThumbRY);
 
     /* The title's input layer looks for button edges, so the packet number
      * has to move whenever the state does or a press is never noticed. */

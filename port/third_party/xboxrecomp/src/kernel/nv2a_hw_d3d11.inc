@@ -93,6 +93,7 @@ typedef struct {
     float fogp[4];                      /* fog param 0, param 1, mode, enable */
     float ws[4];                        /* 2D squeeze, surface width, edge margin */
     float pad[4];
+    float cur[NV_VERTEX_ATTRS][4];      /* RE-SoT: attribute values with no array */
     float c[NV2A_VSH_CONSTANTS][4];     /* the program's constants */
 } HwVsConst;
 
@@ -179,7 +180,8 @@ static struct {
  * centre, unless it sits on the surface's edge (full-screen fades and
  * post-processing quads, which must keep covering everything). */
 static const char s_hw_hlsl_vs_common[] =
-"cbuffer VSC : register(b0) { float4 vp; float4 fogp; float4 ws; float4 vpad; float4 c[192]; };\n"
+"cbuffer VSC : register(b0) { float4 vp; float4 fogp; float4 ws; float4 vpad; float4 cur[16];\n"
+"                             float4 c[192]; };\n"
 "struct VO { float4 pos:SV_Position; float4 d0:COLOR0; float4 d1:COLOR1; float4 fog:FOG;\n"
 "            float4 t0:TEXCOORD0; float4 t1:TEXCOORD1; float4 t2:TEXCOORD2; float4 t3:TEXCOORD3; };\n"
 "VO vs_finish(float4 p, float4 d0, float4 d1, float fog, float4 t0, float4 t1, float4 t2, float4 t3) {\n"
@@ -226,7 +228,7 @@ static const char s_hw_hlsl_vsp_head[] =
 "  return saturate(f); }\n"
 "VO vs_prog(PI i) {\n"
 "  float4 v[16]; float4 R[13]; float4 o[13]; int a0 = 0; int k;\n"
-"  for (k = 0; k < 16; k++) v[k] = float4(0, 0, 0, 1);\n"
+"  for (k = 0; k < 16; k++) v[k] = cur[k];\n"
 "  for (k = 0; k < 13; k++) { R[k] = float4(0, 0, 0, 0); o[k] = float4(0, 0, 0, 0); }\n"
 "  o[3].w = 1.0; o[4].w = 1.0; o[9].w = 1.0; o[10].w = 1.0; o[11].w = 1.0; o[12].w = 1.0;\n";
 static const char s_hw_hlsl_vsp_tail[] =
@@ -1081,7 +1083,9 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     ID3D11ShaderResourceView *srv[4];
     ID3D11SamplerState *smp[4];
     HwVsConst *vc = &s_hw.vs_last;
-    float hdr[16], bf[4];
+    /* The header (vp, fogp, ws, pad) and then cur[]: everything in HwVsConst
+     * before the program constants. */
+    float hdr[16 + NV_VERTEX_ATTRS * 4], bf[4];
     int st, i;
     UINT stride = sizeof(HwVertex), zero = 0;
     uint32_t area;
@@ -1170,6 +1174,12 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
         hdr[8] = main_view && !s_hw.batch_full_width ? 1.0f / s_hw.widen : 1.0f;
         hdr[9] = (float)s->w; hdr[10] = 1.0f;
     }
+    /* RE-SoT: an attribute with no array reads the value last set with
+     * SET_VERTEX_DATA*, as on the NV2A -- not 0,0,0,1. XDK D3D's
+     * SetVertexData4ub gives a whole batch one diffuse colour that way; the
+     * demo draws its shadow silhouettes with it, and with 0,0,0,1 every
+     * silhouette came out black on black and no shadow was cast. */
+    memcpy(&hdr[16], s_gpu.imm_attr, sizeof s_gpu.imm_attr);
     {
         /* A discard map loses the old contents, so the constants go with
          * every upload that needs them -- and the upload is skipped when
@@ -1419,8 +1429,13 @@ static const HwVsp *hw_vsp_get(uint32_t mask)
                                                &s_hw.layout_prog);
             }
             ID3D10Blob_Release(b);
-        } else if (getenv("RECOMP_HW_VSH_DUMP")) {
-            fprintf(stderr, "%s\n", src);
+        }
+        /* RE-SoT: RECOMP_HW_VSH_DUMP=all prints every translation, not only
+         * the ones that fail to compile. */
+        {
+            const char *dump = getenv("RECOMP_HW_VSH_DUMP");
+            if (dump && (!e->vs || strcmp(dump, "all") == 0))
+                fprintf(stderr, "[VSH %08X]\n%s\n", key, src);
         }
     }
     free(src);
@@ -1510,9 +1525,11 @@ static int hw_draw_program_batch(void)
         for (k = 0; k < NV2A_VSH_INPUTS; k++)
             fetch_attr(&s_gpu.attr[k], last, in[k]);
         nv2a_vsh_run((const float (*)[4])in, &o1);
-        fprintf(stderr, "[FTRACE]     gpu batch n %u: first %g %g %g w %g, last %g %g %g w %g\n",
+        fprintf(stderr, "[FTRACE]     gpu batch n %u: first %g %g %g w %g, last %g %g %g w %g"
+                        " | d0 %g %g %g %g fog %g | vsh %08X\n",
                 n, o0.pos[0], o0.pos[1], o0.pos[2], o0.pos[3],
-                o1.pos[0], o1.pos[1], o1.pos[2], o1.pos[3]);
+                o1.pos[0], o1.pos[1], o1.pos[2], o1.pos[3],
+                o0.d0[0], o0.d0[1], o0.d0[2], o0.d0[3], o0.fog[0], prog->key);
         {
             /* Where the whole batch lands, and its fog and w ranges. */
             float lo[4] = {1e30f, 1e30f, 1e30f, 1e30f}, hi[4] = {-1e30f, -1e30f, -1e30f, -1e30f};

@@ -55,24 +55,32 @@ other joystick or pad Windows sees, with the keyboard and mouse merged on
 top while the game window has the focus (`RECOMP_KEYBOARD=0` turns them
 off):
 
-| Keyboard and mouse | Xbox pad |
-| --- | --- |
-| W A S D (or numpad 8 4 2 6) | Left stick |
-| Enter | Start |
-| Esc, Backspace | Back |
-| Space, left mouse button | A |
-| Q | B |
-| F | X |
-| E | Y |
-| R | Left trigger |
-| Right mouse button | Right trigger |
-| Arrow keys | D-pad |
-| I K J L | Right stick |
-| Z, C | White, Black |
-| Shift, Ctrl | Left / right stick click |
+The keyboard follows the PC version's default layout (its Controls -
+Keyboard screen), each action on the Xbox button that does it:
 
-The left mouse button presses A, which confirms the highlighted menu entry;
-the menus do not follow the pointer. A joystick that is not an XInput device
+| Action | Keys | Xbox pad |
+| --- | --- | --- |
+| Move | W A S D, arrow keys | Left stick (arrows also the d-pad) |
+| Walk toggle | Left Shift, Keypad . | Left stick at walking deflection |
+| Jump | Space, Right Ctrl | A |
+| Special action | Right mouse button | Right trigger |
+| Sword attack | Left mouse button | X |
+| Use dagger | E, middle mouse button | Y |
+| Cancel | C, Keypad 1 | B |
+| Rewind | R, Right Shift | Left trigger |
+| Camera look | F, Delete | White |
+| Alternate view | Q, End | Black |
+| Reset camera | X | Right stick click |
+| Start | Esc, Enter | Start |
+| (back) | Backspace | Back |
+| Camera | Mouse movement | Right stick |
+
+The camera-look, alternate-view and reset-camera buttons are the ones left
+on the pad once the others are placed; that the game uses them for those is
+still to be checked in play. `-Set @{RECOMP_MOUSE_SPEED='60'}` (1-100,
+default 43 as on the PC) scales the mouse, `RECOMP_WALK_DEFLECTION`
+(default 12000 of 32767) is how far walking pushes the stick. The pointer
+is hidden over the picture; the menus do not follow it. A joystick that is not an XInput device
 uses buttons 1-4 as A B X Y, 5/6 white/black, 7/8 the triggers, 9 Back,
 10 Start, its hat as the d-pad. `-UsbPad` brings back the old emulated USB
 pad, for comparison.
