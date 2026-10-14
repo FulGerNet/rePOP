@@ -39,16 +39,16 @@ An Xbox executable is 32-bit x86 code. reSOT lifts every routine of
 against a Windows replacement for the console:
 
 ```text
-default.xbe â”€â”€â–º disassemble â”€â”€â–º find functions â”€â”€â–º lift to C â”€â”€â–º MSVC x64
-                                                       â”‚
-            â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
-            â–¼
+default.xbe ──► disassemble ──► find functions ──► lift to C ──► MSVC x64
+                                                       │
+            ┌──────────────────────────────────────────┘
+            ▼
    lifted game + XDK code          (source/<target>/gen, generated, never committed)
-            â”‚ kernel calls, GPU pushbuffer, USB, overlay registers
-            â–¼
+            │ kernel calls, GPU pushbuffer, USB, overlay registers
+            ▼
    runtime (port/third_party/xboxrecomp/src)
      kernel    files, threads, timers, interrupts
-     nv2a      pushbuffer executor â”€â–º Direct3D 11 (register combiners in HLSL)
+     nv2a      pushbuffer executor ─► Direct3D 11 (register combiners in HLSL)
      video     window, PVIDEO overlay (Bink movies)
      usb/input emulated OHCI controller, keyboard or XInput pad
 ```
@@ -94,24 +94,24 @@ In short, on Windows:
 
 ## Development status
 
-ðŸŸ¢ works in the runs recorded in [VALIDATION.md](docs/VALIDATION.md) Â·
-ðŸŸ¡ partial Â· âšª not started. A green cell means "observed working here", not
+🟢 works in the runs recorded in [VALIDATION.md](docs/VALIDATION.md) ·
+🟡 partial · ⚪ not started. A green cell means "observed working here", not
 "matches the console".
 
 | Component | Xbox demo | Xbox retail |
 | --- | --- | --- |
-| Lift and build | ðŸŸ¢ 11,364 functions, 0 failed | âšª |
-| Boot to first frame | ðŸŸ¢ | âšª |
-| Movies (Bink via overlay) | ðŸŸ¢ picture; ðŸŸ¡ sound produced, not checked by ear | âšª |
-| Menus | ðŸŸ¢ main and pause | âšª |
-| In-level rendering | ðŸŸ¡ no shadows, stencil or cube maps | âšª |
-| Wide picture (Hor+) | ðŸŸ¡ 16:9 by default (`RESOT_ASPECT`); level, HUD, ledge prompts, pause menu looked at in frame dumps; culling at the new sides not checked | âšª |
-| Frame rate | ðŸŸ¢ 55-60 fps (vsync) in the level sections recorded, dips during loads | âšª |
-| Controller / keyboard | ðŸŸ¡ menus work, gameplay not validated by play; the emulated pad fails to enumerate in about one start in four | âšª |
-| Audio | ðŸŸ¡ DirectSound runs on the emulated APU, no DSP effects; not checked by ear | âšª |
-| Save / load, memory unit | âšª | âšª |
-| Xbox Live (retail only) | n/a | âšª not planned |
-| Checked against the console | âšª | âšª |
+| Lift and build | 🟢 11,364 functions, 0 failed | ⚪ |
+| Boot to first frame | 🟢 | ⚪ |
+| Movies (Bink via overlay) | 🟢 picture; 🟡 sound produced, not checked by ear | ⚪ |
+| Menus | 🟢 main and pause | ⚪ |
+| In-level rendering | 🟡 no shadows, stencil or cube maps | ⚪ |
+| Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); level, HUD, ledge prompts, pause menu looked at in frame dumps; culling at the new sides not checked | ⚪ |
+| Frame rate | 🟢 55-60 fps (vsync) in the level sections recorded, dips during loads | ⚪ |
+| Controller / keyboard | 🟡 menus work, gameplay not validated by play; the emulated pad fails to enumerate in about one start in four | ⚪ |
+| Audio | 🟡 DirectSound runs on the emulated APU, no DSP effects; not checked by ear | ⚪ |
+| Save / load, memory unit | ⚪ | ⚪ |
+| Xbox Live (retail only) | n/a | ⚪ not planned |
+| Checked against the console | ⚪ | ⚪ |
 
 ## Repository layout
 
