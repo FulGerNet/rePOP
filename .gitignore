@@ -1,7 +1,5 @@
 # The user's own game files.
 /Assets/
-# C lifted from those files by tools/recomp.ps1.
-/source/*/gen/
 # Analysis databases, Ghidra projects and notes that quote the binaries.
 /research/
 # Outputs.
