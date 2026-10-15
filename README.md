@@ -24,9 +24,16 @@ not a person.*
 | `xbox-demo` | E3 2003 demo, `default.xbe` built 2003-07-18 | Runs: movies, menus, pause menu and the level sections reached by a scripted pad, at 55-60 fps with vsync, with sound and a Hor+ 16:9 picture (the default build); played by a person to the third level and its movie without a freeze (guest heap reclaim on). Sound not checked by a person; not validated against the console |
 | `xbox-retail` | NTSC retail, title `0x5553001D`, `default.xbe` built 2003-10-20 | Not started: files staged, entry point and D3D fence layout located. Planned after the demo |
 
+**Xbox demo recompilation milestone completed (2026-10-15).** The final
+adjustments cover the full-width pause backdrop, the Prince silhouette,
+health and sand HUD proportions, and process exit with Alt+F4. Build and
+runtime observations are recorded in [VALIDATION.md](docs/VALIDATION.md).
+The retail build is the next target; the component table below retains the
+remaining accuracy and validation limits.
+
 The goal is both games fully playable from the user's own disc files, with
 the generated code readable enough to be replaced by hand-written source
-function by function. **Neither target is there yet.**
+function by function. Retail and the remaining accuracy and validation work are still ahead.
 
 reSOT does not contain the game. You supply the files from discs you own;
 the C that is generated from them stays on your machine.
@@ -103,9 +110,9 @@ In short, on Windows:
 | Lift and build | 🟢 11,215 functions (2 of them written by hand: the D3D KickOff), 0 failed | ⚪ |
 | Boot to first frame | 🟢 | ⚪ |
 | Movies (Bink via overlay) | 🟢 picture; 🟡 sound produced, not checked by ear | ⚪ |
-| Menus | 🟢 main and pause | ⚪ |
+| Menus | 🟢 main and pause; Prince silhouette visible in pause (2026-10-15) | ⚪ |
 | In-level rendering | 🟡 character shadows drawn (projected silhouettes); no stencil or cube maps | ⚪ |
-| Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or Alt+Enter/F11; culling widened to the new sides; the menu garden is not modelled past its 4:3 edge | ⚪ |
+| Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or Alt+Enter/F11; culling widened to the new sides; pause backdrop expanded and upper-left HUD double compression removed, including sand crescents (see validation); the menu garden is not modelled past its 4:3 edge | ⚪ |
 | Frame rate | 🟢 60 fps (vsync) in every 5 s window after start-up in the runs of 2026-10-14 (afternoon); about half a core in the menu, one core in the intro scene | ⚪ |
 | Controller / keyboard | 🟡 keyboard in the PC version's layout, mouse buttons and mouse camera, XInput pad or joystick through XAPI replaced on port 0 (no USB enumeration); played to the third level by a person, the camera keys' Xbox buttons not confirmed | ⚪ |
 | Audio | 🟡 DirectSound runs on the emulated APU, no DSP effects; not checked by ear | ⚪ |

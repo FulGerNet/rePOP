@@ -647,6 +647,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         _putenv_s("RECOMP_HW_ASPECT", RESOT_DEFAULT_ASPECT);
 #endif
 
+#ifdef RESOT_PROJECTED_UI
+    if (!getenv("RECOMP_HW_PROJECTED_UI"))
+        _putenv_s("RECOMP_HW_PROJECTED_UI", "1");
+#endif
+
     /* Full screen (a borderless window over the monitor) unless
      * RECOMP_HW_FULLSCREEN=0 asks for a window (run.ps1 -Windowed). The
      * keyboard and mouse play as the pad unless RECOMP_KEYBOARD=0. */

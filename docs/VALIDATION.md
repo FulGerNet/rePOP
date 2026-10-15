@@ -7,6 +7,137 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-15: xbox-demo, Prince in the pause menu and window close
+
+Builds: `python tools/check-hlsl.py` (all six shader entries passed), then
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly` (successful), including a
+second runtime-only build for explicit Alt+F4 handling. `git diff --check`
+passed.
+
+Prince reproduction:
+
+```powershell
+.\tools\run.ps1 -Set @{
+    RECOMP_KEYBOARD='1'
+    RECOMP_PAD_SCRIPT='22000:start:800,28000:a:800,62000:start:800,70000:start:800,78000:start:800,100000:start:800'
+    RECOMP_PAD_LIVE='logs\pause-close-live.txt'
+    RECOMP_FB_DUMP='logs\pause-prince.bmp'
+    RECOMP_FB_WINDOW_DUMP_EVERY='60'
+    RECOMP_FRAME_TRACE='logs\pause-prince-trace.flag'
+}
+```
+
+The pause backdrop draws with depth testing disabled and DEPTH_MASK=1.
+The host incorrectly turned that into an ALWAYS depth test plus writes,
+putting its z=0.95 in front of the Prince's later alpha-only silhouette
+(z approximately 0.97). Depth-disabled draws now leave depth untouched;
+the software rasteriser follows the same rule.
+
+Observed: the Prince silhouette appears on the left of the full-width pause
+backdrop. A person confirmed it visible. The retained trace's 1158-index
+body batch previously passed zero samples; the new trace passes 32,830.
+Capture: `logs/pause-prince-verified.bmp` (readback),
+`logs/pause-prince-verified.png` (rescaled to 16:9 for viewing), trace:
+`logs/pause-prince-verified-trace.txt`.
+
+Window close previously stopped the presentation thread alone, leaving the
+lifted title loop, GPU and audio threads alive. WM_CLOSE now exits the game
+process, matching the runtime's existing firmware-exit approach. Alt+F4 is
+explicitly routed to WM_CLOSE for the borderless window as well.
+
+Checks with `logs/test-window-close.py` (the script selects the framebuffer
+window by the exact test process ID and waits on its process handle):
+
+- `python logs/test-window-close.py 11844 --mode close`: the system-menu
+  close command SC_CLOSE terminated the in-game process with exit code 0
+  in 0.063 s.
+- A synthetic WM_SYSKEYDOWN for F4 with Alt context initially failed to
+  route through DefWindowProc. After adding the explicit route,
+  `python logs/test-window-close.py 10876 --mode alt-f4` terminated the
+  final build's fullscreen process with exit code 0 in 0.047 s. The
+  `run.ps1` wait also returned; no game process remained.
+
+Not checked: a console comparison of the silhouette, its whole idle
+animation, every pause submenu, the software rasteriser at runtime, or
+closing during a save. The keyboard close test injected the Windows system
+key message; no physical Alt+F4 keypress was observed in this test.
+
+## 2026-10-15: xbox-demo, white sand crescents follow-up
+
+The player reported that the health bar and gold sand pips were corrected,
+but the white crescents were still compressed. The preceding entry's visual
+check did not establish that the crescents matched the pips.
+
+`logs/ui-final-trace.txt` contains eight crescent batches (two layers per
+slot), flat w=1, depth test disabled but depth-write mask=1. Their 32x32
+textures occupied 0x80CE3000/0x80CE4000 in this run; these are runtime heap
+addresses, not stable XBE constants. Example bounds:
+x=195.731..215.891, y=59.0912..85.9713. The gold pips use mask=0.
+The HUD classifier incorrectly required mask=0, leaving the crescents out.
+It now accepts either mask with depth testing disabled, within the same
+flat upper-left HUD bounds; all layers receive the same horizontal transform.
+
+Checks: `python tools/check-hlsl.py` (six entries passed),
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly` (successful),
+`git diff --check`. A check of the retained trace confirmed all eight
+previously excluded crescent batches satisfy the revised region/state rule.
+Restarted with `tools/run.ps1 -Set @{RECOMP_KEYBOARD='1';
+RECOMP_FB_DUMP='logs\ui-crescents.bmp'; RECOMP_FB_WINDOW_DUMP_EVERY='60'}`.
+Not yet checked visually in the new run; no new console comparison.
+
+## 2026-10-15: xbox-demo, pause backdrop and HUD proportions
+
+Build: `python tools/check-hlsl.py` (six entries passed), then
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly` (built successfully).
+`git diff --check` passed. Only the demo host enables the new
+`RECOMP_HW_PROJECTED_UI` policy; retail has not been checked.
+
+Baseline/reproduction:
+
+```powershell
+.\tools\run.ps1 -Seconds 158 -SnapshotEvery 5 -Set @{
+    RECOMP_PAD_SCRIPT='22000:start:800,28000:a:800,62000:start:800,70000:start:800,78000:start:800,100000:start:800,140000:start:800'
+    RECOMP_FRAME_TRACE='logs\ui-trace.flag'
+}
+```
+
+The flag was created while the pause menu was open. Its flat backdrop layers
+arrived at x=80.531..560.531, y=0.531..480.531, w=1: already narrowed by the
+Hor+ projection hook. The renderer then narrowed them again, leaving a panel
+covering 56.25% of the display width. The new batch classification recognises
+the full-height projected layers, including their inner grid vertices, and
+expands them to the display width. The corrected pause capture
+`logs/ui-pause-after.bmp` covers the whole picture; text and logo retain their
+previous layout.
+
+Final interactive run (keyboard and mouse enabled):
+
+```powershell
+.\tools\run.ps1 -Set @{
+    RECOMP_KEYBOARD='1'
+    RECOMP_PAD_LIVE='logs\ui-live-final.txt'
+    RECOMP_FB_DUMP='logs\ui-final.bmp'
+    RECOMP_FB_WINDOW_DUMP_EVERY='60'
+    RECOMP_FRAME_TRACE='logs\ui-trace-final.flag'
+}
+```
+
+Observed in the final run: gameplay with the health frame/fill and four sand
+pips visible. The frame trace shows these as flat upper-left batches, with
+no depth test or writes. They now skip the second horizontal compression;
+a shared translation keeps their existing left anchor and their pieces
+aligned. At 16:9 their width increases by 4/3, height unchanged. A cyan-pixel
+mask on the health arc in the 640x480 readbacks measured x=173..280,
+y=51..100 before and x=174..317, y=51..100 after (the readbacks resample the
+wide display to 640x480). Captures: `logs/ui-hud-visible-before.bmp`,
+`logs/ui-hud-after.bmp`; final trace: `logs/ui-final-trace.txt`. PNG copies in
+`logs/` rescale these readbacks to 1280x720 for viewing at the display aspect.
+
+Not checked: correspondence to the console, every HUD animation and pause
+submenu, other widescreen ratios, or the CPU vertex-program fallback. The
+4:3 path is unchanged by the new policy's `widen > 1` guard, but was not run
+again for this change. No new audio validation.
+
 ## 2026-10-15: xbox-demo, character shadows
 
 Build: `recomp.ps1 -Target xbox-demo -BuildOnly` (`check-hlsl.py`: all ok).

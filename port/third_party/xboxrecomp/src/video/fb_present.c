@@ -225,6 +225,12 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
     case WM_SYSKEYDOWN:
+        /* RE-SoT: route Alt+F4 explicitly, including the borderless popup
+         * window, to the same process-close path as the title-bar button. */
+        if (w == VK_F4 && (l & (1 << 29))) {
+            PostMessageA(h, WM_CLOSE, 0, 0);
+            return 0;
+        }
         if (w == VK_RETURN && (l & (1 << 29)) && !(l & (1 << 30))) {
             fb_toggle_fullscreen(h);    /* Alt+Enter, not the key repeat */
             return 0;
@@ -239,6 +245,17 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     }
     switch (m) {
     case WM_CLOSE:
+        /* RE-SoT: this is the application's game window. Stopping only the
+         * presentation thread leaves the lifted Xbox main loop, GPU and audio
+         * threads alive forever: a console title has no Windows quit loop.
+         * End the process as HalReturnToFirmware does; do not tear down guest
+         * memory while those threads are still using it. Alt+F4 and the close
+         * button both reach this path through DefWindowProc. */
+        fprintf(stderr, "  [FBWIN] close requested; exiting game process\n");
+        fflush(stderr);
+        ExitProcess(0);
+        return 0;
+
     case WM_DESTROY:
         InterlockedExchange(&s_fb_running, 0);
         return 0;

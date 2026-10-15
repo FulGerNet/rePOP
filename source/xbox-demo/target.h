@@ -7,6 +7,11 @@
 #ifndef RESOT_TARGET_H
 #define RESOT_TARGET_H
 
+/* UI uses the projection at 0x00650C20 (sub_000EF340 -> 0x000EF140).
+ * Flat pause layers need to undo its Hor+ narrowing on the host; the HUD
+ * must avoid a second narrowing. */
+#define RESOT_PROJECTED_UI 1
+
 #define RESOT_TARGET_ID    "xbox-demo"
 #define RESOT_TARGET_NAME  "Prince of Persia: The Sands of Time (Xbox demo)"
 

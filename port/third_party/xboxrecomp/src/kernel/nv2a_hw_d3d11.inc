@@ -169,6 +169,8 @@ static struct {
     /* The batch being drawn is 2D that spans the whole width (a fade, the
      * pause menu's fog grid): it keeps the full width in a wide picture. */
     int batch_full_width;
+    int batch_projected_screen;          /* RE-SoT: screen quad already narrowed by Hor+ */
+    int batch_hud;                       /* RE-SoT: flat upper-left demo HUD */
 } s_hw;
 
 /* Shared by every vertex shader: the constants and what a vertex leaves as.
@@ -187,8 +189,11 @@ static const char s_hw_hlsl_vs_common[] =
 "VO vs_finish(float4 p, float4 d0, float4 d1, float fog, float4 t0, float4 t1, float4 t2, float4 t3) {\n"
 "  VO o; float w = p.w; float x = p.x, y = p.y;\n"
 "  bool flat = abs(w - 1.0) < 0.0001;\n"
-"  if (ws.x < 1.0 && flat && x > ws.z && x < ws.y - ws.z)\n"
+"  if (ws.x != 1.0 && flat && x > ws.z && x < ws.y - ws.z)\n"
 "    x = (x - 0.5 * ws.y) * ws.x + 0.5 * ws.y;\n"
+/* RE-SoT: HUD width is already corrected by the projection. Only translate
+ * it to retain the existing left anchor; ws.w is zero for other batches. */
+"  if (flat) x += ws.w;\n"
 "  o.pos = float4((x * vp.x - 1.0) * w, (1.0 - y * vp.y) * w,\n"
 "                 saturate(p.z * vp.z) * w, w);\n"
 "  o.d0 = saturate(d0); o.d1 = saturate(d1); o.fog = float4(fog, 0, 0, 0);\n"
@@ -1041,7 +1046,8 @@ static ID3D11BlendState *hw_blend_state(void)
 
 static ID3D11DepthStencilState *hw_depth_state(int have_depth)
 {
-    uint32_t test = have_depth && s_gpu.depth_test, write = have_depth && s_gpu.depth_mask;
+    uint32_t test = have_depth && s_gpu.depth_test;
+    uint32_t write = test && s_gpu.depth_mask;
     uint32_t key = test | (write << 1) | ((s_gpu.depth_func & 7) << 2);
     D3D11_DEPTH_STENCIL_DESC dd;
     int i;
@@ -1050,8 +1056,11 @@ static ID3D11DepthStencilState *hw_depth_state(int have_depth)
         if (s_hw.ds[i].key == key)
             return s_hw.ds[i].st;
     memset(&dd, 0, sizeof dd);
-    /* A depth write with the test off still writes: test "always". */
-    dd.DepthEnable = test || write;
+    /* RE-SoT: disabling depth testing disables depth writes too. Forcing
+     * ALWAYS when only DEPTH_MASK is set lets the pause fog grids (z=0.95)
+     * overwrite the depth buffer and reject the Prince's later alpha-only
+     * silhouette (z about 0.97), even though the game disabled depth testing. */
+    dd.DepthEnable = test;
     dd.DepthWriteMask = write ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
     dd.DepthFunc = test ? (D3D11_COMPARISON_FUNC)((s_gpu.depth_func & 7) + 1)
                         : D3D11_COMPARISON_ALWAYS;
@@ -1172,7 +1181,20 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
          * own projection (src/<target>/target_hooks.c). */
         int main_view = s->w == 640 && s_gpu.clip_w == 640 && s_gpu.clip_h >= 448;
         hdr[8] = main_view && !s_hw.batch_full_width ? 1.0f / s_hw.widen : 1.0f;
+        /* RE-SoT: demo pause layers have already passed through the Hor+
+         * projection. Undo that narrowing, rather than narrowing them again. */
+        if (main_view && s_hw.batch_projected_screen)
+            hdr[8] = s_hw.widen;
         hdr[9] = (float)s->w; hdr[10] = 1.0f;
+        if (main_view && s_hw.batch_hud) {
+            /* RE-SoT: the common HUD origin, observed at x=118.931 in the
+             * demo's 16:9 trace, is x=51.9 before the projection hook.
+             * Keep its old on-screen anchor while undoing the second squeeze.
+             * All HUD batches share this origin so fills and frame stay aligned. */
+            float origin = 320.0f + (51.9f - 320.0f) / s_hw.widen;
+            hdr[8] = 1.0f;
+            hdr[11] = (origin - 320.0f) / s_hw.widen + 320.0f - origin;
+        }
     }
     /* RE-SoT: an attribute with no array reads the value last set with
      * SET_VERTEX_DATA*, as on the NV2A -- not 0,0,0,1. XDK D3D's
@@ -1449,6 +1471,34 @@ static const HwVsp *hw_vsp_get(uint32_t mask)
     return seen;
 }
 
+/* RE-SoT: the demo's sub_000EF140 projection hook narrows a full-screen
+ * flat layer to 640 / widen, centred on x=320 (observed: 80.531..560.531
+ * at 16:9). Its fog grids must cover the display, including inner vertices.
+ * Enabled by the demo host only; retail's UI has not been investigated. */
+static void hw_classify_screen(float left, float right, float top, float bottom)
+{
+    static int projected_ui = -1;
+    if (projected_ui < 0) {
+        const char *e = getenv("RECOMP_HW_PROJECTED_UI");
+        projected_ui = e && *e && *e != '0';
+    }
+    s_hw.batch_full_width = left <= 8.0f && right >= 632.0f;
+    s_hw.batch_projected_screen = projected_ui
+        && s_hw.widen > 1.0f
+        && fabsf((right - left) - 640.0f / s_hw.widen) < 2.0f
+        && fabsf((left + right) * 0.5f - 320.0f) < 2.0f
+        && top <= 1.0f && bottom >= 479.0f;
+    /* RE-SoT: traced health frame/fill: flat, depth test off, upper
+     * left (x=118.931..280.211, y=38.931..115.731 at 16:9). Use the shared
+     * UI region, not texture heap addresses, which change across loads.
+     * Include depth_mask=1: the white sand crescents use it with depth
+     * testing disabled, while the health frame/fill and gold pips use 0. */
+    s_hw.batch_hud = projected_ui && s_hw.widen > 1.0f
+        && !s_gpu.depth_test
+        && left >= 320.0f - 320.0f / s_hw.widen && right < 320.0f
+        && top >= 16.0f && bottom < 144.0f;
+}
+
 /* Draw the current batch with its vertex program running on the GPU: the
  * distinct vertices of the batch go up as raw attributes, the primitive as an
  * index list. Returns 0 when the batch has to take the interpreter path. */
@@ -1487,29 +1537,27 @@ static int hw_draw_program_batch(void)
     if (!prog)
         return 0;
 
-    /* In a widened picture the title's 2D (w == 1) keeps its 4:3 size, unless
-     * the batch spans the whole width: then it is a full-screen effect -- a
-     * fade, the pause menu's tessellated fog -- whose inner vertices must not
-     * be pulled towards the centre. Only the GPU knows where vertices land,
-     * so the interpreter runs over this batch's vertices to find out, which
-     * costs something only for 2D batches on the display surface. */
-    s_hw.batch_full_width = 0;
+    /* RE-SoT: classify the whole flat batch, including the pause layers
+     * already narrowed by the target's projection. The full-height bounds
+     * distinguish these from smaller UI widgets. */
+    s_hw.batch_full_width = s_hw.batch_projected_screen = s_hw.batch_hud = 0;
     if (s_hw.widen > 1.0f && s_gpu.clip_w == 640 && s_gpu.clip_h >= 448) {
         float in[NV2A_VSH_INPUTS][4], lo = 1e9f, hi = -1e9f;
+        float top = 1e9f, bottom = -1e9f;
         Nv2aVshOutput o;
         uint32_t k, a2;
         for (k = 0; k < n; k++) {
             for (a2 = 0; a2 < NV2A_VSH_INPUTS; a2++)
                 fetch_attr(&s_gpu.attr[a2], s_gpu.idx[k], in[a2]);
             if (!nv2a_vsh_run((const float (*)[4])in, &o) || fabsf(o.pos[3] - 1.0f) > 0.0001f)
-                break;                          /* 3D: nothing to decide */
+                break;
             if (o.pos[0] < lo) lo = o.pos[0];
             if (o.pos[0] > hi) hi = o.pos[0];
-            if (lo <= 8.0f && hi >= 632.0f) {
-                s_hw.batch_full_width = 1;
-                break;
-            }
+            if (o.pos[1] < top) top = o.pos[1];
+            if (o.pos[1] > bottom) bottom = o.pos[1];
         }
+        if (k == n)
+            hw_classify_screen(lo, hi, top, bottom);
     }
 
     /* The frame trace (RECOMP_FRAME_TRACE) prints the executor's s_xf, which
@@ -1668,15 +1716,18 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
 
     /* Full-width 2D keeps its width (see hw_draw_program_batch). */
     {
-        float lo = 1e9f, hi = -1e9f;
-        s_hw.batch_full_width = 0;
+        float lo = 1e9f, hi = -1e9f, top = 1e9f, bottom = -1e9f;
+        s_hw.batch_full_width = s_hw.batch_projected_screen = s_hw.batch_hud = 0;
         for (i = 0; i < n; i++) {
             if (fabsf(v[i].pos[3] - 1.0f) > 0.0001f)
                 break;
             if (v[i].pos[0] < lo) lo = v[i].pos[0];
             if (v[i].pos[0] > hi) hi = v[i].pos[0];
+            if (v[i].pos[1] < top) top = v[i].pos[1];
+            if (v[i].pos[1] > bottom) bottom = v[i].pos[1];
         }
-        s_hw.batch_full_width = i == n && lo <= 8.0f && hi >= 632.0f;
+        if (i == n)
+            hw_classify_screen(lo, hi, top, bottom);
     }
     if (s_ftrace == 2 && n <= 4)
         for (i = 0; i < n; i++)

@@ -130,11 +130,33 @@ the variable is not already set; an empty `RESOT_ASPECT` builds 4:3.
   across, now covering the wider field.
 - On the full 640x480 display surface only, a vertex with `w == 1` (the
   title's 2D: HUD, menus, text) is drawn at its 4:3 size around the centre,
-  unless it lies on the surface's edge (fades, post-processing quads). Render
-  targets of other sizes (the glow chain) are left alone.
+  unless it lies on the surface's edge (fades, post-processing quads). The
+  demo enables `RECOMP_HW_PROJECTED_UI=1`: its full-height flat pause layers
+  have already been narrowed by the projection (x=80.531..560.531 at 16:9),
+  so they are expanded back to the full display rather than compressed again.
+  Flat HUD batches in the upper-left region, with depth testing disabled (regardless of the depth-write mask),
+  also skip the second compression; a common translation preserves their
+  existing left anchor and keeps frame and fill aligned. At 16:9 this restores
+  one third of the previous HUD width, with the same height. The bounds come
+  from frame traces, not fixed texture heap addresses. `-Set
+  @{RECOMP_HW_PROJECTED_UI='0'}` restores the previous behaviour for comparison.
+  Retail does not enable this policy. Render targets of other sizes (the glow
+  chain) are left alone.
 - The window keeps the picture's shape; movies stay 4:3 in the middle.
   Alt+Enter or F11 switches between the window and a borderless window over
   the monitor (a maximised window keeps its title bar and so gets bars).
+
+Depth-disabled draws do not write depth, even when `DEPTH_MASK` remains set.
+The previous host state forced ALWAYS plus writes in that case, letting the
+pause fog grids occlude the later alpha-only Prince silhouette. Both the
+Direct3D 11 path and the software rasteriser now gate writes on depth testing
+being enabled. This agrees with [Direct3D's depth-enable semantics](https://learn.microsoft.com/en-us/windows/win32/direct3d11/d3d10-graphics-programming-guide-depth-stencil).
+
+The game window routes Alt+F4 and the close command to process exit. Closing
+only its presentation thread leaves the lifted Xbox main loop running; a
+Windows quit message cannot unwind that loop. The close path ends the process
+without freeing guest memory under its active threads, as the runtime's
+firmware-exit path already does.
 
 Not implemented: stencil, cube maps (face 0 only), depth textures (shadow
 maps), bump-env and dot-product texture modes, points and lines. Nothing is

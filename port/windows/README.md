@@ -43,6 +43,9 @@ cmake -S . -B build -DRESOT_ASPECT=""     # then .\tools\recomp.ps1 -BuildOnly
 .\tools\run.ps1 -Target xbox-retail
 ```
 
+Alt+F4 or the window's close button exits the game process, including its
+rendering and audio threads.
+
 Start the game through the script, not by double-clicking the executable: the
 runtime is configured through environment variables the script sets.
 `.\tools\shortcut.ps1` puts a desktop shortcut, "reSOT - Xbox demo", that

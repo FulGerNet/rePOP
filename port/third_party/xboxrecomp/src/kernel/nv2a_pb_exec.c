@@ -1900,7 +1900,9 @@ static void xf_rows(const XfTri *T, int y0, int step, XfCount *cnt)
                             continue;
                     }
                 }
-                if (zp && s_gpu.depth_mask)
+                /* RE-SoT: DEPTH_MASK alone does not enable depth writes;
+                 * match the hardware path when 2D pause layers disable Z. */
+                if (zp && s_gpu.depth_test && s_gpu.depth_mask)
                     *zp = z;
                 if (s_gpu.zpass_enable)
                     cnt->zpass++;
@@ -2052,7 +2054,8 @@ static void raster_xf_triangle(const Nv2aVshOutput *va, const Nv2aVshOutput *vb,
     s_gpu.xf_seeded = 1;
     if (!surface_begin_batch(T.mem))
         return;
-    if (s_gpu.depth_test || s_gpu.depth_mask)
+    /* RE-SoT: a disabled depth test also disables writes, even with MASK=1. */
+    if (s_gpu.depth_test)
         T.zb = zbuf_current(1);
     if (tex_size_from_format(s_gpu.texs[0].color)) {
         su = (float)s_gpu.texs[0].width;
