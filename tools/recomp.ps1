@@ -2,10 +2,15 @@
 #
 #   .\tools\recomp.ps1 -Target xbox-demo                 # analyse, lift, build
 #   .\tools\recomp.ps1 -Target xbox-retail -SkipAnalysis # relift + build
-#   .\tools\recomp.ps1 -BuildOnly                        # rebuild what is lifted
+#   .\tools\recomp.ps1 -Target xbox-retail -BuildOnly    # rebuild what is lifted
 #   .\tools\recomp.ps1 -Target xbox-demo -Seeds          # rebuild the seed list
 #
-# Pipeline (port/third_party/xboxrecomp): parse Assets/<target>/default.xbe, detect
+# Each target has its own copy of the toolkit and runtime,
+# port/third_party/xboxrecomp-demo or xboxrecomp-retail, and its own build tree,
+# build/<target>:
+# a change made in one target's copy never reaches the other executable.
+#
+# Pipeline (that copy's tools/): parse Assets/<target>/default.xbe, detect
 # functions, recover calling conventions, lift every executable section to C
 # under source/<target>/gen. The generated C is derived from the user's own XBE:
 # it is ignored by Git and must never be committed. Analysis databases go to
@@ -23,7 +28,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$toolkit = "$root\port\third_party\xboxrecomp"
+$toolkit = "$root\port\third_party\xboxrecomp-$($Target -replace '^xbox-', '')"
 $hashes = @{
     'xbox-demo'   = '79C1A47828630AB0D4E5DD19B1FD036FFA58EA2C0FE729B0D3456DAC3E79D4F5'
     'xbox-retail' = '753C58B191279BF4D1A8B28A936DF36AA222ED566487AB1FBDFCD090E91EE379'
@@ -101,9 +106,10 @@ if (-not $BuildOnly) {
         '--exclude-manual', $manual)
 }
 
-$build = if ($AbiCheck) { "$root\build-abi" } else { "$root\build" }
+$build = if ($AbiCheck) { "$root\build-abi\$Target" } else { "$root\build\$Target" }
 $configure = @("$PSScriptRoot\run-build-tool.py", 'cmake', '-S', $root, '-B', $build, '-G', $Generator, '-A', 'x64',
+               "-DRESOT_TARGET=$Target",
                "-DRESOT_ABI_CHECK=$(if ($AbiCheck) { 'ON' } else { 'OFF' })")
 Invoke-Native 'python' $configure
 Invoke-Native 'python' @("$PSScriptRoot\run-build-tool.py", 'cmake', '--build', $build, '--config', 'Release', '--parallel')
-Get-ChildItem "$root\bin\sot-xbox-*.exe" | ForEach-Object { "Built $($_.FullName)" }
+"Built $root\bin\sot-$Target$(if ($AbiCheck) { '-abi' }).exe"

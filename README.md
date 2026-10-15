@@ -22,7 +22,7 @@ not a person.*
 | Target | Source executable | State |
 | --- | --- | --- |
 | `xbox-demo` | E3 2003 demo, `default.xbe` built 2003-07-18 | Runs: movies, menus, pause menu and the level sections reached by a scripted pad, at 55-60 fps with vsync, with sound and a Hor+ 16:9 picture (the default build); played by a person to the third level and its movie without a freeze (guest heap reclaim on). Sound not checked by a person; not validated against the console |
-| `xbox-retail` | NTSC retail, title `0x5553001D`, `default.xbe` built 2003-10-20 | Not started: files staged, entry point and D3D fence layout located. Planned after the demo |
+| `xbox-retail` | NTSC retail, title `0x5553001D`, `default.xbe` built 2003-10-20 | Bring-up: intro movies, title screen, profile creation and save, main menu and the opening in-engine scene of a new game reached by a scripted pad at 60 fps (2026-10-15); the post-movie crash and black screen are fixed. Gameplay not reached; not played by a person |
 
 **Xbox demo recompilation milestone completed (2026-10-15).** The final
 adjustments cover the full-width pause backdrop, the Prince silhouette,
@@ -42,8 +42,9 @@ the C that is generated from them stays on your machine.
 
 An Xbox executable is 32-bit x86 code. reSOT lifts every routine of
 `default.xbe` to C with [xboxrecomp](https://github.com/sp00nznet/xboxrecomp)
-(vendored and patched under `port/third_party/xboxrecomp`) and links the result
-against a Windows replacement for the console:
+(vendored and patched, one complete copy per target under
+`port/third_party/xboxrecomp-demo` and `xboxrecomp-retail`) and links the result
+against that target's Windows replacement for the console:
 
 ```text
 default.xbe ──► disassemble ──► find functions ──► lift to C ──► MSVC x64
@@ -53,7 +54,7 @@ default.xbe ──► disassemble ──► find functions ──► lift to C �
    lifted game + XDK code          (source/<target>/gen, generated, never committed)
             │ kernel calls, GPU pushbuffer, USB, overlay registers
             ▼
-   runtime (port/third_party/xboxrecomp/src)
+   runtime (port/third_party/xboxrecomp-<demo|retail>/src)
      kernel    files, threads, timers, interrupts
      nv2a      pushbuffer executor ─► Direct3D 11 (register combiners in HLSL)
      video     window, PVIDEO overlay (Bink movies)
@@ -107,16 +108,16 @@ In short, on Windows:
 
 | Component | Xbox demo | Xbox retail |
 | --- | --- | --- |
-| Lift and build | 🟢 11,215 functions (2 of them written by hand: the D3D KickOff), 0 failed | ⚪ |
-| Boot to first frame | 🟢 | ⚪ |
-| Movies (Bink via overlay) | 🟢 picture; 🟡 sound produced, not checked by ear | ⚪ |
-| Menus | 🟢 main and pause; Prince silhouette visible in pause (2026-10-15) | ⚪ |
-| In-level rendering | 🟡 character shadows drawn (projected silhouettes); no stencil or cube maps | ⚪ |
-| Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or Alt+Enter/F11; culling widened to the new sides; pause backdrop expanded and upper-left HUD double compression removed, including sand crescents (see validation); the menu garden is not modelled past its 4:3 edge | ⚪ |
+| Lift and build | 🟢 11,215 functions (2 of them written by hand: the D3D KickOff), 0 failed | 🟢 14,418 functions (2 by hand: the D3D KickOff), 0 failed |
+| Boot to first frame | 🟢 | 🟢 |
+| Movies (Bink via overlay) | 🟢 picture; 🟡 sound produced, not checked by ear | 🟡 intro movies play to the end (picture in frame dumps); sound not checked by ear |
+| Menus | 🟢 main and pause; Prince silhouette visible in pause (2026-10-15) | 🟡 title, profile entry/selection, main menu seen in frame dumps; pause not reached; "Saving profile" dialog stays up after the save is written |
+| In-level rendering | 🟡 character shadows drawn (projected silhouettes); no stencil or cube maps | 🟡 opening in-engine scene only |
+| Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or Alt+Enter/F11; culling widened to the new sides; pause backdrop expanded and upper-left HUD double compression removed, including sand crescents (see validation); the menu garden is not modelled past its 4:3 edge | 🟡 16:9 by default; demo's projection and culling hooks ported to the retail addresses, projected-UI policy on (menu backdrop full width); dialog text wider than its box at 16:9; HUD not reached |
 | Frame rate | 🟢 60 fps (vsync) in every 5 s window after start-up in the runs of 2026-10-14 (afternoon); about half a core in the menu, one core in the intro scene | ⚪ |
 | Controller / keyboard | 🟡 keyboard in the PC version's layout, mouse buttons and mouse camera, XInput pad or joystick through XAPI replaced on port 0 (no USB enumeration); played to the third level by a person, the camera keys' Xbox buttons not confirmed | ⚪ |
 | Audio | 🟡 DirectSound runs on the emulated APU, no DSP effects; not checked by ear | ⚪ |
-| Save / load, memory unit | ⚪ | ⚪ |
+| Save / load, memory unit | ⚪ | 🟡 profile files written to `Assets/xbox-retail/UDATA`; loading not checked |
 | Xbox Live (retail only) | n/a | ⚪ not planned |
 | Checked against the console | ⚪ | ⚪ |
 
@@ -132,12 +133,13 @@ reSOT/
     windows/src/         Windows host: entry point, crash report, profiler
     windows/res/         icon and version resource of the executables
     game/                hand-written overrides the lifted code calls
-    third_party/xboxrecomp/   recompiler (tools/) and Xbox runtime (src/), patched; changes marked RE-SoT
+    third_party/xboxrecomp-demo/    recompiler (tools/) and Xbox runtime (src/) for the demo, patched; changes marked RE-SoT
+    third_party/xboxrecomp-retail/  the same, a separate copy for the retail build
   tools/                 recomp.ps1, run.ps1, shortcut.ps1, seed-scan.py, xbe-dis.py, check-hlsl.py
   docs/                  RECOMP.md, VALIDATION.md, LICENSING.md, history/, media/ (logo, screenshots)
   research/              analysis databases and Ghidra notes (ignored)
   Assets/                your game files (ignored)
-  bin/ build/ logs/      outputs (ignored)
+  bin/ build/<target>/ logs/   outputs (ignored)
 ```
 
 ## Contributing
@@ -150,7 +152,7 @@ what you actually observed in `docs/VALIDATION.md`.
 
 ## Licence
 
-reSOT's own files are MIT. `port/third_party/xboxrecomp` is MIT with
+reSOT's own files are MIT. `port/third_party/xboxrecomp-demo` and `-retail` are MIT with
 LGPL-2.1-or-later parts taken from xemu. The game, its assets and the C
 generated from its executables belong to their owners and are not covered.
 See [LICENSE](LICENSE) and [docs/LICENSING.md](docs/LICENSING.md).

@@ -19,10 +19,13 @@ in the [README](../../README.md#supply-your-game-files).
 ```powershell
 .\tools\recomp.ps1 -Target xbox-demo      # analyse, lift and build (about 12 minutes)
 .\tools\recomp.ps1 -Target xbox-retail
-.\tools\recomp.ps1 -BuildOnly             # after editing port/ (host, overrides, runtime)
+.\tools\recomp.ps1 -Target xbox-retail -BuildOnly   # after editing port/ (host, overrides, runtime)
 ```
 
-The lifted C goes to `source/<target>/gen` (ignored by Git). The executables
+Each target has its own runtime copy (`port/third_party/xboxrecomp-demo`,
+`-retail`) and its own build tree, `build/<target>`; `-BuildOnly` rebuilds
+only the target named. The lifted C goes to `source/<target>/gen` (ignored by
+Git). The executables
 land in `bin/` as `sot-xbox-demo.exe` and `sot-xbox-retail.exe`, with the
 reSOT icon (`port/windows/res`).
 
@@ -31,7 +34,7 @@ configure with an empty `RESOT_ASPECT`; `run.ps1 -Aspect` (or
 `RECOMP_HW_ASPECT`) overrides either at run time:
 
 ```powershell
-cmake -S . -B build -DRESOT_ASPECT=""     # then .\tools\recomp.ps1 -BuildOnly
+cmake -S . -B build/xbox-demo -DRESOT_TARGET=xbox-demo -DRESOT_ASPECT=""   # then recomp.ps1 -Target xbox-demo -BuildOnly
 .\tools\run.ps1 -Pad -Aspect 4:3          # a 16:9 build shown 4:3
 ```
 

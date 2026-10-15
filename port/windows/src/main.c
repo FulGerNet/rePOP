@@ -562,6 +562,13 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
         fprintf(stderr, "  Xbox VA of fault: 0x%08X\n",
             (uint32_t)(fault_addr - (uintptr_t)g_xbox_mem_offset));
         print_guest_context((void *)ep->ContextRecord->Rip);
+        {
+            MEMORY_BASIC_INFORMATION mbi;
+            if (VirtualQuery((void *)fault_addr, &mbi, sizeof mbi))
+                fprintf(stderr, "  Fault page: base=%p allocation=%p size=0x%llX state=0x%lX protect=0x%lX type=0x%lX\n",
+                        mbi.BaseAddress, mbi.AllocationBase,
+                        (unsigned long long)mbi.RegionSize, mbi.State, mbi.Protect, mbi.Type);
+        }
 
 #ifdef RESOT_JADE_WORLD_CURRENT
         /* Jade world state: the world being updated,
@@ -574,7 +581,7 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
                             " state=%u\n", w, GM32(RESOT_JADE_ACTIVE_BEGIN), GM32(RESOT_JADE_ACTIVE_END),
                     GM32(RESOT_JADE_PENDING_MODE) & 0xFF,
                     GM32(RESOT_JADE_STATE_PTR) > 0x10000 && GM32(RESOT_JADE_STATE_PTR) < 0x04000000
-                        ? GM32(GM32(RESOT_JADE_STATE_PTR) + 0x3C) : 0xFFFFFFFFu);
+                        ? GM32(GM32(RESOT_JADE_STATE_PTR) + RESOT_JADE_STATE_FIELD) : 0xFFFFFFFFu);
             for (a = GM32(RESOT_JADE_ACTIVE_BEGIN); a && a < GM32(RESOT_JADE_ACTIVE_END)
                      && a < 0x04000000 && a - GM32(RESOT_JADE_ACTIVE_BEGIN) < 0x80; a += 8)
                 fprintf(stderr, "    active %08X flags %08X\n", GM32(a), GM32(a + 4));
@@ -604,12 +611,26 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
 
         /* Print native stack return addresses for debugging */
         {
-            uintptr_t *sp = (uintptr_t *)ep->ContextRecord->Rsp;
-            fprintf(stderr, "  Native stack (first 8 return addrs):\n");
-            for (int i = 0; i < 64 && sp[i]; i++) {
-                if (sp[i] >= 0x140000000ULL && sp[i] < 0x150000000ULL) {
-                    fprintf(stderr, "    [%d] 0x%llX\n", i, (unsigned long long)sp[i]);
-                }
+            CONTEXT ctx = *ep->ContextRecord;
+            STACKFRAME64 frame = {0};
+            frame.AddrPC.Offset = ctx.Rip;
+            frame.AddrStack.Offset = ctx.Rsp;
+            frame.AddrFrame.Offset = ctx.Rbp;
+            frame.AddrPC.Mode = frame.AddrStack.Mode = frame.AddrFrame.Mode = AddrModeFlat;
+            fprintf(stderr, "  Native stack (unwound from fault context):\n");
+            for (int i = 0; i < 16; i++) {
+                char buf[sizeof(SYMBOL_INFO) + 256] = {0};
+                SYMBOL_INFO *sym = (SYMBOL_INFO *)buf;
+                DWORD64 disp = 0;
+                sym->SizeOfStruct = sizeof *sym;
+                sym->MaxNameLen = 255;
+                if (SymFromAddr(GetCurrentProcess(), frame.AddrPC.Offset, &disp, sym))
+                    fprintf(stderr, "    %s+0x%llX\n", sym->Name, (unsigned long long)disp);
+                else
+                    fprintf(stderr, "    0x%llX\n", (unsigned long long)frame.AddrPC.Offset);
+                if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, GetCurrentProcess(), GetCurrentThread(),
+                                 &frame, &ctx, NULL, SymFunctionTableAccess64, SymGetModuleBase64, NULL)
+                        || !frame.AddrPC.Offset) break;
             }
         }
         fflush(stderr);

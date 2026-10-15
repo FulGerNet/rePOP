@@ -7,6 +7,140 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-15: separate runtime per target
+
+`port/third_party/xboxrecomp` became two complete copies,
+`xboxrecomp-demo` (moved with `git mv`) and `xboxrecomp-retail`, identical
+at the split except the retail copy's comment on the projected-UI classifier.
+CMake now builds one target per tree (`-DRESOT_TARGET`), `recomp.ps1` lifts
+with and builds against that target's copy in `build/<target>`, and
+`check-hlsl.py` checks both copies. Checks: `python tools/check-hlsl.py` (12
+entries ok), `python -m unittest discover -s tools/tests -p
+test_seed_scan.py` (3 ok), `recomp.ps1 -Target xbox-demo -BuildOnly` and
+`-Target xbox-retail -BuildOnly` (0 errors; each `xbox_kernel.vcxproj`
+compiles only its own copy's sources).
+Runs: retail 70 s, `-Set @{RECOMP_PAD_SCRIPT='15000:start:400,25000:start:400,35000:a:400,45000:start:400,60000:a:400'}`,
+reached the main menu at 60 fps with the widescreen hook logged
+(`logs/split-retail-70.bmp`). Demo 60 s, the usual start/A script: first scene
+reached, 55-60 fps for four windows, then 21.5 and 6.4 fps with the time in the
+title (131.8 ms per frame) during 539 disc reads, a level-section load
+(`logs/split-demo-60.bmp`). Not compared with a pre-split run at that moment.
+The old single build tree under `build/` (outside `build/<target>`) is no
+longer used.
+
+## 2026-10-15: xbox-retail, first build and initialisation defects
+
+Target SHA-256 verified against `tools/recomp.ps1`:
+`753C58B191279BF4D1A8B28A936DF36AA222ED566487AB1FBDFCD090E91EE379`.
+First pipeline: `python tools/check-hlsl.py` (six entries passed), then
+`tools/recomp.ps1 -Target xbox-retail -Seeds`. It generated 14,418/14,418
+functions (0 failed), 2,628,530 C lines in 58 source files, and built
+`bin/sot-xbox-retail.exe`. The baseline retained 333 unresolved target stubs;
+translation success does not establish that those paths are correct.
+One C4293 warning came from an unexecuted `if (0)` shift in a decoded
+inline-table area; generated sources were not edited.
+
+Initial run: `tools/run.ps1 -Target xbox-retail -Seconds 45 -Watchdog 40
+-Windowed -Aspect 4:3 -UsbPad -DumpFrames -Set
+@{RESOT_THREAD_DUMP_SECS='10'; RESOT_PROFILE_MS='5';
+RECOMP_FB_WINDOW_DUMP_EVERY='60'}`. It read the retail files and initialised
+the kernel/APU but drew nothing. Trace: `logs/retail-baseline-boot.txt`.
+An 18-second repeat with `RECOMP_SYNC_TRACE=1` is retained in
+`logs/retail-sync-boot.txt`.
+
+Cause: retail XAPI GetCurrentThreadId (`0x00331F07`, read at `0x00331F0D`)
+reads FS:[0x28] -> KTHREAD+0x12C. The runtime shared that synthetic block
+between all threads and did not fill PsCreateSystemThreadEx's ThreadId output.
+The loader constructor (`0x00034370`) retained zero as its worker ID; its
+thread check (`0x00034410`) therefore misidentified the main thread, which
+waited on the same semaphore as its worker (`0x000343D0` / `0x00033050`).
+The runtime now gives each TIB a private KTHREAD and publishes the matching
+host ID before starting a worker. The synthetic main KTHREAD/Prcb also move
+out of fixed addresses inside the retail image and into the guest heap.
+
+After `recomp.ps1 -Target xbox-retail -BuildOnly`, a 35-second/watchdog-30
+repeat progressed past that wait, loaded `media/pop4.uix`, the font,
+`shaders.bin`, and configured a 640x480 D3D11 surface; it then exited through
+HalReturnToFirmware(2), before the first frame. Log:
+`logs/retail-thread-id-boot.txt`.
+
+The later exit is a stack-cookie failure in resource loading, not evidence
+that the font or shader files are missing. Static analysis found the same
+class of bad seed as in the demo: game state constant `0x000E0006` (loaded
+at `0x00142DD2`, alongside `0xF00E0006` at `0x00142DE2`) had split
+`0x000DFF90`. Its cold path branches back to epilogue `0x000DFFEE`, but the
+split build replaced that epilogue with an unresolved stub, stranding the
+saved registers. The later cookie check at `0x000D890C` then aborted.
+`seed-scan.py` now rejects a static candidate whose enclosing function
+branches into it and whose reachable code returns to the earlier body.
+Observed targets still use the explicit alias path. Three synthetic
+regressions passed with `python -m unittest discover -s tools/tests
+-p test_seed_scan.py -v`.
+
+`recomp.ps1 -Target xbox-retail -Observed logs/retail-thread-id-boot.txt`
+first recorded three missing XPP targets. The subsequent corrected
+`-Seeds` run preserves those observations, produces 315 seeds, excludes
+`0x000E0006`, and keeps `0x000DFF90..0x000E0028` together. The retail-only
+XAPI and KickOff hooks use independently verified retail addresses.
+Runtime verification of this regenerated build is recorded below when run.
+
+### Crash and black screen after the intro movies; widescreen
+
+Run: `tools/run.ps1 -Target xbox-retail -Seconds 90 -Windowed -Aspect 4:3
+-Set @{RECOMP_PAD_SCRIPT='15000:start:400,25000:start:400,35000:a:400,45000:start:400'}`.
+The movies played, then an access violation: `xbox_ContiguousAlloc` zeroing a
+reused block at `0x808EB020`, page `PAGE_READONLY`. A trace of
+MmSetAddressProtect showed the title (`0x000D63E1`) marking texture pages
+`0x402` (read-only, write-combined); after the movies it frees them and the
+guest-heap reclaim handed them back still read-only. The allocator now
+restores read/write on a reused block (`xbox_memory_layout.c`, `RE-SoT`).
+
+The next run did not crash but stayed black after the movies. Thread dump
+(`RESOT_THREAD_DUMP_SECS=15`): the main thread looped in `sub_000CA420`, which
+polls XAPI GetExitCodeThread (`0x00331D1E`) until the movie thread
+(`0x000CA320`) is not `STILL_ACTIVE`. That routine reads the ETHREAD from
+ObReferenceObjectByHandle (+0x04 SignalState, +0x120 ExitStatus); the
+bridge returned a null object. It now returns a per-handle block filled from
+the host thread for `PsThreadObjectType` (`kernel_bridge.c`, `RE-SoT`).
+
+After `recomp.ps1 -Target xbox-retail -BuildOnly`, a 150 s run with the pad
+script extended to `...,60000:a,75000:a,90000:start,100000:a,110000:a` and
+`-SnapshotEvery 10` showed in frame dumps: the movies, the title screen,
+profile name entry, "Saving profile", then the letterboxed opening in-engine
+scene; renderer 60 fps; APU output not silent. No crash in 150 s. The save
+files (SaveMeta, pop2.sav, options.cfg) appeared in
+`Assets/xbox-retail/UDATA/5553001d` about 8 s after the A press; the dialog
+then stayed up for roughly 40 s more (main thread rendering, no wait in the
+thread dump). What ends it was not established.
+
+Widescreen (the demo's fixes): `sub_000CFC10` builds the projection at
+`0x007682B0`, copies it to `0x00440C00` and calls `sub_000CD970` (return
+`0x000CFE8B`); an entry hook narrows both copies. `sub_002FD810` matches the
+demo's CAM_Engine_ComputePlans; the side-plane cosine/sine (`0x000452F0` /
+`0x00045340`) get the widened angle. `RESOT_PROJECTED_UI` and the Jade
+crash-report globals were added to `target.h`. Full `recomp.ps1 -Target
+xbox-retail`: 14,418/14,420 functions (2 by hand), 0 failed; the three entry
+hooks are in `gen/`. A 160 s run at the default 16:9 logged the widening
+(1.3333x, culling half-angle 0.7854 -> 0.9273) and reached the main menu and
+the opening scene; the rescaled dump of the scene
+(`logs/retail-widescreen-169.png`) shows natural proportions. Not checked: a
+same-frame 4:3/16:9 comparison, the HUD (gameplay not reached). With
+`RECOMP_HW_PROJECTED_UI=0` the menu backdrop no longer covers the full width,
+so the policy stays on. At 16:9 the "Saving profile" text is wider than its
+box with the policy on or off; at 4:3 it fits. Open.
+
+Demo regression after these runtime changes: `tools/run.ps1 -Target xbox-demo
+-Seconds 60 -Windowed -SnapshotEvery 10 -Set
+@{RECOMP_PAD_SCRIPT='22000:start:800,28000:a:800'}`: first scene fly-by at
+60 fps, no crash (`logs/demo-regression-retail-fixes.png`).
+
+Demo regression for the common thread changes:
+`tools/run.ps1 -Target xbox-demo -Seconds 40 -Windowed -SnapshotEvery 10
+-Set @{RECOMP_PAD_SCRIPT='22000:start:800,28000:a:800'}`. The menu and
+first scene's fly-by render; the final renderer report is 60 fps.
+Retained log/capture: `logs/demo-thread-identity-check.txt` / `.bmp`.
+This does not revalidate the whole demo or retail gameplay/audio.
+
 ## 2026-10-15: xbox-demo, Prince in the pause menu and window close
 
 Builds: `python tools/check-hlsl.py` (all six shader entries passed), then
@@ -441,7 +575,8 @@ Not checked: as above.
 
 ## xbox-retail
 
-Not lifted, built or run. Known from static inspection only: entry point
+First build and initialisation runs are recorded in the retail entry above.
+Known target facts: entry point
 `0x00335753`; D3D fence routines `sub_00370080` / `sub_00370140` with device
 pointer global `0x0037B648` and the same `+0x2C` / `+0x30` offsets as the
 demo; overlay disable code at `0x00379027`.

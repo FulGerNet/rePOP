@@ -12,7 +12,9 @@ per target is small and lives in `source/<target>/`:
 
 ## Pipeline
 
-`tools/recomp.ps1 -Target <id>` runs, from `port/third_party/xboxrecomp`:
+`tools/recomp.ps1 -Target <id>` runs, from that target's toolkit copy
+(`port/third_party/xboxrecomp-demo` or `xboxrecomp-retail`), and builds in
+`build/<id>` with `-DRESOT_TARGET=<id>`:
 
 1. `tools.xbe_parser`: sections, kernel imports, entry point.
 2. `tools.disasm --seed-functions`: disassembly and function detection.
@@ -68,7 +70,10 @@ stub, and the stream reader returned whatever was on the stack.
 
 ## Runtime
 
-`port/third_party/xboxrecomp/src`, with the reSOT changes marked `RE-SoT`:
+`port/third_party/xboxrecomp-<demo|retail>/src`, with the reSOT changes marked
+`RE-SoT`. The two copies were identical when they were split (2026-10-15); from
+then on each executable links only its own, and a change in one does not reach
+the other. What follows describes both as of the split:
 
 **Kernel** (`kernel/`): the XBE's kernel imports on Win32; threads, timers,
 DPCs, interrupts. The vertical blank is a QPC-based 60 Hz clock on a 1 ms

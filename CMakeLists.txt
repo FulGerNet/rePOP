@@ -27,8 +27,18 @@ endif()
 # scene at the sides, 2D at its 4:3 size); empty keeps the original 4:3.
 set(RESOT_ASPECT "16:9" CACHE STRING "Default picture shape (w:h), empty for 4:3")
 
-# Recompiler toolkit and Xbox runtime (kernel, NV2A, APU, USB, input, video).
-set(XBOXRECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/port/third_party/xboxrecomp")
+# One target per build tree. Each target has its own copy of the recompiler
+# toolkit and Xbox runtime (kernel, NV2A, APU, USB, input, video) under
+# port/third_party/xboxrecomp-demo and xboxrecomp-retail, so a runtime change
+# made for one executable cannot change the other. tools/recomp.ps1
+# configures build/<target> with -DRESOT_TARGET=<target>.
+set(RESOT_TARGET "" CACHE STRING "Target to build: xbox-demo or xbox-retail")
+set_property(CACHE RESOT_TARGET PROPERTY STRINGS xbox-demo xbox-retail)
+if(NOT RESOT_TARGET MATCHES "^(xbox-demo|xbox-retail)$")
+    message(FATAL_ERROR "Set -DRESOT_TARGET=xbox-demo or -DRESOT_TARGET=xbox-retail (tools/recomp.ps1 does)")
+endif()
+string(REPLACE "xbox-" "" resot_runtime "${RESOT_TARGET}")
+set(XBOXRECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/port/third_party/xboxrecomp-${resot_runtime}")
 # The runtime is built with symbols for its static functions, so the crash
 # report, the thread dump and the profiler in port/windows/src/main.c can name them.
 # Only the runtime: debug information for the lifted sources would be large.
@@ -85,5 +95,4 @@ function(resot_add_target id exe_name)
     endif()
 endfunction()
 
-resot_add_target(xbox-demo   sot-xbox-demo)
-resot_add_target(xbox-retail sot-xbox-retail)
+resot_add_target(${RESOT_TARGET} sot-${RESOT_TARGET})

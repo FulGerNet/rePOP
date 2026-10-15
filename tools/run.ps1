@@ -38,7 +38,8 @@ $settings = @{
 # executable. The DSP itself is not emulated, so the runtime acknowledges the
 # command there; without it DirectSoundCreate never returns.
 #   xbox-demo: sub_002ED590 polls [scratch + 0x810] after posting a command.
-$dspDoorbell = @{ 'xbox-demo' = 'gp+0x810' }
+#   xbox-retail: sub_003E8A27 writes 3 at 0x003E8B8C and polls at 0x003E8B8E.
+$dspDoorbell = @{ 'xbox-demo' = 'gp+0x810'; 'xbox-retail' = 'gp+0x810' }
 if (-not $NoAudio -and $dspDoorbell.ContainsKey($Target)) {
     $settings.RECOMP_AC97_READY = '1'                    # report the codec, emulate the APU
     $settings.RECOMP_APU_DSP_ACK = $dspDoorbell[$Target]
@@ -48,7 +49,9 @@ if (-not $NoAudio -and $dspDoorbell.ContainsKey($Target)) {
 # over the first two levels, and on the second Inter_11 movie the Bink worker
 # (thread routine 0x002AE6C0) got no stack, ran inline on the game thread and
 # never returned -- the freeze at the third level.
-$heapReclaim = @('xbox-demo')
+# Retail also frees startup/thread allocations (retail-thread-id-boot.txt);
+# honour those frees instead of permanently consuming its guest heap.
+$heapReclaim = @('xbox-demo', 'xbox-retail')
 if ($heapReclaim -contains $Target) { $settings.RECOMP_HEAP_RECLAIM = '1' }
 if ($Software) { $settings.Remove('RECOMP_HW') }
 if ($Watchdog) { $settings.RECOMP_WATCHDOG_SECS = "$Watchdog" }

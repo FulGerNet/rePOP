@@ -30,6 +30,7 @@
 #define RESOT_JADE_ACTIVE_END     0x0034AC44
 #define RESOT_JADE_PENDING_MODE   0x0034AC5C
 #define RESOT_JADE_STATE_PTR      0x0064D1DC
+#define RESOT_JADE_STATE_FIELD    0x3C   /* read at 0x000198F8 */
 
 /* Jade camera: field of view in radians at +0x0C, read with fptan by the
  * camera set-up sub_0008A820 (at 0x0008A94C) and the projection sub_000EF340

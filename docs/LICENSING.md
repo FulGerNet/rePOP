@@ -4,7 +4,8 @@
 `source/*/target_hooks.c`, `tools/`, `docs/`, the build files) are under the
 MIT licence in the repository root.
 
-**`port/third_party/xboxrecomp`** is a vendored copy of xboxrecomp 0.13.1
+**`port/third_party/xboxrecomp-demo`** and **`port/third_party/xboxrecomp-retail`**
+are two vendored copies of xboxrecomp 0.13.1, one per target,
 (https://github.com/sp00nznet/xboxrecomp): MIT, with the xemu-derived APU and
 NV2A register files under LGPL-2.1-or-later as listed in its `NOTICE`. Local
 changes are marked `RE-SoT` in the sources and keep the licence of the file

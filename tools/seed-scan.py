@@ -7,15 +7,15 @@ lifted game logs `[ICALL] Failed to resolve VA`. This scans every 4-aligned
 dword of the image for code addresses that
 
   * lie in an executable section,
-  * are not inside a function the detector already found (interior addresses
-    are usually switch-case labels, which must not become functions), and
+  * start after a decoded boundary, and do not branch back into an enclosing
+    function's earlier body (cold paths must keep their shared stack frame), and
   * pass the disassembler's own function-body probe.
 
 Addresses observed at runtime (`--log`) are added through the same gates, and
 for those an interior address is accepted as an alias entry.
 
 Normally run through `tools/recomp.ps1 -Seeds` (or `-Observed run.log`), which
-prepares the unseeded baseline it needs. By hand, from port/third_party/xboxrecomp
+prepares the unseeded baseline it needs. By hand, from port/third_party/xboxrecomp-demo (or -retail)
 so `tools.disasm` resolves:
 
     python <reSOT>/tools/seed-scan.py default.xbe --analysis-json A.json \
@@ -37,6 +37,34 @@ from tools.disasm.loader import DATA_SECTION_NAMES, load_image  # noqa: E402
 LOG_ADDRESS = re.compile(r"Failed to resolve VA (0x[0-9A-Fa-f]+)|"
                          r"PsCreateSystemThreadEx.*?ctx1=(0x[0-9A-Fa-f]+)|"
                          r"start routine (0x[0-9A-Fa-f]+) not found")
+
+
+def shares_enclosing_frame(va, lo, hi, instructions, incoming):
+    """A local branch into a cold path and a path back require one frame.
+
+    A ret before an address is not enough to make it a function: retail's
+    DFF90 jumps past its return to E0006, whose alternate paths return to
+    the shared epilogue DFFEE. Treating the numeric constant E0006 as a seed
+    strands the saved registers. Explicitly observed targets remain aliases.
+    """
+    if not any(lo <= source < va for source in incoming.get(va, ())):
+        return False
+    pending, seen = [va], set()
+    while pending:
+        pc = pending.pop()
+        if pc in seen or not va <= pc < hi:
+            continue
+        seen.add(pc)
+        insn = instructions.get(pc)
+        if insn is None:
+            continue
+        if insn.is_branch and insn.jump_target is not None:
+            if lo <= insn.jump_target < va:
+                return True
+            pending.append(insn.jump_target)
+        if not insn.is_ret and not insn.is_jump:
+            pending.append(insn.end_address)
+    return False
 
 
 def main():
@@ -68,6 +96,10 @@ def main():
     funcs = json.loads(args.functions.read_text())
     bounds = sorted((int(f["start"], 16), int(f["end"], 16)) for f in funcs)
     starts = [b[0] for b in bounds]
+    incoming = {}
+    for insn in engine.instructions.values():
+        if insn.is_branch and insn.jump_target is not None:
+            incoming.setdefault(insn.jump_target, []).append(insn.address)
 
     def interior(va):
         i = bisect.bisect_right(starts, va) - 1
@@ -113,6 +145,10 @@ def main():
         # and the sound engine's stream reader around it was never lifted.
         if not allow_interior and not after_boundary(va):
             return
+        if not allow_interior and interior(va):
+            lo, hi = bounds[bisect.bisect_right(starts, va) - 1]
+            if shares_enclosing_frame(va, lo, hi, engine.instructions, incoming):
+                return
         if engine.probes_as_function_body(va):
             added[va] = note
 

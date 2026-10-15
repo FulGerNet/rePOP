@@ -22,3 +22,6 @@ __pycache__/
 .vs/
 .idea/
 compile_commands.json
+
+# Lifted game code is generated locally for each target.
+/source/*/gen/
