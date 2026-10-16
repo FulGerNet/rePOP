@@ -6,6 +6,9 @@ cmake_minimum_required(VERSION 3.20)
 # One executable per target. A target is built when its lifted sources exist
 # (source/<target>/gen, produced from the user's own XBE by tools/recomp.ps1);
 # they are derived from the game and are never part of the repository.
+# Portable releases include the C runtime; users do not need Visual Studio
+# or a separately installed Visual C++ redistributable to start the game.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 project(reSOT C RC)
 
 set(CMAKE_C_STANDARD 11)
@@ -63,18 +66,38 @@ function(resot_add_target id exe_name)
     if(EXISTS "${dir}/target_hooks.c")
         set(hooks "${dir}/target_hooks.c")
     endif()
+    # The player needs only the compiled EXE and disc assets. Embed the user's
+    # checked guest image as a build output; no game bytes enter the repository.
+    set(guest_xbe "${CMAKE_CURRENT_SOURCE_DIR}/Assets/${id}/default.xbe")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${guest_xbe}" "${dir}/target.h")
+    if(NOT EXISTS "${guest_xbe}")
+        message(FATAL_ERROR "Missing ${guest_xbe}: required to build ${id}")
+    endif()
+    file(READ "${dir}/target.h" target_facts)
+    string(REGEX MATCH "#define[ \t]+RESOT_XBE_SHA256[ \t]+\"([A-Fa-f0-9]+)\"" hash_match "${target_facts}")
+    set(expected_hash "${CMAKE_MATCH_1}")
+    file(SHA256 "${guest_xbe}" actual_hash)
+    string(TOUPPER "${actual_hash}" actual_hash)
+    string(TOUPPER "${expected_hash}" expected_hash)
+    if(NOT expected_hash OR NOT actual_hash STREQUAL expected_hash)
+        message(FATAL_ERROR "Unsupported ${id} default.xbe (SHA-256 mismatch)")
+    endif()
+    set(guest_resource "${CMAKE_CURRENT_BINARY_DIR}/${id}-guest-image.rc")
+    file(GENERATE OUTPUT "${guest_resource}" CONTENT "101 RCDATA \"${guest_xbe}\"\n")
+    set_source_files_properties("${guest_resource}" PROPERTIES OBJECT_DEPENDS "${guest_xbe}")
     add_executable(${exe_name} WIN32
         port/windows/src/main.c
+        port/windows/src/scene.c
+        port/windows/src/options.c
         port/game/recomp_manual.c
+        "${guest_resource}"
         ${hooks}
         ${gen})
     target_link_libraries(${exe_name} PRIVATE
-        xboxrecomp d3d11 dxgi dxguid xinput winmm dbghelp)
+        xboxrecomp d3d11 dxgi dxguid xinput winmm dbghelp bcrypt ole32 shell32 uuid)
     target_include_directories(${exe_name} PRIVATE
         ${dir} ${dir}/gen ${XBOXRECOMP_DIR}/include)
-    file(TO_NATIVE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Assets/${id}" assets)
-    string(REPLACE "\\" "\\\\" assets "${assets}")
-    target_compile_definitions(${exe_name} PRIVATE "RESOT_ASSET_DIR=\"${assets}\"")
     if(RESOT_ASPECT)
         target_compile_definitions(${exe_name} PRIVATE "RESOT_DEFAULT_ASPECT=\"${RESOT_ASPECT}\"")
     endif()

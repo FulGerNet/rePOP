@@ -8,13 +8,19 @@
  * source/<target>/target.h, selected by the build.
  */
 
+#define COBJMACROS
 #include <windows.h>
+#include <shobjidl.h>
 #include <dbghelp.h>
+#include <bcrypt.h>
+#include <io.h>
+#include <share.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
 #include <math.h>
+#include "options.h"
 
 /* xboxrecomp runtime headers */
 #include <xbox/xboxrecomp.h>
@@ -58,25 +64,112 @@ extern ptrdiff_t g_xbox_mem_offset;
 #include "target.h"   /* source/<target>/target.h: this build's XBE facts */
 
 #define YOUR_GAME_ENTRY_POINT   RESOT_ENTRY_POINT
-#define YOUR_GAME_XBE_PATH      resot_xbe_path()
 #define YOUR_GAME_DIR           resot_game_dir()
 
-/* The user-supplied game files live in reSOT/Assets/<target>. The directory
- * is baked in at configure time and can be overridden with the
- * RESOT_ASSET_DIR environment variable. Nothing from it is redistributed. */
-#ifndef RESOT_ASSET_DIR
-#define RESOT_ASSET_DIR "Assets\\" RESOT_TARGET_ID
-#endif
+/* Portable installs use the executable's own folder. The folder picker is
+ * the player fallback; RESOT_ASSET_DIR is an explicit developer override. */
+static char s_game_dir[MAX_PATH];
 static const char *resot_game_dir(void)
 {
+    char *local = s_game_dir;
     const char *env = getenv("RESOT_ASSET_DIR");
-    return (env && *env) ? env : RESOT_ASSET_DIR;
+    if (local[0]) return local;
+    if (env && *env) {
+        if (GetFullPathNameA(env, MAX_PATH, local, NULL) >= MAX_PATH) return env;
+        return local;
+    }
+    if (!local[0]) {
+        DWORD n = GetModuleFileNameA(NULL, local, MAX_PATH);
+        char *slash;
+        if (!n || n >= MAX_PATH) { local[0] = 0; return "."; }
+        slash = strrchr(local, '\\');
+        if (!slash) { local[0] = 0; return "."; }
+        *slash = 0;
+    }
+    return local;
 }
-static const char *resot_xbe_path(void)
+static void resot_redirect_log(FILE *stream, const char *path)
 {
-    static char path[MAX_PATH];
-    snprintf(path, sizeof(path), "%s\\default.xbe", resot_game_dir());
-    return path;
+    FILE *reopened = NULL, *log;
+    if (freopen_s(&reopened, "NUL", "w", stream) != 0) return;
+    log = _fsopen(path, "w", _SH_DENYNO);
+    if (log) {
+        _dup2(_fileno(log), _fileno(stream));
+        fclose(log);
+    }
+}
+
+static const char *resot_missing_game_file(void)
+{
+    static const struct { const char *name; int directory; } required[] = {
+        {"prince.bf", 0}, {"video", 1}, {"sound", 1}, {"shaders.bin", 0}
+    };
+    unsigned i, count = strcmp(RESOT_TARGET_ID, "xbox-retail") == 0 ? 4 : 3;
+    for (i = 0; i < count; ++i) {
+        char path[MAX_PATH];
+        DWORD attributes;
+        snprintf(path, sizeof path, "%s\\%s", resot_game_dir(), required[i].name);
+        attributes = GetFileAttributesA(path);
+        if (attributes == INVALID_FILE_ATTRIBUTES
+            || (required[i].directory != !!(attributes & FILE_ATTRIBUTE_DIRECTORY)))
+            return required[i].name;
+    }
+    return NULL;
+}
+
+static int resot_choose_game_dir(void)
+{
+    IFileOpenDialog *dialog = NULL;
+    IShellItem *folder = NULL;
+    PWSTR selected = NULL;
+    FILEOPENDIALOGOPTIONS options;
+    HRESULT initialized = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    HRESULT result = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
+                                     &IID_IFileOpenDialog, (void **)&dialog);
+    int accepted = 0;
+    if (SUCCEEDED(result)) {
+        result = IFileOpenDialog_GetOptions(dialog, &options);
+        if (SUCCEEDED(result)) result = IFileOpenDialog_SetOptions(dialog,
+            options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_DONTADDTORECENT);
+        IFileOpenDialog_SetTitle(dialog, L"reSOT - Select the Xbox game data folder (prince.bf, video, sound)");
+        IFileOpenDialog_SetOkButtonLabel(dialog, L"Use this game folder");
+        if (SUCCEEDED(result)) result = IFileOpenDialog_Show(dialog, NULL);
+        if (SUCCEEDED(result)) result = IFileOpenDialog_GetResult(dialog, &folder);
+        if (SUCCEEDED(result)) result = IShellItem_GetDisplayName(folder, SIGDN_FILESYSPATH, &selected);
+        if (SUCCEEDED(result)) {
+            BOOL substituted = FALSE;
+            accepted = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, selected, -1,
+                s_game_dir, sizeof s_game_dir, NULL, &substituted) != 0 && !substituted;
+            if (!accepted) {
+                s_game_dir[0] = 0;
+                MessageBoxW(NULL, L"This folder path is too long or contains characters the game cannot open.\n"
+                    L"Move the game files to a shorter folder, then try again.", L"reSOT", MB_ICONERROR);
+                result = E_FAIL;
+            }
+        }
+    }
+    if (selected) CoTaskMemFree(selected);
+    if (folder) IShellItem_Release(folder);
+    if (dialog) IFileOpenDialog_Release(dialog);
+    if (SUCCEEDED(initialized)) CoUninitialize();
+    if (FAILED(result) && result != HRESULT_FROM_WIN32(ERROR_CANCELLED) && !accepted)
+        fprintf(stderr, "[BOOT] folder picker failed: 0x%08lX\n", (unsigned long)result);
+    return accepted;
+}
+
+/* The same merged input report the guest receives, including non-XInput
+ * pads and developer pad scripts. Only the focused game can skip a movie. */
+int resot_movie_skip_down(void)
+{
+    extern void *xbox_FramebufferWindowHandle(void);
+    extern int xbox_FramebufferKeyDown(int vk);
+    extern int usb_gamepad_report(int pad, uint8_t *out, int max);
+    uint8_t report[20];
+    HWND window = (HWND)xbox_FramebufferWindowHandle();
+    if (resot_options_blocks_input()) return 0;
+    if (!window || GetForegroundWindow() != window) return 0;
+    return xbox_FramebufferKeyDown(VK_SPACE)
+        || (usb_gamepad_report(0, report, sizeof report) == 20 && report[4] > 30);
 }
 
 /* ── Every thread's call chain ─────────────────────────────── */
@@ -359,7 +452,7 @@ static DWORD WINAPI resot_log_flush_main(LPVOID unused)
 
 /* ── Forward declarations ──────────────────────────────────── */
 
-static BOOL load_xbe(const char *path, void **out_data, size_t *out_size);
+static BOOL load_embedded_xbe(void **out_data, size_t *out_size);
 
 /* Recompiled entry point (generated by recomp pipeline) */
 extern void xbe_entry_point(void);
@@ -652,6 +745,47 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     (void)lpCmdLine;
     (void)nCmdShow;
 
+    /* Resolve an explicit relative asset path before changing directory.
+     * Caches and diagnostics belong to this application, independent of the
+     * directory from which Explorer/a shortcut/the terminal launched it. */
+    resot_game_dir();
+    {
+        char directory[MAX_PATH];
+        DWORD n = GetModuleFileNameA(NULL, directory, sizeof directory);
+        char *slash = n && n < sizeof directory ? strrchr(directory, '\\') : NULL;
+        if (n && n < sizeof directory && slash) {
+            *slash = 0;
+            SetCurrentDirectoryA(directory);
+            if (!GetStdHandle(STD_ERROR_HANDLE)
+                || GetStdHandle(STD_ERROR_HANDLE) == INVALID_HANDLE_VALUE) {
+                CreateDirectoryA("logs", NULL);
+                resot_redirect_log(stderr, "logs\\" RESOT_TARGET_ID "-err.txt");
+                resot_redirect_log(stdout, "logs\\" RESOT_TARGET_ID "-out.txt");
+            }
+        }
+    }
+
+    /* A packaged executable has the same working defaults as run.ps1.
+     * The developer launcher supplies its own full configuration. */
+    if (!getenv("RESOT_LAUNCHER_CONFIGURED")) {
+        const char *defaults[][2] = {
+            {"RECOMP_PB_EXEC", "1"}, {"RECOMP_FB_WINDOW", "1"},
+            {"RECOMP_VBLANK", "1"}, {"RECOMP_HW", "1"},
+            {"RECOMP_AC97_READY", "1"}, {"RECOMP_APU_DSP_ACK", "gp+0x810"},
+            {"RECOMP_HEAP_RECLAIM", "1"}
+        };
+        unsigned i;
+        for (i = 0; i < sizeof defaults / sizeof defaults[0]; ++i)
+            if (!getenv(defaults[i][0]))
+                _putenv_s(defaults[i][0], defaults[i][1]);
+    }
+    {
+        extern void resot_current_wow(char *, size_t);
+        extern void xbox_FramebufferSetWowProvider(void (*)(char *, size_t));
+        xbox_FramebufferSetWowProvider(resot_current_wow);
+    }
+    resot_options_init();
+
     /* 1 ms scheduler granularity: the runtime's timer thread drives the
      * 60 Hz vertical blank and the title's timed waits with Sleep(1), which
      * is 15.6 ms at Windows' default resolution. */
@@ -699,7 +833,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     }
 
     printf("=== " RESOT_TARGET_NAME " - static recompilation ===\n");
-    printf("Loading XBE...\n");
+    printf("Loading compiled Xbox image...\n");
 
     /* Install VEH handler (first handler in chain) */
     /* Load symbols up front rather than from inside the handler: at fault
@@ -709,14 +843,33 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     SymInitialize(GetCurrentProcess(), NULL, TRUE);
     AddVectoredExceptionHandler(1, veh_handler);
 
-    /* Step 1: Load XBE */
-    if (!load_xbe(YOUR_GAME_XBE_PATH, &xbe_data, &xbe_size)) {
-        MessageBoxA(NULL, "Failed to load default.xbe.\n"
-                    "Place the game files in Assets\\" RESOT_TARGET_ID " or set RESOT_ASSET_DIR.",
-                    "Recomp", MB_ICONERROR);
+    /* The checked guest image is part of this native executable. Only the
+     * large disc assets are external; default.xbe is a build-time input. */
+    if (!load_embedded_xbe(&xbe_data, &xbe_size)) {
+        MessageBoxA(NULL, "The compiled game image is missing or damaged. Rebuild or replace this executable.",
+                    "reSOT - Invalid executable", MB_ICONERROR);
         return 1;
     }
-    printf("XBE loaded: %zu bytes\n", xbe_size);
+    /* Ask for external disc data when it is not beside the EXE. */
+    {
+        int selected = 0;
+        for (;;) {
+            const char *missing = resot_missing_game_file();
+            if (!missing) break;
+            if (selected) {
+                char message[768];
+                snprintf(message, sizeof message,
+                    "This folder does not contain the supported %s game files.\n\n%s\n\n%s%s\n"
+                    "Select the folder containing prince.bf, video and sound.",
+                    RESOT_TARGET_ID, resot_game_dir(), "Missing: ", missing);
+                MessageBoxA(NULL, message, "reSOT - Choose game files", MB_ICONWARNING);
+            }
+            if (!resot_choose_game_dir()) { free(xbe_data); return 0; }
+            selected = 1;
+        }
+    }
+    printf("Embedded Xbox image loaded: %zu bytes\n", xbe_size);
+    fprintf(stderr, "[BOOT] game folder: %s\n", resot_game_dir());
 
     /* Step 2: Initialize Xbox memory layout */
     printf("Initializing Xbox memory layout...\n");
@@ -845,36 +998,40 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
 /* ── XBE Loading ───────────────────────────────────────────── */
 
-static BOOL load_xbe(const char *path, void **out_data, size_t *out_size)
+static BOOL load_embedded_xbe(void **out_data, size_t *out_size)
 {
-    FILE *f = fopen(path, "rb");
-    if (!f) {
-        fprintf(stderr, "Cannot open XBE: %s\n", path);
-        return FALSE;
+    HMODULE module = GetModuleHandleA(NULL);
+    HRSRC resource = FindResourceA(module, MAKEINTRESOURCEA(101), MAKEINTRESOURCEA(10));
+    HGLOBAL loaded = resource ? LoadResource(module, resource) : NULL;
+    DWORD size = resource ? SizeofResource(module, resource) : 0;
+    const void *source = loaded ? LockResource(loaded) : NULL;
+    void *data;
+    if (!source || !size || !(data = malloc(size))) return FALSE;
+    memcpy(data, source, size);
+    /* The lifted code contains fixed addresses for exactly this revision.
+     * Verify the embedded copy before mapping or executing any guest code. */
+    {
+        BCRYPT_ALG_HANDLE algorithm = NULL;
+        BCRYPT_HASH_HANDLE hash = NULL;
+        unsigned char digest[32];
+        char hex[65];
+        int ok = 0, i;
+        if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, NULL, 0) >= 0
+            && BCryptCreateHash(algorithm, &hash, NULL, 0, NULL, 0, 0) >= 0
+            && BCryptHashData(hash, data, (ULONG)size, 0) >= 0
+            && BCryptFinishHash(hash, digest, sizeof digest, 0) >= 0) {
+            for (i = 0; i < 32; ++i) sprintf_s(hex + i * 2, 3, "%02X", digest[i]);
+            ok = strcmp(hex, RESOT_XBE_SHA256) == 0;
+        }
+        if (hash) BCryptDestroyHash(hash);
+        if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+        if (!ok) {
+            fprintf(stderr, "Unsupported default.xbe for " RESOT_TARGET_ID
+                    "; expected SHA-256 " RESOT_XBE_SHA256 "\n");
+            free(data);
+            return FALSE;
+        }
     }
-
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    if (size <= 0) {
-        fclose(f);
-        return FALSE;
-    }
-
-    void *data = malloc((size_t)size);
-    if (!data) {
-        fclose(f);
-        return FALSE;
-    }
-
-    if (fread(data, 1, (size_t)size, f) != (size_t)size) {
-        free(data);
-        fclose(f);
-        return FALSE;
-    }
-
-    fclose(f);
     *out_data = data;
     *out_size = (size_t)size;
     return TRUE;

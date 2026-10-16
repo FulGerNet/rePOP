@@ -3299,17 +3299,14 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
     case 0x0214: s_gpu.zeta_offset = param; break;/* SURFACE_ZETA_OFFSET */
     case 0x1D8C: s_gpu.zstencil_clear = param; break; /* ZSTENCIL_CLEAR_VALUE */
 
-    /* RE-SoT: GPU fences. XDK D3D (5558, sub_0029D1E0 in the PoP demo) ends
-     * every fence with BACK_END_WRITE_SEMAPHORE_RELEASE carrying its "time",
-     * and BlockOnTime spins until the dword the semaphore DMA object points at
-     * reaches it. The offset is relative to that DMA object, whose base lives
-     * in RAMIN and is not modelled here (the demo sets offset 0 with the
-     * object based on its GpuTime page), so the value is not written from
-     * this side: a title registers the pair with xbox_Nv2aMirrorFence and the
-     * poll thread signals it. The methods are recognised so they stop being
-     * reported as unhandled. */
+    /* RE-SoT: retail XBE 0x00370593/0x0037059C sets GPU-time offset zero;
+     * 0x003700BD/0x003700C4 releases it with the issued time. The registered
+     * device resolves its GPU-time page without copying demo addresses. */
     case 0x1D6C:                                  /* SET_SEMAPHORE_OFFSET */
+        xbox_Nv2aFenceOffset(param);
+        break;
     case 0x1D70:                                  /* BACK_END_WRITE_SEMAPHORE_RELEASE */
+        xbox_Nv2aFenceRelease(param);
         break;
     default:
         if (method >= 0x0260 && method < 0x0280) {         /* ALPHA_ICW(i) */

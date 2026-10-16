@@ -26,6 +26,87 @@ extern ptrdiff_t g_xbox_mem_offset;
 #define GMEM32(va) (*(volatile uint32_t *)((uintptr_t)g_xbox_mem_offset + (uint32_t)(va)))
 #define GMEMF(va)  (*(volatile float *)((uintptr_t)g_xbox_mem_offset + (uint32_t)(va)))
 
+/* Retail's frame clock sub_000DB740 captures elapsed microseconds through
+ * its calibrated RDTSC clock (sub_00011A10), then computes a fixed timestep
+ * as 1000000 / (int(refresh) >> 1). The refresh field at 0x007654A4 remains
+ * zero here: 0x000DB780 / 0x000DB7CD read it, 0x000DB7A7 divides by zero,
+ * and _ftol at 0x00348128 produces an invalid integer. The title's 1000-us
+ * minimum at 0x000DB7EA then makes a 60-fps picture advance only 0.06 game
+ * seconds per wall second. A live capture had new/old timestamps 33860721 /
+ * 33843988 us, refresh 0, and timestep 1000 us.
+ *
+ * At only this _ftol call, replace the invalid reciprocal with the measured
+ * interval the game has already captured. Keep _ftol, the original minimum,
+ * 160-ms float cap, speed factors and pause handling. Valid refresh values
+ * retain the original path; no host-clock scale or frame limit is changed.
+ * RESOT_RAW_RETAIL_TIMESTEP=1 restores the unmodified path for comparison. */
+extern RESOT_TLS double g_fp_stack[8];
+extern RESOT_TLS int g_fp_top;
+
+void sub_00348128_enter(void)
+{
+    static int configured, raw;
+    static unsigned reports;
+    float refresh;
+    uint64_t now, previous, elapsed;
+    double input;
+    if (GMEM32(g_esp) != 0x000DB7B8u)
+        return;
+    refresh = GMEMF(0x007654A4u);
+    if (isfinite(refresh) && refresh >= 2.0f)
+        return;
+    if (!configured) {
+        const char *e = getenv("RESOT_RAW_RETAIL_TIMESTEP");
+        raw = e && *e && *e != '0';
+        configured = 1;
+    }
+    now = ((uint64_t)GMEM32(0x007654CCu) << 32) | GMEM32(0x007654C8u);
+    previous = ((uint64_t)GMEM32(0x007654D4u) << 32) | GMEM32(0x007654D0u);
+    elapsed = now >= previous ? now - previous : 0;
+    input = g_fp_stack[(unsigned)g_fp_top & 7u];
+    if (!reports++ || (getenv("RESOT_TIMER_DIAG") && reports % 120 == 0))
+        fprintf(stderr, "[TIME] retail invalid refresh %.3f, fixed-step input %.3f;"
+                        " measured interval %llu us (%s)\n", refresh, input,
+                (unsigned long long)elapsed, raw ? "original conversion" : "calibrated clock");
+    if (!raw)
+        g_fp_stack[(unsigned)g_fp_top & 7u] = (double)elapsed;
+}
+
+/* Retail primary WOW merge at 0x00031A73: source in EAX, aggregate
+ * destination at stack +4. This caller follows the primary key load at
+ * 0x00031A58; dependency merges use other callers. */
+extern void resot_scene_loaded(uint32_t destination, uint32_t source, int primary, uint32_t caller);
+void sub_00030FB0_enter(void)
+{
+    uint32_t caller = GMEM32(g_esp);
+    resot_scene_loaded(GMEM32(g_esp + 4), g_eax, caller == 0x00031A78u, caller);
+}
+
+/* Retail independently verified in its XBE: sub_0001E970 returns 0 at EOF;
+ * caller 0x0002F5FC tests the loop flag 0x00758544 at 0x0002F629 and calls
+ * sub_0001ED10 at 0x0002F63B to close Bink and release the overlay. Report
+ * EOF for Space / pad A even when the movie's original skip permission or
+ * minimum viewing time forbids skipping. The game's normal completion path
+ * retains timeline bookkeeping and subsequent scene/movie transitions. */
+extern int resot_movie_skip_down(void);
+extern void sub_0001E970_gen(void);
+
+void sub_0001E970(void)
+{
+    static int was_down;
+    int down = resot_movie_skip_down();
+    int pressed = down && !was_down;
+    was_down = down;
+    if (pressed && GMEM32(0x0044AA1Cu)) { /* Bink handle, read at 0x0001E970 */
+        GMEM32(0x00758544u) = 0;         /* looping movies must also finish */
+        fprintf(stderr, "[VIDEO] skipped movie (Space / A)\n");
+        g_eax = 0;
+        g_esp += 4;                     /* original status routine: ret */
+        return;
+    }
+    sub_0001E970_gen();
+}
+
 /* ── Widescreen: Hor+, as in the demo (source/xbox-demo/target_hooks.c) ──
  *
  * The renderer stretches the 640-pixel picture over a wider surface

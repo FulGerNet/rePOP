@@ -19,11 +19,46 @@
 #else
 #define RESOT_TLS __thread
 #endif
-extern RESOT_TLS uint32_t g_eax, g_ecx, g_edx, g_esp, g_esi;
+extern RESOT_TLS uint32_t g_eax, g_ebx, g_ecx, g_edx, g_esp, g_esi;
 extern ptrdiff_t g_xbox_mem_offset;
 
 #define GMEM32(va) (*(volatile uint32_t *)((uintptr_t)g_xbox_mem_offset + (uint32_t)(va)))
 #define GMEMF(va)  (*(volatile float *)((uintptr_t)g_xbox_mem_offset + (uint32_t)(va)))
+
+/* The primary WOW merge at 0x0002A15D passes the source world in EBX and
+ * the aggregate destination on the stack. Capture its BF name before the
+ * loader disposes of the source. Other callers merge helper dependencies. */
+extern void resot_scene_loaded(uint32_t destination, uint32_t source, int primary, uint32_t caller);
+void sub_000295F0_enter(void)
+{
+    uint32_t caller = GMEM32(g_esp);
+    resot_scene_loaded(GMEM32(g_esp + 4), g_ebx, caller == 0x0002A162u, caller);
+}
+
+/* All INT movies, including those whose original skip permission is off.
+ * Demo XBE: sub_00018EA0 returns 0 at EOF; the dispatcher at 0x00013EB0
+ * then tests the loop flag (0x0064D02C at 0x00013EC1) and calls the normal
+ * Bink/overlay cleanup sub_00019000. Report EOF rather than jumping out of
+ * the dispatcher, so the game's timeline and pending-movie transitions run.
+ * The host supplies Space / pad A, restricted to the foreground window. */
+extern int resot_movie_skip_down(void);
+extern void sub_00018EA0_gen(void);
+
+void sub_00018EA0(void)
+{
+    static int was_down;
+    int down = resot_movie_skip_down();
+    int pressed = down && !was_down;
+    was_down = down;
+    if (pressed && GMEM32(0x0034AC34u)) { /* Bink handle, read at 0x00018EA0 */
+        GMEM32(0x0064D02Cu) = 0;         /* looping movies must also finish */
+        fprintf(stderr, "[VIDEO] skipped movie (Space / A)\n");
+        g_eax = 0;
+        g_esp += 4;                     /* original status routine: ret */
+        return;
+    }
+    sub_00018EA0_gen();
+}
 
 /* ── Widescreen: more picture at the sides, the same picture vertically ──
  *

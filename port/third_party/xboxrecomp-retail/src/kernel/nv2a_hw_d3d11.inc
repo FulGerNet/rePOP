@@ -48,6 +48,13 @@
 
 extern void *xbox_FramebufferWindowHandle(void);
 extern void  xbox_FramebufferWindowHwMode(int on);
+/* RE-SoT: end-of-submission presentation leaves decoded fences unblocked. */
+extern int   xbox_FramebufferDeferPresent(void);
+extern void  xbox_FramebufferLimitFrame(void);
+extern int   xbox_FramebufferPostProcessing(void); /* RE-SoT: live graphics option. */
+/* RE-SoT: the F5 panel is host UI, drawn after the title's movie overlay. */
+extern int   xbox_FramebufferDebugPanelGet(const uint32_t **px, uint32_t *w,
+                                          uint32_t *h);
 extern int   xbox_FramebufferOverlayGet(const uint32_t **px, uint32_t *w,
                                         uint32_t *h, uint32_t rect[4],
                                         uint32_t *serial);
@@ -157,9 +164,16 @@ static struct {
     uint32_t biggest_area;
     uint32_t frame;
     DWORD last_flip_ms;
+    int pending_present; /* RE-SoT: backbuffer awaiting submission completion. */
     ID3D11Texture2D *ovl_tex;
     ID3D11ShaderResourceView *ovl_srv;
     uint32_t ovl_w, ovl_h, ovl_serial;
+    /* RE-SoT: separate resources so host UI never replaces movie pixels. */
+    ID3D11Texture2D *debug_tex;
+    uint32_t debug_width, debug_height; /* RE-SoT: F5 and F6 have different sizes. */
+    ID3D11ShaderResourceView *debug_srv;
+    ID3D11PixelShader *ps_debug;        /* RE-SoT: preserve host panel alpha. */
+    ID3D11BlendState *debug_blend;       /* RE-SoT: translucent panel only. */
     HwVertex *verts;
     uint32_t cull_enable, cull_face, front_face;
     uint32_t clear_rect_h, clear_rect_v;
@@ -253,6 +267,8 @@ static const char s_hw_hlsl[] =
 "SamplerState sm0 : register(s0); SamplerState sm1 : register(s1);\n"
 "SamplerState sm2 : register(s2); SamplerState sm3 : register(s3);\n"
 "float4 ps_blit(BO i) : SV_Target { return float4(tx0.Sample(sm0, i.uv).rgb, 1.0); }\n"
+/* RE-SoT: movie blits stay opaque; only the host panel uses its texture alpha. */
+"float4 ps_debug(BO i) : SV_Target { return tx0.Sample(sm0, i.uv); }\n"
 "cbuffer PSC : register(b0) {\n"
 "  uint4 cw[8]; float4 fac0[8]; float4 fac1[8];\n"
 "  uint4 ctl; uint4 atest; float4 finc0; float4 finc1; float4 fogc;\n"
@@ -360,7 +376,7 @@ static const char s_hw_hlsl[] =
 "    if (!ok) discard; }\n"
 "  return o; }\n";
 
-/* RE-SoT: compiled shaders are kept on disk (bin\shadercache, or
+/* RE-SoT: compiled shaders are kept on disk (shadercache beside the exe, or
  * RECOMP_HW_SHADER_CACHE=<dir>; "0" turns it off), keyed by a hash of the
  * HLSL, the entry point and the profile. D3DCompile takes tens of
  * milliseconds per vertex program, and every program the title uses for the
@@ -371,11 +387,18 @@ static const char *hw_shader_cache_dir(void)
     if (dir == (const char *)-1) {
         dir = getenv("RECOMP_HW_SHADER_CACHE");
         if (!dir)
-            dir = "bin\\shadercache";
+            /* RE-SoT: WinMain sets the executable directory as CWD. Portable
+             * packages have no nested bin directory: the old bin\\shadercache
+             * silently failed CreateDirectory and recompiled on every run. */
+            dir = "shadercache";
         if (!*dir || strcmp(dir, "0") == 0)
             dir = NULL;
-        else
-            CreateDirectoryA(dir, NULL);
+        else if (!CreateDirectoryA(dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
+            /* RE-SoT: report a cache location that cannot be created once. */
+            fprintf(stderr, "  [HW] shader cache unavailable: %s (error %lu)\n",
+                    dir, (unsigned long)GetLastError());
+            dir = NULL;
+        }
     }
     return dir;
 }
@@ -401,6 +424,8 @@ static ID3DBlob *hw_compile_src(const char *src, size_t len, const char *entry,
     HRESULT hr;
     char path[MAX_PATH];
     FILE *f;
+    /* RE-SoT: expose cold shader stalls separately from frame averages. */
+    LARGE_INTEGER compile_start, compile_end, frequency;
 
     if (hw_shader_cache_dir()) {
         hw_shader_cache_path(path, sizeof path, src, len, entry, target);
@@ -413,15 +438,24 @@ static ID3DBlob *hw_compile_src(const char *src, size_t len, const char *entry,
             if (n > 0 && SUCCEEDED(D3DCreateBlob((SIZE_T)n, &code))
                 && fread(ID3D10Blob_GetBufferPointer(code), 1, (size_t)n, f) == (size_t)n) {
                 fclose(f);
+                /* RE-SoT: one line per new program, never per draw/frame;
+                 * distinguish warm-cache playback from compilation stalls. */
+                fprintf(stderr, "  [HW] shader cache hit: %s\n", entry);
                 return code;
             }
             if (code) { ID3D10Blob_Release(code); code = NULL; }
             fclose(f);
         }
     }
+    QueryPerformanceCounter(&compile_start);
     hr = D3DCompile(src, len, "nv2a_hw", NULL, NULL, entry, target,
                     D3DCOMPILE_OPTIMIZATION_LEVEL1
                     | D3DCOMPILE_IEEE_STRICTNESS, 0, &code, &err);
+    QueryPerformanceCounter(&compile_end);
+    QueryPerformanceFrequency(&frequency);
+    fprintf(stderr, "  [HW] cold shader %s compiled in %.2f ms%s\n", entry,
+            1000.0 * (compile_end.QuadPart - compile_start.QuadPart) / frequency.QuadPart,
+            hw_shader_cache_dir() ? " (disk cache enabled)" : " (disk cache disabled)");
     if (SUCCEEDED(hr) && hw_shader_cache_dir()) {
         f = fopen(path, "wb");
         if (f) {
@@ -612,12 +646,30 @@ static int hw_init(void)
     ID3D11Device_CreatePixelShader(s_hw.dev, ID3D10Blob_GetBufferPointer(b),
                                    ID3D10Blob_GetBufferSize(b), NULL, &s_hw.ps_blit);
     ID3D10Blob_Release(b);
+    /* RE-SoT: compile the alpha-preserving host panel shader independently. */
+    if (!(b = hw_compile("ps_debug", "ps_4_0"))) return 0;
+    ID3D11Device_CreatePixelShader(s_hw.dev, ID3D10Blob_GetBufferPointer(b),
+                                   ID3D10Blob_GetBufferSize(b), NULL, &s_hw.ps_debug);
+    ID3D10Blob_Release(b);
+    {
+        D3D11_BLEND_DESC bd;
+        memset(&bd, 0, sizeof bd);
+        bd.RenderTarget[0].BlendEnable = TRUE;
+        bd.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+        bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        ID3D11Device_CreateBlendState(s_hw.dev, &bd, &s_hw.debug_blend);
+    }
     if (!(b = hw_compile("ps_solid", "ps_4_0"))) return 0;
     ID3D11Device_CreatePixelShader(s_hw.dev, ID3D10Blob_GetBufferPointer(b),
                                    ID3D10Blob_GetBufferSize(b), NULL, &s_hw.ps_solid);
     ID3D10Blob_Release(b);
     if (!s_hw.vs || !s_hw.ps || !s_hw.layout || !s_hw.vs_blit || !s_hw.ps_blit
-        || !s_hw.ps_solid)
+        || !s_hw.ps_solid || !s_hw.ps_debug || !s_hw.debug_blend) /* RE-SoT */
         return 0;
 
     {
@@ -1502,6 +1554,53 @@ static void hw_classify_screen(float left, float right, float top, float bottom)
         && top >= 16.0f && bottom < 144.0f;
 }
 
+/* RE-SoT: retail's independently traced final glow pass (frame 3615) composites
+ * the current 160x120 render target over the full 640x480 image, with alpha
+ * blending and no depth test. Source offsets vary with allocation: identify
+ * the pass by its decoded state and coverage, never by texture addresses.
+ * Smaller UI/bar quads, pause layers and shadow targets do not match. */
+static int hw_postprocess_candidate(uint32_t n)
+{
+    const Texture *t = &s_gpu.texs[0];
+    uint32_t i;
+    if ((xbox_FramebufferPostProcessing() && s_ftrace != 2)
+        || n != 4 || s_gpu.prim != NV_PRIM_QUADS
+        || s_gpu.clip_w != 640 || s_gpu.clip_h != 480
+        || s_gpu.depth_test || !s_gpu.blend_enable
+        || s_gpu.blend_sfactor != 0x302 || s_gpu.blend_dfactor != 0x303
+        || !t->valid || t->width != 160 || t->height != 120 || t->color != 0x12)
+        return 0;
+    for (i = 0; i < HW_MAX_SURFACES; i++)
+        if (s_hw.surf[i].srv && s_hw.surf[i].offset == t->offset
+            && s_hw.surf[i].w == 160 && s_hw.surf[i].h == 120
+            && s_hw.surf[i].drawn_frame == s_hw.frame)
+            return 1;
+    return 0;
+}
+
+static int hw_skip_postprocess(const Nv2aVshOutput *v, uint32_t n)
+{
+    float left = 1e9f, right = -1e9f, top = 1e9f, bottom = -1e9f;
+    uint32_t i;
+    int enabled;
+    if (!hw_postprocess_candidate(n)) return 0;
+    for (i = 0; i < n; i++) {
+        if (fabsf(v[i].pos[3] - 1.0f) > 0.0001f) return 0;
+        if (v[i].pos[0] < left) left = v[i].pos[0];
+        if (v[i].pos[0] > right) right = v[i].pos[0];
+        if (v[i].pos[1] < top) top = v[i].pos[1];
+        if (v[i].pos[1] > bottom) bottom = v[i].pos[1];
+    }
+    if (left < -1 || left > 1 || right < 639 || right > 641
+        || top < -1 || top > 1 || bottom < 479 || bottom > 481)
+        return 0;
+    enabled = xbox_FramebufferPostProcessing();
+    if (s_ftrace == 2)
+        fprintf(stderr, "  [POSTFX] final glow composite %s frame=%u source=%08X 160x120\n",
+                enabled ? "on" : "skipped", s_hw.frame, s_gpu.texs[0].offset);
+    return !enabled;
+}
+
 /* Draw the current batch with its vertex program running on the GPU: the
  * distinct vertices of the batch go up as raw attributes, the primitive as an
  * index list. Returns 0 when the batch has to take the interpreter path. */
@@ -1520,6 +1619,17 @@ static int hw_draw_program_batch(void)
 
     if (s_hw.cpu_vsh || n < 3 || n > NV_MAX_INDICES)
         return 0;
+    /* RE-SoT: verify the four corners of retail's final glow composite. */
+    if (hw_postprocess_candidate(n)) {
+        Nv2aVshOutput post[4];
+        float in[NV2A_VSH_INPUTS][4];
+        for (i = 0; i < 4; i++) {
+            for (a = 0; a < NV2A_VSH_INPUTS; a++)
+                fetch_attr(&s_gpu.attr[a], s_gpu.idx[i], in[a]);
+            if (!nv2a_vsh_run((const float (*)[4])in, &post[i])) break;
+        }
+        if (i == 4 && hw_skip_postprocess(post, 4)) return 1;
+    }
     for (a = 0; a < NV_VERTEX_ATTRS; a++) {
         const VertexAttr *at = &s_gpu.attr[a];
         if (!at->size || !at->stride || (!s_gpu.inline_active && !at->offset))
@@ -1717,6 +1827,8 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
     D3D11_MAPPED_SUBRESOURCE map;
     uint32_t i, count = 0;
 
+    if (hw_skip_postprocess(v, n)) return; /* RE-SoT: CPU-transformed batches too. */
+
     /* Full-width 2D keeps its width (see hw_draw_program_batch). */
     {
         float lo = 1e9f, hi = -1e9f, top = 1e9f, bottom = -1e9f;
@@ -1900,13 +2012,12 @@ static void hw_clear(uint32_t param)
 
 /* Put a surface (and the movie overlay, when one is showing) in the window.
  * Called with the lock held. */
-static void hw_present_locked(int vsync)
+static void hw_compose_locked(void) /* RE-SoT: snapshot before post-flip fences. */
 {
     D3D11_VIEWPORT vp;
     const uint32_t *opx;
     uint32_t ow, oh, orect[4], oserial;
     float px, py, pw, ph;
-    LARGE_INTEGER t0, t1;
     static const float black[4] = {0, 0, 0, 1}, bf[4] = {0, 0, 0, 0};
     ID3D11ShaderResourceView *none[4] = {NULL, NULL, NULL, NULL};
 
@@ -1972,18 +2083,102 @@ static void hw_present_locked(int vsync)
             ID3D11DeviceContext_Draw(s_hw.ctx, 3, 0);
         }
     }
+    /* RE-SoT: top-left host menu remains visible over every movie. Keep the
+     * panel at its native pixel size at 720p, scale up with larger windows. */
+    if (xbox_FramebufferDebugPanelGet(&opx, &ow, &oh)) {
+        /* RE-SoT: safely resize the host overlay texture when switching F5/F6. */
+        if (s_hw.debug_tex && (s_hw.debug_width != ow || s_hw.debug_height != oh)) {
+            if (s_hw.debug_srv) ID3D11ShaderResourceView_Release(s_hw.debug_srv);
+            ID3D11Texture2D_Release(s_hw.debug_tex);
+            s_hw.debug_srv = NULL; s_hw.debug_tex = NULL;
+        }
+        if (!s_hw.debug_tex) {
+            s_hw.debug_width = ow; s_hw.debug_height = oh;
+            D3D11_TEXTURE2D_DESC td;
+            memset(&td, 0, sizeof td);
+            td.Width = ow; td.Height = oh; td.MipLevels = 1; td.ArraySize = 1;
+            td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1;
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            if (SUCCEEDED(ID3D11Device_CreateTexture2D(s_hw.dev, &td, NULL, &s_hw.debug_tex)))
+                ID3D11Device_CreateShaderResourceView(s_hw.dev,
+                    (ID3D11Resource *)s_hw.debug_tex, NULL, &s_hw.debug_srv);
+        }
+        if (s_hw.debug_srv) {
+            float scale = (float)s_hw.bb_h / 720.0f;
+            if (scale < 0.75f) scale = 0.75f;
+            if ((ow + 16) * scale > s_hw.bb_w) scale = (float)s_hw.bb_w / (ow + 16);
+            ID3D11DeviceContext_UpdateSubresource(s_hw.ctx,
+                (ID3D11Resource *)s_hw.debug_tex, 0, NULL, opx, ow * 4, 0);
+            vp.TopLeftX = 8 * scale; vp.TopLeftY = 8 * scale;
+            vp.Width = ow * scale; vp.Height = oh * scale;
+            /* RE-SoT: straight-alpha background lets the scene show through. */
+            ID3D11DeviceContext_PSSetShader(s_hw.ctx, s_hw.ps_debug, NULL, 0);
+            ID3D11DeviceContext_OMSetBlendState(s_hw.ctx, s_hw.debug_blend, bf, 0xFFFFFFFFu);
+            ID3D11DeviceContext_RSSetViewports(s_hw.ctx, 1, &vp);
+            ID3D11DeviceContext_PSSetShaderResources(s_hw.ctx, 0, 1, &s_hw.debug_srv);
+            ID3D11DeviceContext_Draw(s_hw.ctx, 3, 0);
+        }
+    }
     ID3D11DeviceContext_PSSetShaderResources(s_hw.ctx, 0, 4, none);
+}
+
+/* RE-SoT: composition and the host wait are separate. The backbuffer holds
+ * the completed flip even if subsequent methods modify the guest surfaces. */
+static void hw_swap_locked(int vsync)
+{
+    LARGE_INTEGER t0, t1;
+    if (!s_hw.bb_rtv) return;
     /* A flip waits for the host's vertical blank, which is what paces a title
      * that draws as fast as it is allowed to; repaints do not. */
     QueryPerformanceCounter(&t0);
-    IDXGISwapChain_Present(s_hw.swap, vsync && s_hw.vsync ? 1 : 0, 0);
+    /* RE-SoT: F6 changes the sync interval live; idle repaints remain
+     * nonblocking. This does not alter the guest engine's own timing. */
+    {
+        extern int xbox_FramebufferVSync(void);
+        int preference = xbox_FramebufferVSync();
+        int enabled = preference < 0 ? s_hw.vsync : preference;
+        int interval = vsync && enabled ? 1 : 0;
+        /* RE-SoT: report actual guest-flip presentation on preference changes,
+         * excluding movie/idle repaints which intentionally never wait. */
+        static int last_preference = -1;
+        if (vsync && last_preference != enabled) {
+            fprintf(stderr, "  [HW] host VSync %s; game Present sync interval=%d\n",
+                    enabled ? "on" : "off", interval);
+            last_preference = enabled;
+        }
+        IDXGISwapChain_Present(s_hw.swap, interval, 0);
+    }
     QueryPerformanceCounter(&t1);
     s_hw.present_ticks += (uint64_t)(t1.QuadPart - t0.QuadPart);
+}
+
+/* RE-SoT: idle/movie presentation still composes and swaps immediately. */
+static void hw_present_locked(int vsync)
+{
+    hw_compose_locked();
+    hw_swap_locked(vsync);
+}
+
+/* RE-SoT: called after DMA_GET is published for the fully decoded submission.
+ * The completed picture was already captured into the swapchain at the flip. */
+void nv2a_hw_flush_present(void)
+{
+    if (!s_hw.ok || !s_hw.pending_present) return;
+    xbox_FramebufferLimitFrame(); /* never sleep while holding the D3D lock */
+    EnterCriticalSection(&s_hw.lock);
+    if (s_hw.pending_present) {
+        hw_swap_locked(1);
+        s_hw.pending_present = 0;
+        s_hw.last_flip_ms = GetTickCount();
+    }
+    LeaveCriticalSection(&s_hw.lock);
 }
 
 /* NV097_FLIP_STALL: the frame the title just finished becomes the one shown. */
 static void hw_flip(void)
 {
+    /* RE-SoT: preserve the older frame if a submission contains two flips. */
+    if (s_hw.pending_present) nv2a_hw_flush_present();
     EnterCriticalSection(&s_hw.lock);
     hw_glow_dump_check(s_hw.biggest, 1);
     if (s_hw.biggest)
@@ -2022,7 +2217,10 @@ static void hw_flip(void)
                         (unsigned long long)((s_hw_stat_verts - vx0) / frames),
                         (double)(s_hw_stat_vsh_ticks - vs0) * ms,
                         (double)(s_hw_stat_draw_ticks - dr0) * ms,
-                        exec_ms - present_ms, present_ms, frame_ms - exec_ms);
+                        /* RE-SoT: deferred Present is outside the scan timer. */
+                        exec_ms - (xbox_FramebufferDeferPresent() ? 0.0 : present_ms),
+                        present_ms, frame_ms - exec_ms
+                            - (xbox_FramebufferDeferPresent() ? present_ms : 0.0));
             }
             t0 = now; f0 = s_hw.frame;
             d0 = s_hw.draws; tr0 = s_hw.tris; up0 = s_hw.tex_uploads;
@@ -2032,7 +2230,11 @@ static void hw_flip(void)
         }
     }
     s_hw.last_flip_ms = GetTickCount();
-    hw_present_locked(1);
+    if (xbox_FramebufferDeferPresent()) {
+        /* RE-SoT: snapshot before later methods can modify the guest surface. */
+        hw_compose_locked();
+        s_hw.pending_present = s_hw.bb_rtv != NULL;
+    } else hw_present_locked(1);
     LeaveCriticalSection(&s_hw.lock);
 }
 
@@ -2046,7 +2248,9 @@ void nv2a_hw_idle_present(void)
     if (GetTickCount() - s_hw.last_flip_ms < 100)
         return;
     EnterCriticalSection(&s_hw.lock);
-    hw_present_locked(0);
+    /* RE-SoT: a flip may have arrived while idle presentation waited. */
+    if (!s_hw.pending_present && GetTickCount() - s_hw.last_flip_ms >= 100)
+        hw_present_locked(0);
     LeaveCriticalSection(&s_hw.lock);
 }
 
@@ -2111,5 +2315,6 @@ static void hw_clear(uint32_t param) { (void)param; }
 static void hw_flip(void) {}
 static int  hw_method(uint32_t method, uint32_t param) { (void)method; (void)param; return 0; }
 void nv2a_hw_idle_present(void) {}
+void nv2a_hw_flush_present(void) {} /* RE-SoT: no hardware pending frame. */
 int  nv2a_hw_readback(uint32_t *dst, uint32_t w, uint32_t h) { (void)dst; (void)w; (void)h; return 0; }
 #endif

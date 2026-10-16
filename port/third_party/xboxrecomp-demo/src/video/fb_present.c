@@ -25,6 +25,7 @@
 extern ptrdiff_t xbox_GetMemoryOffset(void);
 
 static volatile LONG s_fb_running;
+static volatile LONG s_hw_mode; /* RE-SoT: also selects the flip pacing owner. */
 static uint32_t      s_fb_va, s_fb_pitch, s_fb_width = 640, s_fb_height = 480;
 static uint32_t     *s_rgb;           /* converted 32-bit copy for GDI */
 
@@ -118,6 +119,132 @@ static wchar_t       s_title[48] = L"Xbox Recomp";
 static volatile LONG s_flips;
 static volatile LONG s_frame_draws;
 
+/* RE-SoT: a host-only F5 panel, composed after movies as well as game frames.
+ * The optional provider keeps target addresses out of the shared runtime.
+ * Register it before starting the window; it writes a bounded scene name. */
+static volatile LONG s_debug_panel;
+static void (*s_wow_provider)(char *, size_t);
+
+/* RE-SoT: optional host options own the topmost panel and native input while
+ * open. Callbacks keep the standalone runtime independent of the host UI. */
+static int (*s_options_panel)(const uint32_t **, uint32_t *, uint32_t *);
+static int (*s_options_event)(void *, unsigned, uintptr_t, intptr_t);
+/* RE-SoT: live VSync preference, independent of the original flip/idle
+ * presentation request. -1 retains the runtime's environment default. */
+static volatile LONG s_host_vsync = -1;
+void xbox_SetVSync(int enabled)
+{
+    LONG value = enabled ? 1 : 0;
+    /* RE-SoT: record actual live preference changes, not each present. */
+    if (InterlockedExchange(&s_host_vsync, value) != value)
+        fprintf(stderr, "  [VIDEO] host VSync %s\n", value ? "on" : "off");
+}
+int xbox_FramebufferVSync(void) { return (int)InterlockedCompareExchange(&s_host_vsync, 0, 0); }
+
+void xbox_FramebufferSetOptionsCallbacks(
+    int (*panel)(const uint32_t **, uint32_t *, uint32_t *),
+    int (*event)(void *, unsigned, uintptr_t, intptr_t))
+{
+    s_options_panel = panel;
+    s_options_event = event;
+}
+
+
+void xbox_FramebufferSetWowProvider(void (*provider)(char *, size_t))
+{
+    s_wow_provider = provider;
+}
+
+int xbox_FramebufferDebugPanelGet(const uint32_t **pixels, uint32_t *width,
+                                 uint32_t *height)
+{
+    enum { PANEL_W = 280, PANEL_H = 88 }; /* RE-SoT: compact user overlay. */
+    static HDC dc;
+    static uint32_t *bits;
+    static DWORD refreshed, sampled;
+    static LONG last_flips;
+    static double fps;
+    DWORD now;
+    char scene[256] = "Not loaded", line[300];
+    RECT text;
+
+    /* RE-SoT: F6 is composed over both the game and movies, above F5. */
+    if (s_options_panel && s_options_panel(pixels, width, height)) return 1;
+    if (!InterlockedCompareExchange(&s_debug_panel, 0, 0))
+        return 0;
+    if (!dc) {
+        BITMAPINFO info;
+        HBITMAP bitmap;
+        memset(&info, 0, sizeof info);
+        info.bmiHeader.biSize = sizeof info.bmiHeader;
+        info.bmiHeader.biWidth = PANEL_W;
+        info.bmiHeader.biHeight = -PANEL_H;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        dc = CreateCompatibleDC(NULL);
+        if (!dc) return 0;
+        bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
+        if (!bitmap) { DeleteDC(dc); dc = NULL; return 0; }
+        SelectObject(dc, bitmap);
+        SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(235, 239, 248));
+    }
+    now = GetTickCount();
+    if (!sampled) { sampled = now; last_flips = s_flips; }
+    if (now - sampled >= 500) {
+        LONG flips = s_flips;
+        fps = (double)((DWORD)flips - (DWORD)last_flips) * 1000.0 / (now - sampled);
+        sampled = now; last_flips = flips;
+    }
+    if (!refreshed || now - refreshed >= 200) {
+        size_t i;
+        /* RE-SoT: translucent background, with text kept fully readable. */
+        for (i = 0; i < (size_t)PANEL_W * PANEL_H; i++) bits[i] = 0xA0151C29u;
+        if (s_wow_provider) s_wow_provider(scene, sizeof scene);
+        scene[sizeof scene - 1] = 0;
+        text.left = 12; text.top = 10; text.right = PANEL_W - 12; text.bottom = 30;
+        DrawTextA(dc, "reSOT  |  F5", -1, &text, DT_SINGLELINE | DT_NOPREFIX);
+        snprintf(line, sizeof line, "FPS: %.1f", fps);
+        text.top = 33; text.bottom = 53;
+        DrawTextA(dc, line, -1, &text, DT_SINGLELINE | DT_NOPREFIX);
+        snprintf(line, sizeof line, "Current WOW: %s", scene);
+        text.top = 56; text.bottom = 77;
+        DrawTextA(dc, line, -1, &text, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        GdiFlush();
+        /* RE-SoT: GDI clears text pixels' alpha; restore opaque glyphs after
+         * drawing, retaining 63% opacity on untouched background pixels. */
+        for (i = 0; i < (size_t)PANEL_W * PANEL_H; i++)
+            bits[i] = (bits[i] & 0xFFFFFFu) |
+                      ((bits[i] & 0xFFFFFFu) == 0x151C29u ? 0xA0000000u : 0xFF000000u);
+        refreshed = now;
+    }
+    *pixels = bits; *width = PANEL_W; *height = PANEL_H;
+    return 1;
+}
+
+/* RE-SoT: software presentation uses the same panel pixels as Direct3D. */
+static void fb_debug_panel_compose(void)
+{
+    const uint32_t *pixels;
+    uint32_t w, h, x, y, copy_w;
+    if (!s_rgb || !xbox_FramebufferDebugPanelGet(&pixels, &w, &h)) return;
+    if (s_fb_width <= 8 || s_fb_height <= 8) return;
+    copy_w = w < s_fb_width - 8 ? w : s_fb_width - 8;
+    /* RE-SoT: software path follows the D3D panel's straight-alpha blend. */
+    for (y = 0; y < h && y + 8 < s_fb_height; y++) {
+        uint32_t *dst = s_rgb + (size_t)(y + 8) * s_fb_width + 8;
+        const uint32_t *src = pixels + (size_t)y * w;
+        for (x = 0; x < copy_w; x++) {
+            uint32_t a = src[x] >> 24, inv = 255 - a;
+            uint32_t r = (((src[x] >> 16) & 255) * a + ((dst[x] >> 16) & 255) * inv + 127) / 255;
+            uint32_t g = (((src[x] >> 8) & 255) * a + ((dst[x] >> 8) & 255) * inv + 127) / 255;
+            uint32_t b = ((src[x] & 255) * a + (dst[x] & 255) * inv + 127) / 255;
+            dst[x] = 0xFF000000u | (r << 16) | (g << 8) | b;
+        }
+    }
+}
+
 void xbox_FramebufferWindowSetTitle(const uint16_t *name, int max_chars)
 {
     int i;
@@ -127,8 +254,86 @@ void xbox_FramebufferWindowSetTitle(const uint16_t *name, int max_chars)
         s_title[i] = 0;
 }
 
+/* RE-SoT: user-selected upper frame limit. This wait runs at a completed
+ * guest flip, before acquiring the D3D lock, and never changes guest clocks.
+ * Late frames reset the deadline instead of trying to catch up with bursts. */
+static volatile LONG s_frame_limit, s_frame_limit_generation;
+
+/* RE-SoT: graphics options are safe before renderer initialization and can
+ * change live. Only the verified post-processing composite consults this. */
+static volatile LONG s_post_processing = 1;
+
+void xbox_SetPostProcessing(int enabled)
+{
+    LONG value = enabled != 0;
+    if (InterlockedExchange(&s_post_processing, value) != value)
+        fprintf(stderr, "  [VIDEO] post-processing %s\n", value ? "on" : "off");
+}
+
+int xbox_FramebufferPostProcessing(void)
+{
+    return InterlockedCompareExchange(&s_post_processing, 0, 0) != 0;
+}
+
+void xbox_SetFrameLimit(int fps)
+{
+    if (fps != 30 && fps != 60 && fps != 120) fps = 0;
+    InterlockedExchange(&s_frame_limit, fps);
+    InterlockedIncrement(&s_frame_limit_generation);
+    /* RE-SoT: record the actual selected limit for performance comparisons. */
+    fprintf(stderr, "  [FBWIN] FPS limit: %d (0 = None)\n", fps);
+}
+
+static void fb_limit_frame(void)
+{
+    static LONGLONG last, frequency;
+    static LONG generation = -1;
+    LARGE_INTEGER now, qf;
+    LONG fps = InterlockedCompareExchange(&s_frame_limit, 0, 0);
+    LONG current_generation = InterlockedCompareExchange(&s_frame_limit_generation, 0, 0);
+    LONGLONG deadline, remaining;
+    if (!frequency) { QueryPerformanceFrequency(&qf); frequency = qf.QuadPart; }
+    QueryPerformanceCounter(&now);
+    if (!fps || generation != current_generation) {
+        generation = current_generation; last = now.QuadPart;
+        return;
+    }
+    deadline = last + frequency / fps;
+    while ((remaining = deadline - now.QuadPart) > 0) {
+        if (InterlockedCompareExchange(&s_frame_limit_generation, 0, 0) != generation) {
+            last = now.QuadPart;
+            return;
+        }
+        /* RE-SoT: leave a millisecond for scheduler jitter, yielding to
+         * other ready threads during the short final remainder. */
+        if (remaining > frequency / 500)
+            Sleep((DWORD)(remaining * 1000 / frequency - 1));
+        else
+            SwitchToThread();
+        QueryPerformanceCounter(&now);
+    }
+    last = now.QuadPart;
+}
+
+/* RE-SoT: the hardware executor waits
+ * only after post-flip fences and DMA_GET have been published. */
+int xbox_FramebufferDeferPresent(void)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *value = getenv("RESOT_DEFER_PRESENT");
+        enabled = !value || atoi(value) != 0;
+        fprintf(stderr, "  [FBWIN] deferred host Present: %s\n", enabled ? "on" : "off");
+    }
+    return enabled;
+}
+
+void xbox_FramebufferLimitFrame(void) { fb_limit_frame(); } /* RE-SoT */
+
 void xbox_FramebufferWindowFrameStats(uint32_t draws)
 {
+    /* RE-SoT: deferred hardware presentation owns its wait after decoding. */
+    if (!s_hw_mode || !xbox_FramebufferDeferPresent()) fb_limit_frame();
     InterlockedIncrement(&s_flips);
     InterlockedExchange(&s_frame_draws, (LONG)draws);
 }
@@ -223,6 +428,15 @@ static void fb_toggle_fullscreen(HWND h)
 
 static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
+    /* RE-SoT: a host options panel consumes its mouse/keyboard messages and
+     * releases game-held input, so opening/rebinding cannot drive the Prince. */
+    if (s_options_event && s_options_event(h, m, (uintptr_t)w, (intptr_t)l)) {
+        memset((void *)s_key_down, 0, sizeof s_key_down);
+        InterlockedExchange(&s_mouse_dx, 0);
+        InterlockedExchange(&s_mouse_dy, 0);
+        return m == WM_SETCURSOR ? TRUE : 0;
+    }
+
     switch (m) {
     case WM_SYSKEYDOWN:
         /* RE-SoT: route Alt+F4 explicitly, including the borderless popup
@@ -262,6 +476,12 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
+        /* RE-SoT: autorepeat must not repeatedly open and close the panel. */
+        if (w == VK_F5) {
+            if (!(l & (1L << 30)))
+                InterlockedExchange(&s_debug_panel, !s_debug_panel);
+            return 0;
+        }
         w = fb_vk_sided(w, l);
         if ((unsigned)w < 256)
             s_key_down[w] = 1;
@@ -301,11 +521,16 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
      * VK_RBUTTON, VK_MBUTTON), so the input layer maps them the same way.
      * The capture keeps the release from being lost if it happens outside
      * the window. */
+    /* RE-SoT: CS_DBLCLKS is needed by F6; outside it, a double-click is
+     * still a normal second game button press rather than a lost attack. */
     case WM_LBUTTONDOWN:
+    case WM_LBUTTONDBLCLK:
     case WM_RBUTTONDOWN:
+    case WM_RBUTTONDBLCLK:
     case WM_MBUTTONDOWN:
-        s_key_down[m == WM_LBUTTONDOWN ? VK_LBUTTON
-                   : m == WM_RBUTTONDOWN ? VK_RBUTTON : VK_MBUTTON] = 1;
+    case WM_MBUTTONDBLCLK:
+        s_key_down[(m == WM_LBUTTONDOWN || m == WM_LBUTTONDBLCLK) ? VK_LBUTTON
+                   : (m == WM_RBUTTONDOWN || m == WM_RBUTTONDBLCLK) ? VK_RBUTTON : VK_MBUTTON] = 1;
         SetCapture(h);
         return 0;
     case WM_LBUTTONUP:
@@ -317,6 +542,13 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             && !s_key_down[VK_MBUTTON])
             ReleaseCapture();
         return 0;
+
+    /* RE-SoT: side buttons can be rebound by the host options. */
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONDBLCLK:
+    case WM_XBUTTONUP:
+        s_key_down[HIWORD(w) == XBUTTON1 ? VK_XBUTTON1 : VK_XBUTTON2] = m != WM_XBUTTONUP;
+        return TRUE;
 
     /* RE-SoT: mouse movement for the camera, only while the window has the
      * focus (raw input is registered without RIDEV_INPUTSINK). */
@@ -411,7 +643,6 @@ static volatile LONG s_ovl_serial;     /* bumped whenever s_ovl_rgb changes */
  * window's pixels when it is up. This thread then only pumps messages, keeps
  * the overlay latched and asks the rasteriser to repaint. */
 static HWND          s_hwnd;
-static volatile LONG s_hw_mode;
 extern void nv2a_hw_idle_present(void);
 extern int  nv2a_hw_readback(uint32_t *dst, uint32_t w, uint32_t h);
 
@@ -639,6 +870,7 @@ static DWORD WINAPI fb_thread(LPVOID unused)
     {
         WNDCLASSA wc;
         memset(&wc, 0, sizeof(wc));
+        wc.style = CS_DBLCLKS; /* RE-SoT: double-click rebinding in F6. */
         wc.lpfnWndProc   = fb_wndproc;
         wc.hInstance     = GetModuleHandleA(NULL);
         wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
@@ -704,6 +936,7 @@ static DWORD WINAPI fb_thread(LPVOID unused)
                 memcpy(s_rgb, s_present[idx],
                        (size_t)s_fb_width * s_fb_height * 4);
             overlay_compose();
+            fb_debug_panel_compose();
             StretchDIBits(hdc, 0, 0, (int)s_fb_width, (int)s_fb_height,
                           0, 0, (int)s_fb_width, (int)s_fb_height,
                           s_rgb, &bi, DIB_RGB_COLORS, SRCCOPY);
@@ -714,6 +947,7 @@ static DWORD WINAPI fb_thread(LPVOID unused)
                 (const uint8_t *)((uintptr_t)s_fb_va + xbox_GetMemoryOffset());
             fb_convert(src, s_fb_pitch / s_fb_width);
             overlay_compose();
+            fb_debug_panel_compose();
             StretchDIBits(hdc, 0, 0, (int)s_fb_width, (int)s_fb_height,
                           0, 0, (int)s_fb_width, (int)s_fb_height,
                           s_rgb, &bi, DIB_RGB_COLORS, SRCCOPY);

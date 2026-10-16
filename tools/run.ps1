@@ -29,6 +29,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $exe = "$root\bin\sot-$Target$(if ($Abi) { '-abi' }).exe"
 if (-not (Test-Path $exe)) { throw "$exe not found; run tools\recomp.ps1 -Target $Target" }
 $settings = @{
+    RESOT_LAUNCHER_CONFIGURED = '1' # executable defaults do not override -Software/-NoAudio
+    RESOT_ASSET_DIR = "$root\Assets\$Target"
     RECOMP_PB_EXEC   = '1'   # execute the NV2A pushbuffer the lifted D3D builds
     RECOMP_FB_WINDOW = '1'   # the game window
     RECOMP_VBLANK    = '1'   # deliver the vertical-blank interrupt D3D's swap waits for

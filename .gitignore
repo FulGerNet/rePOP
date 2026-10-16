@@ -7,7 +7,10 @@
 /build*/
 /logs/
 /xbox_kernel.log
+resot-options.ini
 /port/third_party/xboxrecomp/tools/*/output/
+/port/third_party/xboxrecomp-demo/tools/*/output/
+/port/third_party/xboxrecomp-retail/tools/*/output/
 # Executables and debug databases, wherever they land.
 *.exe
 *.pdb
@@ -22,6 +25,3 @@ __pycache__/
 .vs/
 .idea/
 compile_commands.json
-
-# Lifted game code is generated locally for each target.
-/source/*/gen/

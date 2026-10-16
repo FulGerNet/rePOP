@@ -37623,13 +37623,13 @@ loc_00018E8C: ;
 }
 
 /**
- * sub_00018EA0
+ * sub_00018EA0_gen
  * Original: 0x00018EA0 - 0x00018F56 (182 bytes, 56 insns)
  * Category: game_render
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00018EA0(void)
+void sub_00018EA0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;

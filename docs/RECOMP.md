@@ -12,6 +12,40 @@ per target is small and lives in `source/<target>/`:
 
 ## Pipeline
 
+### Portable host and player overlay
+
+The host applies the ordinary run-script defaults when
+`RESOT_LAUNCHER_CONFIGURED` is absent. `run.ps1` sets that marker so its
+software/no-audio diagnostic modes keep their existing meaning. File lookup
+uses `RESOT_ASSET_DIR`, then the executable's directory, then the source-tree
+`../Assets/<target>` fallback. SHA-256 is checked before mapping the XBE.
+Release builds link the static MSVC runtime. `tools/package.ps1` assembles a
+local player folder under ignored `bin/portable/<target>`.
+
+F5 toggles a host panel composed after the game and movie on the D3D
+backbuffer (or in the software framebuffer). FPS counts guest flips, not
+idle window repaints. `scene.c` resolves the streaming worker's selected root
+WOW (`0x00350D4C + 0x400C` demo, `0x00451B4C + 0x400C` retail) through that
+target's loaded-resource registry, matching its mode-dependent key lookup.
+The selected geometry WOW is distinct from the persistent `_Start_Demo`
+wrapper and synthetic `SuperWorld`. It reads the BF world's 60-byte name:
+demo loaded pointer `0x0034A75C`, name `+0x184`, copied at `0x000656EB`
+and terminated at `0x000656F0`; retail pointer `0x0044A514`, name `+0x1D8`,
+copied at `0x0006EC55` and terminated at `0x0006EC57`. Reads are bounded and
+guarded against an unloading world. Primary-world merge entry hooks
+(`0x000295F0` demo, `0x00030FB0` retail) also retain its BF name before the
+source structure is released, for menus. With no loaded world it displays `None`.
+
+Space / A movie skipping wraps the Bink status routine: demo `0x00018EA0`
+(handle `0x0034AC34`, loop flag `0x0064D02C`), retail `0x0001E970`
+(handle `0x0044AA1C`, loop flag `0x00758544`). A fresh press clears looping
+and returns EOF, letting the original dispatcher run its cleanup
+(`0x00019000` demo, `0x0001ED10` retail) and pending transitions. This also
+handles videos with the game's skip permission disabled. The host reads
+Space and the same merged controller report used by the guest, while focused.
+These wrappers require a relift when first added; subsequent host/runtime
+changes need only `-BuildOnly`.
+
 `tools/recomp.ps1 -Target <id>` runs, from that target's toolkit copy
 (`port/third_party/xboxrecomp-demo` or `xboxrecomp-retail`), and builds in
 `build/<id>` with `-DRESOT_TARGET=<id>`:
@@ -299,6 +333,15 @@ layouts.
 | Entry | `0x00335753` |
 | Libraries beyond the demo's | `XONLINE`, `XNET` (Xbox Live), `XON_RD` |
 | Data | `prince.bf` (365 MB), `shaders.bin`, `VIDEO/` (84 files), `SOUND/`, `MEDIA/`; `POP1/` and `POP2/` hold the two bonus games' own XBEs |
+| Calibrated frame clock | `sub_000119D0` reads RDTSC; calibration `sub_00096570` calls `0x00351011` for the Xbox frequency `733333333`, and `0x00351000` for its counter |
+| Retail timestep | `sub_000DB740` captures new/previous elapsed microseconds at `0x007654C8/CC` and `0x007654D0/D4`; its fixed-step calculation reads float `0x007654A4` and calls `_ftol` at `0x00348128`, returning to `0x000DB7B8` |
 
-Everything else is still to be established; see `docs/VALIDATION.md` for how
-far the retail build currently gets.
+The retail refresh field above was zero in a live run, causing a reciprocal
+of zero and an invalid integer conversion. The game's 1000-us minimum then
+limited simulation to 0.06 seconds per wall second at 60 flips. The target
+hook replaces only that invalid fixed-step conversion's input with the
+elapsed interval already measured by the calibrated game clock. Valid
+refresh values, other `_ftol` callers, pause/speed factors and the game's
+limits retain their original paths. `RESOT_RAW_RETAIL_TIMESTEP=1` restores
+the original calculation for comparison; `RESOT_TIMER_DIAG=1` logs samples.
+See `docs/VALIDATION.md` for actual runtime observations and limits.

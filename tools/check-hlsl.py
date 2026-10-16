@@ -5,7 +5,7 @@ nv2a_hw_d3d11.inc (one copy per target) and are compiled by the game at start-up
 full rebuild and a run to discover. This extracts the strings and feeds each
 entry point to d3dcompiler_47.dll, the way the backend assembles them:
 
-    common + main                     vs_main, vs_blit, ps_main, ps_blit, ps_solid
+    common + main                     vs_main, vs_blit, ps_main, ps_blit, ps_debug, ps_solid
     common + program head + body + tail    vs_prog (a translated vertex program)
 
 The body of vs_prog comes from the title's own vertex programs at run time;
@@ -27,7 +27,7 @@ def source(target):
     return ROOT / ("port/third_party/xboxrecomp-%s/src/kernel/nv2a_hw_d3d11.inc"
                    % target.replace("xbox-", ""))
 ENTRIES = [("vs_main", "vs_4_0"), ("vs_blit", "vs_4_0"), ("ps_main", "ps_4_0"),
-           ("ps_blit", "ps_4_0"), ("ps_solid", "ps_4_0")]
+           ("ps_blit", "ps_4_0"), ("ps_debug", "ps_4_0"), ("ps_solid", "ps_4_0")]
 SAMPLE_BODY = """  v[0] = i.a0; v[3] = i.a1; v[9] = i.a2;
  { float4 a = (v[0].xyzw), b = (c[96].xyzw), cc = (-c[vsh_cidx(a0 + 4)].wzyx);
    float4 m = dot(a, b).xxxx; float4 l = vsh_rcc(cc.x).xxxx;

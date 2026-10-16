@@ -25,6 +25,12 @@
 static BOOL  g_controller_connected[XBOX_MAX_CONTROLLERS] = { FALSE };
 static DWORD g_last_packet[XBOX_MAX_CONTROLLERS] = { 0 };
 
+/* RE-SoT: the host options remap a raw controller state and add its configured
+ * keyboard layout. With no callback, the vendored default layout is retained. */
+static void (*s_host_filter)(void *, unsigned);
+void xbox_InputSetHostFilter(void (*filter)(void *, unsigned)) { s_host_filter = filter; }
+
+
 /* ---- keyboard, when there is no pad --------------------------------------
  *
  * A title that waits on PRESS START is unreachable on a machine with no
@@ -353,6 +359,33 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
         return ERROR_DEVICE_NOT_CONNECTED;
 
     result = xinput_get_any(dwPort, &xi_state);
+    /* RE-SoT: pass controller-only input to the host remapper. This also
+     * returns neutral state while F6 is open or the game lacks foreground. */
+    if (s_host_filter) {
+        int host_connected = result == ERROR_SUCCESS;
+        memset(pState, 0, sizeof *pState);
+        if (result == ERROR_SUCCESS) {
+            pState->Gamepad.wButtons = xi_state.Gamepad.wButtons & 0x00FF;
+            pState->Gamepad.bAnalogButtons[0] = (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_A) ? 255 : 0;
+            pState->Gamepad.bAnalogButtons[1] = (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_B) ? 255 : 0;
+            pState->Gamepad.bAnalogButtons[2] = (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_X) ? 255 : 0;
+            pState->Gamepad.bAnalogButtons[3] = (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_Y) ? 255 : 0;
+            pState->Gamepad.bAnalogButtons[4] = (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) ? 255 : 0;
+            pState->Gamepad.bAnalogButtons[5] = (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) ? 255 : 0;
+            pState->Gamepad.bAnalogButtons[6] = xi_state.Gamepad.bLeftTrigger;
+            pState->Gamepad.bAnalogButtons[7] = xi_state.Gamepad.bRightTrigger;
+            pState->Gamepad.sThumbLX = xi_state.Gamepad.sThumbLX;
+            pState->Gamepad.sThumbLY = xi_state.Gamepad.sThumbLY;
+            pState->Gamepad.sThumbRX = xi_state.Gamepad.sThumbRX;
+            pState->Gamepad.sThumbRY = xi_state.Gamepad.sThumbRY;
+        } else if (dwPort == 0) {
+            host_connected = joystick_state(pState) || keyboard_enabled();
+        }
+        pState->dwPacketNumber = ++g_last_packet[dwPort];
+        s_host_filter(pState, dwPort);
+        g_controller_connected[dwPort] = host_connected; /* RE-SoT: retain no-keyboard disconnect semantics. */
+        return g_controller_connected[dwPort] ? ERROR_SUCCESS : ERROR_DEVICE_NOT_CONNECTED;
+    }
     if (result != ERROR_SUCCESS && dwPort == 0) {
         /* RE-SoT: no XInput pad: a WinMM joystick, with the keyboard and
          * mouse merged on top. */

@@ -14,6 +14,7 @@
 
 #define RESOT_TARGET_ID    "xbox-demo"
 #define RESOT_TARGET_NAME  "Prince of Persia: The Sands of Time (Xbox demo)"
+#define RESOT_XBE_SHA256   "79C1A47828630AB0D4E5DD19B1FD036FFA58EA2C0FE729B0D3456DAC3E79D4F5"
 
 /* XBE entry point (XAPI start-up; the game's own main is 0x000110B0). */
 #define RESOT_ENTRY_POINT  0x0027FC6C
@@ -31,6 +32,31 @@
 #define RESOT_JADE_PENDING_MODE   0x0034AC5C
 #define RESOT_JADE_STATE_PTR      0x0064D1DC
 #define RESOT_JADE_STATE_FIELD    0x3C   /* read at 0x000198F8 */
+
+/* Main loaded world (read at 0x00012782, set after load at 0x0002A4D6),
+ * distinct from the world temporarily being updated above. The WOW loader
+ * copies 60 name bytes to world+0x184 at 0x000656D0..0x000656F0 and terminates
+ * byte 59. This is the name in the BF payload, including scene transitions. */
+#define RESOT_JADE_WORLD_LOADED   0x0034A75C
+#define RESOT_JADE_WORLD_NAME     0x184
+#define RESOT_JADE_WORLD_NAME_SIZE 60
+
+/* The initial load merges WOWs into a synthetic SuperWorld. Resolve its
+ * primary WOW key as the game does at 0x0002A0D0..0x0002A126: key -> BF index
+ * -> loaded address. Each sorted table is {pair pointer, pair count, ...},
+ * with 8-byte key/value pairs (0x000C0F60). The registry has 256 tables. */
+#define RESOT_JADE_PRIMARY_WOW_KEY 0x00350D48
+#define RESOT_JADE_KEY_INDEX_TABLE 0x00493610
+#define RESOT_JADE_LOADED_TABLES   0x0047EC30
+
+/* Streaming root WOW accessor 0x0002DEF0 reads worker+0x400C; the worker
+ * pointer is published at 0x0002A6C1. 0x0002D372 writes the root WOW key
+ * returned by the WOL parser, separately from its helper dependencies. */
+#define RESOT_JADE_STREAM_WORKER  0x00350D4C
+#define RESOT_JADE_STREAM_WOW_KEY 0x400C
+#define RESOT_JADE_DYNAMIC_LOAD   0x0064D33C /* read at 0x0002DF05 */
+#define RESOT_JADE_LOAD_MODE      0x0064D3A4 /* read at 0x0002DF12 */
+#define RESOT_JADE_COMPILED_BF    0x003400FC /* read at 0x0002DF1B */
 
 /* Jade camera: field of view in radians at +0x0C, read with fptan by the
  * camera set-up sub_0008A820 (at 0x0008A94C) and the projection sub_000EF340

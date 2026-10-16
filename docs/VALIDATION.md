@@ -7,6 +7,167 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-16: embedded guest image and additional player options
+
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly` passed with the original
+image embedded as RCDATA 101 (`logs/embedded-demo-build.txt`). PE resource
+inspection found 3,526,656 bytes, byte-for-byte equal to the supported demo
+input and with its expected SHA-256. CMake verifies the source hash, tracks
+the input for reconfiguration and writes the resource description only in
+the ignored build tree. The host verifies the embedded copy before mapping;
+external data-folder validation no longer checks for `default.xbe`.
+Packaging no longer copies that build input.
+
+The options integration harness passed again after adding persistent
+Post-processing On/Off, resolution-row relocation and the absolute
+EXE-neighbour INI assertion. Turning VSync Off with an active FPS cap now
+also explains that the selected cap remains in effect. Runtime graphics,
+no-external-XBE and audio observations are recorded below as they complete.
+
+Final builds: `tools/recomp.ps1 -Target xbox-demo -BuildOnly` and the retail
+equivalent both passed, recorded in `logs/final-player-demo-build.txt` and
+`logs/final-player-retail-build.txt`. Both EXEs were copied to their existing
+`bin/portable/<target>/` folders. The user requested no further tests.
+
+The no-XBE demo folder booted its embedded image and Direct3D 11. A separate
+35-second run with FPS None/VSync Off logged actual Present interval 0 and
+134.8-225.8 FPS. The 55-second demo Off run logged `[POSTFX] final glow
+composite skipped`; the retail classifier was independently established
+from its own frame-3615 trace, but its subsequent Off execution was not run.
+Retail's ordered/deferred paths therefore remain opt-in; demo defaults are on.
+
+The audio VP previously ignored its computed pitch ratio. Both copies now
+retain per-voice fractional resampling state, distinguish underrun from EOF
+and mix the final output block before completing the voice.
+`python tools/test-audio-resampler.py` passed 2/2 native tests, covering
+12/24/44.1/48/96 kHz mono/stereo tones, duration, pitch changes, streaming,
+loops and resets (`logs/audio-resampler-tests.txt`). Listening to actual
+game sound and complete guest streaming integration remain unvalidated.
+
+## 2026-10-15: external game folder and demo shader cache
+
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly` passed after the folder-picker
+host change (`logs/folder-picker-demo-build.txt`). The resulting executable
+was copied to `bin/chooser-test/selector-demo.exe`, without disc files beside
+it. The native folder picker appeared. Selecting `bin/portable/xbox-demo`
+started the game; the log recorded that external folder and the supported
+XBE loaded. Menu and gameplay were observed. The user authorised closing
+this test process before performance measurements. Invalid-folder retry,
+Cancel and a retail external-folder launch were not exercised in this test.
+
+The demo cache's default relative path was `bin/shadercache`, which could
+fail when launched from an EXE directory without a nested `bin`. The default
+is now `shadercache` beside the EXE, with a diagnostic if creation fails.
+Controlled 25-second cold/warm runs (`logs/demo-perf-cold.txt` and
+`logs/demo-perf-warm.txt`) recorded 18 compiled programs taking 1,297.05 ms
+in total, then 18 disk hits and no compilation for those programs. The
+largest startup compilation was 591.75 ms; a later vertex program cost
+150.89 ms. This establishes cache reuse, not elimination of every gameplay
+stutter or correctness of simulation timing.
+
+Ordered GPU fences revealed a presentation interaction: some warm runs with
+native VSync fell to 30 FPS; without native VSync a short menu run exceeded
+100 FPS. The corrected path snapshots the completed picture at the flip,
+executes the submission's remaining fences, publishes DMA_GET and only then
+waits for the host swap. A second flip flushes any pending snapshot first.
+This prevents the timer from acknowledging a fence before vertex arrays have
+been consumed, without blocking later fences behind a native VSync wait.
+
+The demo's controlled 90-second run (`logs/demo-ordered-defer-gameplay-clean90.txt`)
+held 59.8-60.2 FPS in the menu and 60.0/59.2/58.4 after loading. Loading
+intervals were slower (20.2/6.6 FPS) and were dominated by title work.
+After separating snapshot from swap, a 50-second repeat
+(`logs/demo-ordered-snapshot-unpaused50.txt`) reached the unpaused soldiers'
+scene at 59.8/59.6 FPS, then 58.2 with frame tracing. Ordered completion and
+deferred swap are now the demo defaults. Diagnostic opt-outs are
+`RESOT_ORDERED_FENCES=0` and `RESOT_DEFER_PRESENT=0`; the earlier legacy
+comparison flag remains `RESOT_LEGACY_FENCES=1`.
+
+The unpaused before/after post-processing captures are kept locally under
+`logs/demo-defer-unpaused-` and `logs/demo-snapshot-unpaused-`. Traced render
+target samples selected the current frame's surfaces. The rare distorted
+vertex report and complete disappearance of the user's doubled contours
+have not been confirmed by a person; a short stable run is not proof that
+every visual defect is resolved. Host TSC/system clock agreement likewise
+does not by itself validate the title's simulation integrator.
+
+The F6 host panel's integration harness (`build/options-tests/build-test.cmd`)
+passed native window events, panel rasterisation, keyboard/mouse and synthetic
+joystick remapping, default aliases, input neutralisation, saved reload,
+resolution requests and FPS API calls. The updated harness also passed live
+VSync preference/reload, independent section collapse and stale resolution
+dropdown handling. Rendered top/bottom/collapsed panels were visually checked.
+These are host tests; a physical joystick remapping session is still untested.
+During a live demo run, changing VSync Off and FPS None produced over 100 FPS;
+this confirms the host options affect presentation, not that unbounded
+rendering reproduces the console's timing or that the game is fully correct.
+
+## 2026-10-15: portable launch, video skip and F5 panel
+
+Built both targets with `tools/recomp.ps1 -Target <target> -SkipAnalysis`,
+then `-BuildOnly` after the final host/overlay edits. MSBuild initially failed
+inside the sandbox with FileTracker `E_ACCESSDENIED`; the authorised builds
+outside it passed. `python tools/check-hlsl.py` passed seven shader entries
+per target, including the panel's alpha-preserving `ps_debug`.
+`tools/package.ps1 -Target xbox-demo` and `-Target xbox-retail` prepared
+separate folders under `bin/portable/` containing the local user's disc data.
+PE imports were inspected: neither executable imports MSVCR/MSVCP/VCRUNTIME
+DLLs; the C runtime is statically linked.
+
+The demo portable EXE was launched directly through Windows, with no run
+script. Its own log reports the supported XBE loaded and Xbox memory mapped;
+the menu and gameplay were observed in window captures. The user confirmed
+Space/A video skipping and F5 opening/closing the overlay, then played
+through level sections. A fresh portable launch after the final update
+showed the narrower 280-pixel panel and `_Start_Demo` in the menu, then
+`01_GP01_E3_Long` in the opening in-engine sequence. The updated run logs
+also contain two `[VIDEO] skipped movie (Space / A)` events.
+
+The original primary-world lookup returned `None` during gameplay because
+the primary remains the synthetic `SuperWorld`. Live read-only inspection
+instead resolved the streaming worker's root key `0x0F005353` to world
+`0x02CAA090`, BF name `06_GP24_E3_Long`. The reader now uses that path;
+primary-merge capture retains menu names before source worlds are freed.
+
+Retail's final build/package passed; this change's retail runtime behavior
+has not yet been tested. Software overlay blending, missing-data/revision
+dialogs, every individual movie and a complete sequence of scene transitions
+were not exhaustively tested. FPS counts guest flips, not simulation speed.
+
+## 2026-10-15: retail speed, user observation
+
+The user reports that retail runs much slower even while its counter reports
+60 fps. This is a play observation, not a new scripted benchmark; no command
+or timing capture accompanied it. The counter counts flips and does not
+validate simulation speed. Retail remains an embryonic bring-up; the earlier
+60 fps records must not be read as evidence of correct gameplay speed.
+
+The subsequent controlled baseline (`research/retail-perf-baseline-err.txt`)
+rendered the menu at 60 FPS, but the live simulation clock advanced only
+0.060 seconds per wall second. A later sample confirmed refresh field
+`0x007654A4` was zero, the calibrated timestamps differed by 16,733 us, and
+the resulting timestep was nevertheless the game's 1,000-us minimum.
+The target-only `_ftol` entry hook now substitutes that measured interval
+only for the invalid fixed-step calculation, preserving the original
+conversion and downstream limits.
+
+`research/test-retail-timestep.py` compiled the actual lifted timer and
+conversion with the hook: ten conversion edge cases, unrelated callers,
+valid refresh, raw comparison mode, register/FPU/stack preservation, invalid
+refresh, backwards clock, minimum step and float cap passed. Sixty frames
+covering 1,000,000 calibrated microseconds produced 1,000,000 simulation
+microseconds with the fix, versus 60,000 on the original path.
+
+The fixed 95-second normal-window run reached `0102_Remparts` gameplay
+(`research/retail-clock-fixed-95-err.txt`, screenshot
+`research/retail-clock-fixed-gameplay.bmp`). With FPS None and VSync Off,
+`python research/check-retail-clock.py 2252 10` measured 9.003 wall seconds
+and 9.008213 simulation seconds during gameplay, at about 120-140 FPS.
+This run predates the final retail ordered-fence port. A later combined
+60-FPS/VSync-On run measured 7.003 wall versus 7.015102 simulation seconds
+in the menu; its short observation does not validate the complete level.
+No full retail playthrough or console comparison has been made.
+
 ## 2026-10-15: separate runtime per target
 
 `port/third_party/xboxrecomp` became two complete copies,

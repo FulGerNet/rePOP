@@ -24,6 +24,8 @@
 #include "apu_shim.h"
 #include "apu_regs.h"
 #include "apu_debug.h"
+/* RE-SoT: source-rate conversion state belongs to each hardware voice. */
+#include "apu_resample.h"
 
 /* ============================================================
  * DSP CPU registers
@@ -380,6 +382,8 @@ typedef struct MCPXAPUVoiceFilter {
     uint16_t voice;
     float resample_buf[NUM_SAMPLES_PER_FRAME * 2];
     SRC_STATE *resampler;
+    /* RE-SoT: preserve interpolation phase/input between VP blocks. */
+    ResotAudioResampler sample_rate;
     sv_filter svf[2];
     HrtfFilter hrtf;
 } MCPXAPUVoiceFilter;

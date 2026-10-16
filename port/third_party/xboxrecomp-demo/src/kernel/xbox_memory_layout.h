@@ -191,6 +191,10 @@ uint32_t xbox_ContiguousAllocatedBytes(void);
 
 int xbox_Nv2aMirrorFence(uint32_t device_ptr_va,
                          uint32_t put_off, uint32_t get_ptr_off);
+/* RE-SoT: the executor signals GPU-time in command order, after consuming
+ * preceding guest buffers; timer-based mirroring is only a fallback. */
+void xbox_Nv2aFenceOffset(uint32_t offset);
+void xbox_Nv2aFenceRelease(uint32_t value);
 
 /* RE-SoT: physical addresses for the audio processor.
  *

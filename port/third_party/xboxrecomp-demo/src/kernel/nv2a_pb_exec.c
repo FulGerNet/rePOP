@@ -3303,14 +3303,21 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
      * every fence with BACK_END_WRITE_SEMAPHORE_RELEASE carrying its "time",
      * and BlockOnTime spins until the dword the semaphore DMA object points at
      * reaches it. The offset is relative to that DMA object, whose base lives
-     * in RAMIN and is not modelled here (the demo sets offset 0 with the
-     * object based on its GpuTime page), so the value is not written from
-     * this side: a title registers the pair with xbox_Nv2aMirrorFence and the
-     * poll thread signals it. The methods are recognised so they stop being
-     * reported as unhandled. */
-    case 0x1D6C:                                  /* SET_SEMAPHORE_OFFSET */
-    case 0x1D70:                                  /* BACK_END_WRITE_SEMAPHORE_RELEASE */
+     * in RAMIN and is not modelled here. The demo sets offset 0 with the
+     * object based on its GpuTime page. Resolve that page through the title's
+     * registered device and release only after preceding arrays were consumed;
+     * RESOT_ORDERED_FENCES=0 keeps the poll mirror for diagnostic comparison. */
+    case 0x1D6C: {                                /* SET_SEMAPHORE_OFFSET */
+        /* RE-SoT: XDK's GPU-time fence uses offset zero in its DMA object. */
+        xbox_Nv2aFenceOffset(param);
         break;
+    }
+    case 0x1D70: {                                /* BACK_END_WRITE_SEMAPHORE_RELEASE */
+        /* RE-SoT: signal after preceding draw commands consumed guest arrays,
+         * instead of the timer acknowledging an unexecuted issued fence. */
+        xbox_Nv2aFenceRelease(param);
+        break;
+    }
     default:
         if (method >= 0x0260 && method < 0x0280) {         /* ALPHA_ICW(i) */
             s_gpu.rc.alpha_icw[(method - 0x0260) / 4] = param;

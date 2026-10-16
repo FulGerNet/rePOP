@@ -814,8 +814,48 @@ static void frame_counters_tick(void)
     }
 }
 
+/* RE-SoT: ordered completion prevents the timer from releasing
+ * arrays before the executor copies them. Opt-in until its interaction with
+ * host presentation timing is validated: some vsynced runs fall to 30 fps. */
+static uint32_t g_resot_fence_offset;
+
+/* RE-SoT: comparison settings are fixed at startup, not sampled per fence. */
+static int resot_ordered_fences(void)
+{
+    static int ordered = -1;
+    if (ordered < 0) {
+        const char *setting = getenv("RESOT_ORDERED_FENCES");
+        const char *legacy = getenv("RESOT_LEGACY_FENCES"); /* RE-SoT: 0 disables the override. */
+        ordered = setting && atoi(setting) != 0 && (!legacy || atoi(legacy) == 0);
+        fprintf(stderr, "  [NV2A] ordered GPU fences: %s\n", ordered ? "on" : "off");
+    }
+    return ordered;
+}
+
+/* RE-SoT: the executor owns this state and calls both methods in GPU order. */
+void xbox_Nv2aFenceOffset(uint32_t offset)
+{
+    g_resot_fence_offset = offset;
+}
+
+void xbox_Nv2aFenceRelease(uint32_t value)
+{
+    if (g_resot_fence_offset != 0 || !resot_ordered_fences()) return;
+    for (int i = 0; i < g_fence_mirror_count; i++) {
+        uint32_t dev, get_ptr;
+        if (!fence_readable(g_fence_mirrors[i].device_ptr_va, 4)) continue;
+        dev = *(volatile uint32_t *)((uintptr_t)g_fence_mirrors[i].device_ptr_va + g_memory_offset);
+        if (!fence_readable(dev + g_fence_mirrors[i].get_ptr_off, 4)) continue;
+        get_ptr = *(volatile uint32_t *)((uintptr_t)(dev + g_fence_mirrors[i].get_ptr_off) + g_memory_offset);
+        if (fence_readable(get_ptr, 4))
+            *(volatile uint32_t *)((uintptr_t)get_ptr + g_memory_offset) = value;
+    }
+}
+
 static void fence_mirrors_tick(void)
 {
+    /* RE-SoT: offset-zero GPU-time is released by decoded methods. */
+    if (getenv("RECOMP_PB_EXEC") && resot_ordered_fences()) return;
     for (int i = 0; i < g_fence_mirror_count; i++) {
         uint32_t dev, get_ptr;
 
@@ -1062,6 +1102,12 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
                     *get = put;
                 }
                 last_put = put; last_put_ms = now_ms;
+                /* RE-SoT: host VSync waits only after ordered fences and GET
+                 * are visible, leaving the title time to submit next frame. */
+                {
+                    extern void nv2a_hw_flush_present(void);
+                    nv2a_hw_flush_present();
+                }
                 /* GET as well as PUT. A title that stops submitting has either
                  * finished or is spinning on the GPU catching up, and only GET
                  * tells those apart -- D3D waits for GET to reach PUT before it
