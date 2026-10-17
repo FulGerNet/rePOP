@@ -9,6 +9,16 @@
 
 extern ptrdiff_t g_xbox_mem_offset;
 extern void *xbox_GetMemoryBase(void);
+extern int guest_vmem_accessible(uint32_t address, uint32_t bytes);
+
+/* CRT-backed worlds and lookup arrays can live in committed virtual heaps.
+ * Keep the same bounds for ordinary RAM and reject uncommitted reservations. */
+static int scene_range(uint32_t address, uint32_t bytes)
+{
+    uint64_t end = (uint64_t)address + bytes;
+    if (address < 0x10000u || !bytes || end > UINT32_MAX) return 0;
+    return end <= 0x04000000u || guest_vmem_accessible(address, bytes);
+}
 
 static SRWLOCK s_scene_lock = SRWLOCK_INIT;
 static uint32_t s_scene_world, s_scene_key;
@@ -18,10 +28,11 @@ static char s_scene_name[RESOT_JADE_WORLD_NAME_SIZE];
  * read-only: the guest helper also writes its last-search global. */
 static uint32_t lookup(uintptr_t base, uint32_t table, uint32_t key)
 {
+    if (!scene_range(table, 8)) return UINT32_MAX;
     const volatile uint32_t *header = (const volatile uint32_t *)(base + table);
     uint32_t pairs = header[0], count = header[1], low = 0, high = count;
-    if (pairs < 0x10000u || (pairs & 3u) || pairs >= 0x04000000u ||
-        count > (0x04000000u - pairs) / 8u) return UINT32_MAX;
+    if ((pairs & 3u) || count > UINT32_MAX / 8u ||
+        !scene_range(pairs, count * 8u)) return UINT32_MAX;
     while (low < high) {
         uint32_t mid = low + (high - low) / 2;
         const volatile uint32_t *entry =
@@ -54,8 +65,8 @@ static int read_name(uintptr_t base, uint32_t world, char *name)
 {
     size_t i;
     name[0] = '\0';
-    if (world < 0x10000u || (world & 3u) ||
-        world >= 0x04000000u - RESOT_JADE_WORLD_NAME - RESOT_JADE_WORLD_NAME_SIZE)
+    if ((world & 3u) ||
+        !scene_range(world, RESOT_JADE_WORLD_NAME + RESOT_JADE_WORLD_NAME_SIZE))
         return 0;
     __try {
         const volatile unsigned char *source =
@@ -111,8 +122,8 @@ void resot_current_wow(char *out, size_t size)
             uint32_t key = *(const volatile uint32_t *)(base + RESOT_JADE_PRIMARY_WOW_KEY);
             uint32_t worker = *(const volatile uint32_t *)(base + RESOT_JADE_STREAM_WORKER);
             uint32_t stream_key = UINT32_MAX;
-            if (world && worker >= 0x10000u && !(worker & 3u) &&
-                worker < 0x04000000u - RESOT_JADE_STREAM_WOW_KEY - 4u) {
+            if (world && !(worker & 3u) &&
+                scene_range(worker, RESOT_JADE_STREAM_WOW_KEY + 4u)) {
                 /* Streaming keeps the root WOW separately from the initial
                  * _Start_Demo/menu aggregate and its helper dependencies. */
                 stream_key = *(const volatile uint32_t *)(base + worker + RESOT_JADE_STREAM_WOW_KEY);

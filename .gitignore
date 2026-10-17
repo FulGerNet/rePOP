@@ -2,6 +2,8 @@
 /Assets/
 # Analysis databases, Ghidra projects and notes that quote the binaries.
 /research/
+# Lifted game code is regenerated from the user's XBE.
+/source/*/gen/
 # Outputs.
 /bin/
 /build*/

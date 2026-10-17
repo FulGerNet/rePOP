@@ -122,6 +122,8 @@ extern uint32_t xbox_GetConnectedInterrupt(uint32_t vector);
 extern uint32_t xbox_AllocThreadTib(void);
 extern int xbox_IrqlBlocksInterrupts(void);
 extern int xbox_IrqlEnterInterrupt(int level);
+extern int  xbox_DispatchTryEnter(void);  /* RE-SoT: kernel_hal.c */
+extern void xbox_DispatchLeave(void);
 extern void xbox_IrqlLeaveInterrupt(int saved);
 #if defined(_MSC_VER)
 #  define APU_TLS __declspec(thread)
@@ -130,6 +132,16 @@ extern void xbox_IrqlLeaveInterrupt(int saved);
 #endif
 extern APU_TLS uint32_t g_eax, g_ecx, g_edx, g_esp, g_ebx, g_esi, g_edi;
 extern APU_TLS uint32_t g_fs_base;
+
+/* RE-SoT: called by the demo's 0x002E9F30 / 0x002E9F52 entry hooks. The
+ * audio-only gate (apu_guest_gate.h) they took is superseded by the
+ * uniprocessor dispatch lock (kernel_hal.c): those scopes raise IRQL, which
+ * takes that lock, and the ISR and every DPC run only while holding it. Two
+ * locks taken in opposite orders (scope: gate then dispatch; a DPC entering
+ * a scope: dispatch then gate) would stall each other, so the hooks no
+ * longer take the gate. */
+void xbox_ApuGuestScopeEnter(void) { }
+void xbox_ApuGuestScopeLeave(void) { }
 
 /* Call the connected service routine while the line is up, from the frame
  * thread, the way the OHCI model delivers USB interrupts (ohci_call_isr):
@@ -140,16 +152,19 @@ extern APU_TLS uint32_t g_fs_base;
 static void apu_deliver_irq(MCPXAPUState *d)
 {
     static int tib_ready;
-    static unsigned held_off;
     uint32_t kint, routine, context;
     apu_guest_fn fn;
     int slot;
 
     if (!InterlockedCompareExchange(&s_irq_line, 0, 0))
         return;
-    if (xbox_IrqlBlocksInterrupts() && ++held_off <= 50)
+    /* RE-SoT: never expire the guest's interrupt mask. The demo's crash at
+     * 0x002EF6CD (DirectSound voice-list service) came from this ISR thread
+     * while reading a null voice/list link. The old 50-poll escape could
+     * admit an ISR while a raised guest IRQL still protected the list. Keep
+     * the level-triggered line pending until the guest lowers IRQL. */
+    if (xbox_IrqlBlocksInterrupts())
         return;
-    held_off = 0;
     kint = xbox_GetConnectedInterrupt(APU_VECTOR);
     if (!kint)
         return;
@@ -169,6 +184,15 @@ static void apu_deliver_irq(MCPXAPUState *d)
     if (slot < 0)
         return;
 
+    /* RE-SoT: no raised guest thread and no DPC (timer thread) while the
+     * ISR runs: the uniprocessor dispatch lock, kernel_hal.c. A guest scope
+     * can begin after the first IRQL check; its raise then waits for this
+     * lock. Never waited for here: leave the IRQ pending. */
+    if (xbox_IrqlBlocksInterrupts() || !xbox_DispatchTryEnter()) {
+        xbox_worker_stack_free(slot);
+        return;
+    }
+
     qemu_mutex_unlock(&d->lock);
     g_esp = XBOX_WORKER_STACK_TOP(slot);
     g_eax = g_ecx = g_edx = g_ebx = g_esi = g_edi = 0;
@@ -176,6 +200,7 @@ static void apu_deliver_irq(MCPXAPUState *d)
     g_esp -= 4; *(uint32_t *)(g_apu_ram_ptr + g_esp) = kint;
     g_esp -= 4; *(uint32_t *)(g_apu_ram_ptr + g_esp) = 0xDEADBEEFu;
     { int _irql = xbox_IrqlEnterInterrupt(16); fn(); xbox_IrqlLeaveInterrupt(_irql); }
+    xbox_DispatchLeave();    /* RE-SoT: release before reacquiring device lock. */
     xbox_worker_stack_free(slot);
     qemu_mutex_lock(&d->lock);
 

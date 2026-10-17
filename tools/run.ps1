@@ -66,6 +66,16 @@ New-Item -ItemType Directory -Force "$root\logs\fb" | Out-Null
 if ($DumpFrames) { $settings.RECOMP_FB_DUMP = "$root\logs\fb\f" }
 foreach ($key in $Set.Keys) { $settings[$key] = "$($Set[$key])" }
 foreach ($key in $settings.Keys) { Set-Item "env:$key" $settings[$key] }
+# Keep the previous diagnostics before Start-Process truncates its destinations.
+$history = Join-Path $root 'logs/history'
+New-Item -ItemType Directory -Force $history | Out-Null
+$launchStamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+foreach ($stream in @('out', 'err')) {
+    $previousLog = Join-Path $root "logs/$Target-$stream.txt"
+    if (Test-Path -LiteralPath $previousLog) {
+        Copy-Item -LiteralPath $previousLog -Destination (Join-Path $history "$launchStamp-$PID-$Target-$stream.txt") -ErrorAction Stop
+    }
+}
 $process = Start-Process $exe -WorkingDirectory $root -PassThru `
     -RedirectStandardOutput "$root\logs\$Target-out.txt" -RedirectStandardError "$root\logs\$Target-err.txt"
 if ($SnapshotEvery) {

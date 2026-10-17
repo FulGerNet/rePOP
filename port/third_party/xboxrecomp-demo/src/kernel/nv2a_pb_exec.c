@@ -2485,6 +2485,18 @@ static void frame_trace_flip(void)
         fclose(f);
         s_ftrace = 2;
         fprintf(stderr, "[FTRACE] frame begins (flip %u)\n", s_gpu.flips);
+        /* RE-SoT: snapshot prior state once; later raw uploads reconstruct
+         * exact matrices even if a constant is not written in this frame. */
+        if (getenv("RECOMP_FRAME_TRACE_METHODS")) {
+            const float *constants = nv2a_vsh_constants();
+            uint32_t c;
+            for (c = 0; c < NV2A_VSH_CONSTANTS; c++) {
+                uint32_t bits[4];
+                memcpy(bits, constants + c * 4, sizeof bits);
+                fprintf(stderr, "[FTRACE] initial c[%u] %08X %08X %08X %08X\n",
+                        c, bits[0], bits[1], bits[2], bits[3]);
+            }
+        }
     }
 }
 
@@ -2981,13 +2993,13 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
     }
 
     if (s_ftrace == 2) {
-        /* RECOMP_FRAME_TRACE_METHODS: every method of the traced frame,
-         * less the bulk (vertex data, program and constant uploads). */
+        /* RE-SoT: full state evidence includes program/constant upload words;
+         * excluding them hid instance matrices behind identical batch bounds.
+         * Inline/index vertex payload remains excluded to bound trace size. */
         static int all = -1;
         if (all < 0)
             all = getenv("RECOMP_FRAME_TRACE_METHODS") != NULL;
-        if (all && !(method >= 0x1800 && method < 0x1A00)
-            && !(method >= 0x0B00 && method < 0x0C00))
+        if (all && !(method >= 0x1800 && method < 0x1A00))
             fprintf(stderr, "[FTRACE]   m %u:%04X = %08X%c", subch, method,
                     param, 10);
     }
@@ -3306,7 +3318,8 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
      * in RAMIN and is not modelled here. The demo sets offset 0 with the
      * object based on its GpuTime page. Resolve that page through the title's
      * registered device and release only after preceding arrays were consumed;
-     * RESOT_ORDERED_FENCES=0 keeps the poll mirror for diagnostic comparison. */
+     * The demo's default is now the poll mirror (see resot_ordered_fences);
+     * RESOT_ORDERED_FENCES=1 selects this ordered release. */
     case 0x1D6C: {                                /* SET_SEMAPHORE_OFFSET */
         /* RE-SoT: XDK's GPU-time fence uses offset zero in its DMA object. */
         xbox_Nv2aFenceOffset(param);

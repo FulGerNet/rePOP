@@ -796,6 +796,15 @@ static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
         count = d->vp.ssl[v].count[ssl_index];
 
         if (count == 0) {
+            /* RE-SoT: an empty SSL ends a non-persistent stream for good;
+             * say so, since missing music/speech is otherwise silent. */
+            if (!persist) {
+                static int told;
+                if (told++ < 40)
+                    fprintf(stderr, "[APU] stream voice %u ran out of segments"
+                            " (SSL %d, counts %u/%u) and ends\n", v, ssl_index,
+                            d->vp.ssl[v].count[0], d->vp.ssl[v].count[1]);
+            }
             voice_set_mask(d, (uint16_t)v, NV_PAVS_VOICE_PAR_OFFSET,
                            NV_PAVS_VOICE_PAR_OFFSET_CBO, 0);
             d->vp.ssl[v].ssl_seg = 0;
@@ -1179,9 +1188,22 @@ static void voice_process(MCPXAPUState *d,
  * Simplified single-threaded version (no worker threads initially)
  * ============================================================ */
 
+/* RE-SoT: F6 diagnostics. Voices the last VP frame found active, per list
+ * (2D, 3D, multipass), how many of them stream (SSL data type), how many a
+ * DirectSound lock kept out of the mix, and how many VP frames have run.
+ * Written by the APU thread once a frame, read by the window thread. */
+static volatile int s_vp_diag[6];   /* one writer: the APU thread */
+int xbox_DiagAudio(int *out, int n)
+{
+    int i;
+    for (i = 0; i < n && i < 6; i++) out[i] = (int)s_vp_diag[i];
+    return i;
+}
+
 void mcpx_apu_vp_frame(MCPXAPUState *d,
                         float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME])
 {
+    int active[3] = {0, 0, 0}, streams = 0, locked = 0;
     memset(d->vp.sample_buf, 0, sizeof(d->vp.sample_buf));
 
     for (int list = 0; list < 3; list++) {
@@ -1206,12 +1228,30 @@ void mcpx_apu_vp_frame(MCPXAPUState *d,
                                 NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE)) {
                 fe_method(d, SE2FE_IDLE_VOICE, v);
             } else {
-                /* Process voice directly (single-threaded) */
-                voice_process(d, mixbins, d->vp.sample_buf, v, list);
+                /* RE-SoT: xemu's voice_work_dispatch waits while DirectSound
+                 * holds a voice locked (NV1BA0_PIO_VOICE_LOCK) to rewrite its
+                 * SSL/buffer state; this port mixed it anyway, mid-update.
+                 * Wait briefly (the wait releases d->lock, which voice_lock
+                 * needs), then leave a still-locked voice for the next frame. */
+                int waits = 0;
+                while (is_voice_locked(d, v) && waits++ < 2)
+                    qemu_cond_timedwait(&d->cond, &d->lock, 1);
+                active[list]++;
+                if (voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
+                                   NV_PAVS_VOICE_CFG_FMT_DATA_TYPE))
+                    streams++;
+                if (!is_voice_locked(d, v))
+                    voice_process(d, mixbins, d->vp.sample_buf, v, list);
+                else
+                    locked++;
             }
             d->regs[current] = d->regs[next];
         }
     }
+
+    s_vp_diag[0] = active[0]; s_vp_diag[1] = active[1]; s_vp_diag[2] = active[2];
+    s_vp_diag[3] = streams; s_vp_diag[4] = locked;
+    s_vp_diag[5]++;
 
     /* VP monitor output */
     if (d->monitor.point == MCPX_APU_DEBUG_MON_VP) {

@@ -819,14 +819,23 @@ static void frame_counters_tick(void)
  * so they do not delay submission until another emulated vertical blank. */
 static uint32_t g_resot_fence_offset;
 
-/* RE-SoT: comparison settings are fixed at startup, not sampled per fence. */
+/* RE-SoT: comparison settings are fixed at startup, not sampled per fence.
+ *
+ * Off by default in the demo since 2026-10-17. With ordered release the
+ * executor, which runs a whole submission behind the title, left the
+ * previous frame's fences pending while the title built the next one, and
+ * the title then omitted some objects' draws for that frame (the Prince's
+ * sword, props and wall vegetation in the first level blinked and sometimes
+ * distorted; paired traces showed the draws absent). With
+ * RESOT_ORDERED_FENCES=0 the user saw no flicker at the same place.
+ * RESOT_ORDERED_FENCES=1 restores ordered release for comparison. */
 static int resot_ordered_fences(void)
 {
     static int ordered = -1;
     if (ordered < 0) {
         const char *setting = getenv("RESOT_ORDERED_FENCES");
         const char *legacy = getenv("RESOT_LEGACY_FENCES"); /* RE-SoT: 0 disables the override. */
-        ordered = (!setting || atoi(setting) != 0) && (!legacy || atoi(legacy) == 0);
+        ordered = (setting && atoi(setting) != 0) && (!legacy || atoi(legacy) == 0);
         fprintf(stderr, "  [NV2A] ordered GPU fences: %s\n", ordered ? "on" : "off");
     }
     return ordered;
@@ -3587,4 +3596,35 @@ void xbox_HeapFree(uint32_t xbox_va)
 HANDLE xbox_GetMappingHandle(void)
 {
     return g_mapping_handle;
+}
+
+/* RE-SoT: F6 diagnostics, in KB: heap bump extent, live heap blocks' bytes,
+ * heap window size, contiguous bump extent, live contiguous bytes, arena
+ * size; then the live block counts of each. The allocators take these locks
+ * only with RECOMP_HEAP_RECLAIM, so without it the sums are a moment's
+ * approximation, which is all a panel refreshed twice a second needs. */
+int xbox_DiagMemory(uint32_t *out, int n)
+{
+    uint32_t v[8] = {0};
+    uint64_t live = 0;
+    int i, blocks = 0;
+    AcquireSRWLockShared(&g_heap_lock);
+    v[0] = (g_heap_next - XBOX_HEAP_BASE) >> 10;
+    for (i = 0; i < g_heap_block_count; i++)
+        if (!g_heap_blocks[i].free && g_heap_blocks[i].size) { live += g_heap_blocks[i].size; blocks++; }
+    ReleaseSRWLockShared(&g_heap_lock);
+    v[1] = (uint32_t)(live >> 10);
+    v[2] = (uint32_t)((XBOX_HEAP_TOP - XBOX_HEAP_BASE) >> 10);
+    v[6] = (uint32_t)blocks;
+    live = 0; blocks = 0;
+    AcquireSRWLockShared(&g_contig_lock);
+    v[3] = (g_contig_next - XBOX_CONTIG_BASE) >> 10;
+    for (i = 0; i < g_contig_block_count; i++)
+        if (!g_contig_blocks[i].free) { live += g_contig_blocks[i].size; blocks++; }
+    ReleaseSRWLockShared(&g_contig_lock);
+    v[4] = (uint32_t)(live >> 10);
+    v[5] = (uint32_t)((uint64_t)XBOX_CONTIG_SIZE >> 10);
+    v[7] = (uint32_t)blocks;
+    for (i = 0; i < n && i < 8; i++) out[i] = v[i];
+    return i;
 }

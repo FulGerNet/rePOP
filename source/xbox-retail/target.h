@@ -12,6 +12,11 @@
  * As in the demo, flat pause layers undo that narrowing on the host. */
 #define RESOT_PROJECTED_UI 1
 
+/* Runtime policy: the 2026-10-16 human revisit passed with genuine virtual
+ * reservations, after the heap-backed/clamped reserve path had exhausted RAM.
+ * Keep the comparison path available through RECOMP_EXT_VMA=0. */
+#define RESOT_DEFAULT_EXT_VMA 1
+
 #define RESOT_TARGET_ID    "xbox-retail"
 #define RESOT_TARGET_NAME  "Prince of Persia: The Sands of Time (Xbox retail)"
 #define RESOT_XBE_SHA256   "753C58B191279BF4D1A8B28A936DF36AA222ED566487AB1FBDFCD090E91EE379"

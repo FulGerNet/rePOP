@@ -36,6 +36,7 @@
 #include "kernel.h"
 #include "xbox_memory_layout.h"
 #include "guest_vmem.h"
+#include "xbox_apu_dma.h" /* RE-SoT: check virtual frees retire audio aliases. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -330,6 +331,50 @@ int main(int argc, char **argv)
             snprintf(d, sizeof d, "status 0x%08X, base 0x%08X", st, base);
             check(base != hi, "default: an explicit high base is not honoured", d);
         } else if (ext) {
+            /* RE-SoT: retail CRT reserves with a null base. The full 64 MB
+             * reservation must cost no guest heap or alias the RAM mirrors. */
+            uint32_t any = 0, amount = 0x4000000, again, first, dma;
+            st = nt_alloc_at(&any, &amount, 0x2000);
+            first = any;
+            check(st == 0 && any >= 0x74000000u && amount == 0x4000000,
+                  "null-base reservation gets the full 64 MB above RAM", NULL);
+            check(!guest_vmem_accessible(any, 1),
+                  "reserved memory is rejected as a host I/O buffer", NULL);
+            base = any; size = 0x1000;
+            st = nt_alloc_at(&base, &size, 0x1000);
+            check(st == 0 && guest_vmem_accessible(base, size) &&
+                  !guest_vmem_accessible(base, size + 1),
+                  "commit enables exactly the committed I/O pages", NULL);
+            *G(base) = 0x12345678;
+            dma = xbox_ApuDmaMap(base + 0x123);
+            check(dma && xbox_ApuDmaResolve(dma) == base + 0x123,
+                  "committed virtual audio buffer has a reversible DMA token", NULL);
+            *G(OUT_VA) = base; *G(OUT_VA + 4) = size;
+            {
+                uint32_t args[3] = {OUT_VA, OUT_VA + 4, 0x4000};
+                st = call(S_FREE, 3, args);
+            }
+            check(st == 0 && !guest_vmem_accessible(base, size),
+                  "decommit revokes host I/O access", NULL);
+            check(xbox_ApuDmaResolve(dma) == 0,
+                  "decommit also retires the virtual audio DMA token", NULL);
+            st = nt_alloc_at(&base, &size, 0x1000);
+            check(st == 0 && *G(base) == 0,
+                  "recommit restores zeroed memory", NULL);
+            dma = xbox_ApuDmaMap(base);
+            st = nt_release(any);
+            check(st == 0 && xbox_ApuDmaResolve(dma) == 0,
+                  "release retires virtual audio DMA tokens", NULL);
+            again = 0; amount = 0x4000000;
+            st |= nt_alloc_at(&again, &amount, 0x2000);
+            check(st == 0 && again == first,
+                  "release lets the next null-base reserve reuse the range", NULL);
+            nt_release(again);
+            any = 0; amount = 0xFFFFFFFFu;
+            st = nt_alloc_at(&any, &amount, 0x2000);
+            check(st == 0xC0000017u && any == 0 && amount == 0xFFFFFFFFu,
+                  "oversized reserve fails without clamping or changing outputs", NULL);
+
             /* Reserve the exact address. */
             base = hi; size = 0x100000;
             st = nt_alloc_at(&base, &size, 0x2000);

@@ -228,13 +228,51 @@ int guest_vmem_allocate(uint32_t *base, uint32_t *size, uint32_t alloc_type,
 {
     int handled;
 
-    /* base = 0 means "anywhere", and anything below the mirrors is the heap's. */
-    if (!s_pages || *base < s_mirror_lo)
+    /* RE-SoT: the demo CRT also reserves with base=NULL (its portable log
+     * records a 1 MB reserve followed by 4 KB commits). A reservation must
+     * consume address space, not charge its entire size to the RAM heap. */
+    int anywhere = *base == 0 && alloc_type == MEM_RESERVE_FLAG;
+    if (!s_pages || (!anywhere && *base < s_mirror_lo))
         return 0;
     AcquireSRWLockExclusive(&s_lock);
-    handled = allocate_locked(base, size, alloc_type, protect, status);
+    if (anywhere) {
+        uint64_t rounded = ((uint64_t)*size + VMEM_PAGE - 1) & ~(uint64_t)(VMEM_PAGE - 1);
+        uint32_t candidate;
+        handled = 1;
+        *status = *size ? STATUS_NO_MEMORY : STATUS_INVALID_PARAMETER;
+        if (rounded && rounded <= s_top - s_lo) {
+            for (candidate = (s_lo + 0xFFFFu) & ~0xFFFFu;
+                 (uint64_t)candidate + rounded <= s_top; candidate += 0x10000u) {
+                if (range_is_free(candidate, candidate + (uint32_t)rounded)) {
+                    uint32_t chosen = candidate, amount = *size;
+                    allocate_locked(&chosen, &amount, alloc_type, protect, status);
+                    if (!*status) { *base = chosen; *size = amount; }
+                    break;
+                }
+            }
+        }
+    } else {
+        handled = allocate_locked(base, size, alloc_type, protect, status);
+    }
     ReleaseSRWLockExclusive(&s_lock);
     return handled;
+}
+
+/* RE-SoT: accept host I/O buffers only when every tracked page is committed. */
+int guest_vmem_accessible(uint32_t address, uint32_t bytes)
+{
+    uint64_t end = (uint64_t)address + bytes;
+    uint32_t p, last;
+    int result = 1;
+    if (!s_pages || address < s_lo || end > s_top || !bytes)
+        return 0;
+    last = page_index((uint32_t)(end - 1));
+    AcquireSRWLockShared(&s_lock);
+    for (p = page_index(address); p <= last; ++p) {
+        if (s_pages[p].state != MEM_COMMIT_FLAG) { result = 0; break; }
+    }
+    ReleaseSRWLockShared(&s_lock);
+    return result;
 }
 
 static int free_locked(uint32_t *base, uint32_t *size, uint32_t free_type,

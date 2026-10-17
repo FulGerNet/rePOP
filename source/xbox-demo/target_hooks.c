@@ -25,6 +25,17 @@ extern ptrdiff_t g_xbox_mem_offset;
 #define GMEM32(va) (*(volatile uint32_t *)((uintptr_t)g_xbox_mem_offset + (uint32_t)(va)))
 #define GMEMF(va)  (*(volatile float *)((uintptr_t)g_xbox_mem_offset + (uint32_t)(va)))
 
+/* Demo DirectSound's IRQL scope constructor/destructor, XBE 0x002E9F30 and
+ * 0x002E9F52. Reserve audio state before the constructor can raise IRQL.
+ * The destructor only restores IRQL and clears its scope flag: releasing
+ * here is safe because the raised IRQL still masks the pending IRQ until
+ * its original lower completes. Pair every nested scope, including ISR
+ * scopes, using the runtime's recursive audio-only gate. */
+extern void xbox_ApuGuestScopeEnter(void);
+extern void xbox_ApuGuestScopeLeave(void);
+void sub_002E9F30_enter(void) { xbox_ApuGuestScopeEnter(); }
+void sub_002E9F52_enter(void) { xbox_ApuGuestScopeLeave(); }
+
 /* The primary WOW merge at 0x0002A15D passes the source world in EBX and
  * the aggregate destination on the stack. Capture its BF name before the
  * loader disposes of the source. Other callers merge helper dependencies. */
@@ -376,10 +387,14 @@ void sub_0031C4B2(void)
     stdcall_return(0, 2);
 }
 
-/* XInputGetState */
+/* XInputGetState, polled once a frame on the title thread: also where the
+ * reSOT Options labels catch up with a changed setting. */
+static void native_refresh(void);
+
 void sub_0031C68A(void)
 {
     uint32_t st;
+    native_refresh();
     if (usb_input()) { sub_0031C68A_gen(); return; }
     st = stdcall_arg(1);
     if (stdcall_arg(0) != PAD_HANDLE || !st) {
@@ -406,4 +421,531 @@ void sub_0031C6FD(void)
                       *(volatile uint16_t *)((uintptr_t)g_xbox_mem_offset + fb + 0x44));
     GMEM32(fb) = 0;
     stdcall_return(997, 2);                /* ERROR_IO_PENDING, already done */
+}
+
+/* ── Menu construction trace (RESOT_MENU_TRACE=1) ──
+ *
+ * Jade's menu pages, built by compiled AI code such as the main menu's
+ * 0x001C5790: 0x0023F110 opens a page (eax = menu object), 0x0023F040 adds
+ * a choice (cdecl stack: handle out, menu object, pointer to the text
+ * reference {file key, index}), 0x0023FCA0 closes the page. Logged with their return addresses to
+ * map each native choice to its text reference before extending a page. */
+static int menu_trace(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("RESOT_MENU_TRACE"); on = e && *e && *e != '0'; }
+    return on;
+}
+
+static int hidden_menus(void);
+static void native_build(uint32_t menu);
+static void native_bind(void);
+
+/* The Load Map page was laid out for the never-shown title screen: top at
+ * 0.1667 and 0.0667 per line put its heading on the E3 page's logo and
+ * "Tomb" on the A/B legend. Start lower and tighten the lines (stack: out,
+ * menu, flags, top, spacing; floats in screen fractions). */
+#define MENU_LOADMAP_OPEN_RET 0x0015E854u /* 0x0023F110 building the page */
+#define MENU_TITLE_OPEN_RET   0x0015EB37u /* 0x0023F110 opening the title page */
+
+void sub_0023F110_enter(void)
+{
+    if (menu_trace())
+        fprintf(stderr, "[MENU] page open  menu=%08X ret=%08X flags=%08X top=%g step=%g\n",
+                g_eax, GMEM32(g_esp), GMEM32(g_esp + 8), GMEMF(g_esp + 16), GMEMF(g_esp + 20));
+    if (GMEM32(g_esp) == MENU_LOADMAP_OPEN_RET && hidden_menus()) {
+        GMEMF(g_esp + 16) = 0.26f;
+        GMEMF(g_esp + 20) = 0.05f;
+    }
+    if (GMEM32(g_esp) == MENU_TITLE_OPEN_RET && hidden_menus())
+        native_build(GMEM32(g_esp + 8));      /* reSOT Options pages */
+}
+
+/* ── Hidden menus: the demo's own level select ("Load Map") ──
+ *
+ * The in-game menu AI's initialisation (compiled .ofc 0x0B00432B,
+ * 0x0015D3B0) builds a "Load Map" page at var +0xBC with nine choices
+ * (India ... Tomb, text group 0x0B00449C indices 5-13), and its binding
+ * function (0x0E000142, 0x0015B3B0) gives each a "change map" message with
+ * the level keys stored at +0xC8..+0xE8. Nothing links to that page: the
+ * title page that carries a "Load" choice (+0x188/+0xC0) is never shown, and
+ * the E3 main page (+0x4C: Start, Sound, Camera, Controller, Quit) has no
+ * entry for it. This adds it natively: a choice created on the E3 page just
+ * before Quit with the game's own string ("Load Map", group 0x0B00449C
+ * index 4) and given the open-page action the Options sub-pages use
+ * (menu_bind_open_page). The same init's Language page (+0x284) is left
+ * unlinked on purpose.
+ * RESOT_HIDDEN_MENUS=0 disables them. */
+extern RESOT_TLS uint32_t g_edi, g_ebp, g_seh_ebp;
+extern void sub_0023F040(void);
+extern void sub_00018100(void);
+extern void sub_00117580(void);
+extern void sub_00018170(void);
+
+#define MENU_E3_QUIT_RET     0x0015E9E8u /* 0x0023F040 call creating E3 "Quit" */
+#define MENU_BIND_SOUND_RET  0x0015B752u /* 0x00117580: options Sound -> +0x158 */
+#define MENU_BINDINGS_DONE   0x0015C9DAu /* 0x0001CAD0 after the level bindings */
+#define MENU_CURRENT         0x0064D880u /* menu object passed to builders */
+/* Entries added to the E3 main page before "Quit", in this order. Text
+ * references are the game's own strings; pages are menu-AI variables that
+ * 0x0015D3B0 filled with page handles. */
+typedef struct {
+    const char *name;
+    uint32_t text_group, text_index;  /* TEXT reference of the label */
+    uint32_t page_var;                /* menu var holding the page handle */
+    uint32_t choice;                  /* created handle */
+    int bound;
+    const uint32_t *host_page;        /* or a page built here (page_var 0) */
+} MenuEntry;
+static uint32_t s_resot_root;         /* reSOT Options page, built below */
+#define RESOT_TEXT_GROUP 0x0B00FE00u  /* not a key of the demo's BF: injected */
+static MenuEntry s_entries[] = {
+    { "Load Map", 0x0B00449Cu, 4u, 0x0BCu, 0, 0, 0 },  /* nine levels */
+    { "reSOT Options", RESOT_TEXT_GROUP, 0u, 0, 0, 0, &s_resot_root },
+};
+#define MENU_ENTRIES ((int)(sizeof s_entries / sizeof s_entries[0]))
+static uint32_t s_bind_edx, s_menu_vars;
+static int s_entries_added;
+
+static int hidden_menus(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("RESOT_HIDDEN_MENUS"); on = !e || *e != '0'; }
+    return on;
+}
+
+typedef struct { uint32_t eax, ebx, ecx, edx, esi, edi, ebp, seh, esp; } GuestRegs;
+static void regs_save(GuestRegs *r)
+{
+    r->eax = g_eax; r->ebx = g_ebx; r->ecx = g_ecx; r->edx = g_edx; r->esi = g_esi;
+    r->edi = g_edi; r->ebp = g_ebp; r->seh = g_seh_ebp; r->esp = g_esp;
+}
+static void regs_load(const GuestRegs *r)
+{
+    g_eax = r->eax; g_ebx = r->ebx; g_ecx = r->ecx; g_edx = r->edx; g_esi = r->esi;
+    g_edi = r->edi; g_ebp = r->ebp; g_seh_ebp = r->seh; g_esp = r->esp;
+}
+
+/* cdecl guest call; generated routines pop their own return address. */
+static uint32_t guest_cdecl(void (*fn)(void), const uint32_t *args, int n)
+{
+    int i;
+    for (i = n - 1; i >= 0; i--) { g_esp -= 4; GMEM32(g_esp) = args[i]; }
+    g_esp -= 4; GMEM32(g_esp) = 0;
+    fn();
+    g_esp += 4u * (uint32_t)n;
+    return g_eax;
+}
+
+static uint32_t menu_add_choice(uint32_t menu, uint32_t group, uint32_t index)
+{
+    GuestRegs saved;
+    uint32_t scratch, args[3], choice;
+    regs_save(&saved);
+    g_esp -= 0x40;
+    scratch = g_esp;
+    GMEM32(scratch + 0x20) = group;               /* text reference */
+    GMEM32(scratch + 0x24) = index;
+    GMEM32(scratch + 0x30) = 0;                   /* handle out */
+    args[0] = scratch + 0x30; args[1] = menu; args[2] = scratch + 0x20;
+    g_eax = menu;
+    guest_cdecl(sub_0023F040, args, 3);
+    choice = GMEM32(scratch + 0x30);
+    regs_load(&saved);
+    return choice;
+}
+
+/* Native "open page" binding, the same calls as Options -> Sound at
+ * 0x0015B71E..0x0015B752: 0x00018100 builds an open-page action (vtable
+ * 0x00323860, execute 0x000613E0 -> page open 0x0005E7C0) for the page whose
+ * handle is in ecx, 0x00117580 attaches it to the choice. The kind-3 message
+ * Options also sends is for the pause menu's own handler; the E3 page's
+ * message loop (0x00138DD0) only takes kinds 999 and 1006 and ignores it. */
+static int menu_bind_open_page(uint32_t choice, uint32_t page)
+{
+    GuestRegs saved;
+    uint32_t scratch, args[3], action;
+    if (!choice || !page || !s_bind_edx)
+        return 0;
+    regs_save(&saved);
+    g_esp -= 0x40;
+    scratch = g_esp;
+    args[0] = GMEM32(MENU_CURRENT); args[1] = 0; args[2] = 1;
+    g_eax = GMEM32(MENU_CURRENT); g_ecx = page;
+    action = guest_cdecl(sub_00018100, args, 3);
+    GMEM32(scratch + 0x30) = 0;
+    args[0] = scratch + 0x30; args[1] = action; args[2] = choice;
+    g_eax = GMEM32(MENU_CURRENT); g_edx = s_bind_edx;
+    guest_cdecl(sub_00117580, args, 3);
+    regs_load(&saved);
+    return 1;
+}
+
+static void menu_bind_entries(void)
+{
+    int i;
+    if (!s_menu_vars)
+        return;
+    for (i = 0; i < MENU_ENTRIES; i++) {
+        MenuEntry *e = &s_entries[i];
+        uint32_t page = e->host_page ? *e->host_page : GMEM32(s_menu_vars + e->page_var);
+        if (e->bound || !e->choice)
+            continue;
+        e->bound = menu_bind_open_page(e->choice, page);
+        fprintf(stderr, "[MENU] hidden: \"%s\" opens page %08X%s\n", e->name, page,
+                e->bound ? "" : " -- not bound");
+    }
+}
+
+void sub_0023F040_enter(void)
+{
+    if (menu_trace())
+        fprintf(stderr, "[MENU] choice     menu=%08X ret=%08X out=%08X text=%08X:%u\n",
+                GMEM32(g_esp + 8), GMEM32(g_esp), GMEM32(g_esp + 4),
+                GMEM32(GMEM32(g_esp + 12)), GMEM32(GMEM32(g_esp + 12) + 4));
+    if (GMEM32(g_esp) == MENU_E3_QUIT_RET && hidden_menus() && !s_entries_added) {
+        int i;
+        s_entries_added = 1;
+        for (i = 0; i < MENU_ENTRIES; i++) {
+            s_entries[i].choice = menu_add_choice(GMEM32(g_esp + 8), s_entries[i].text_group,
+                                                  s_entries[i].text_index);
+            fprintf(stderr, "[MENU] hidden: \"%s\" choice %08X added to the main page\n",
+                    s_entries[i].name, s_entries[i].choice);
+        }
+    }
+}
+
+void sub_00117580_enter(void)
+{
+    if (menu_trace())
+        fprintf(stderr, "[MENU] bind       ret=%08X action=%08X choice=%08X edx=%08X\n",
+                GMEM32(g_esp), GMEM32(g_esp + 8), GMEM32(g_esp + 12), g_edx);
+    if (GMEM32(g_esp) == MENU_BIND_SOUND_RET) {
+        s_bind_edx = g_edx;
+        s_menu_vars = g_ebp;                       /* the binder's var buffer */
+    }
+}
+
+void sub_00018170_enter(void)
+{
+    if (menu_trace()) {
+        uint32_t d = GMEM32(g_esp + 8);
+        fprintf(stderr, "[MENU] message    ret=%08X +20=%08X +24=%08X kind=%d param=%08X id=%u\n",
+                GMEM32(g_esp), GMEM32(d + 0x20), GMEM32(d + 0x24), (int)GMEM32(d + 0x28),
+                GMEM32(d + 0x2C), GMEM32(d + 0x30));
+    }
+}
+
+void sub_0001CAD0_enter(void)
+{
+    if (GMEM32(g_esp) == MENU_BINDINGS_DONE && hidden_menus()) {
+        native_bind();
+        menu_bind_entries();
+    }
+}
+
+/* The choice builder 0x0023F040 calls: cdecl (local out, text reference
+ * pointer, ?, 0), eax = menu object. */
+void sub_0023EB10_enter(void)
+{
+    if (menu_trace()) {
+        uint32_t ref = GMEM32(g_esp + 8);
+        fprintf(stderr, "[MENU] build      eax=%08X ret=%08X ref=%08X text=%08X:%u a3=%08X a4=%08X\n",
+                g_eax, GMEM32(g_esp), ref, ref ? GMEM32(ref) : 0, ref ? GMEM32(ref + 4) : 0,
+                GMEM32(g_esp + 12), GMEM32(g_esp + 16));
+    }
+}
+
+void sub_0023FCA0_enter(void)
+{
+    if (menu_trace())
+        fprintf(stderr, "[MENU] page close ecx=%08X eax=%08X ret=%08X arg=%08X\n",
+                g_ecx, g_eax, GMEM32(g_esp), GMEM32(g_esp + 4));
+}
+
+/* ── reSOT Options: native pages for the host settings ──
+ *
+ * Text: 0x001104E0 resolves a TEXT reference (edi = &{group key, index},
+ * esi = the current language's table, from 0x0023EB7B) to a string pointer
+ * in eax and returns. References to RESOT_TEXT_GROUP, which no file of the
+ * BF uses, are answered here from a guest buffer that is rewritten at every
+ * lookup, so a label shows the setting's current value.
+ *
+ * Pages are built with the game's own page routines between the E3 page and
+ * the title page (0x0023F110 called from 0x0015EB37), after the menu init
+ * has built its own; choices that open a sub-page get the same open-page
+ * action as Load Map, the others a message action (0x00018170, descriptor
+ * kind at +0x28, id at +0x30) whose execute, 0x00061470 (vtable 0x00323854
+ * slot 1, thiscall, ret 4), would queue the descriptor for the menu AI. Ours
+ * are taken here and never queued. */
+#include "../../port/windows/src/options.h"
+extern uint32_t xbox_ContiguousAlloc(uint32_t size, uint32_t alignment);
+extern void sub_001104E0_gen(void);
+extern void sub_00061470_gen(void);
+extern void sub_0023F110(void);
+extern void sub_0023FCA0(void);
+
+#define RESOT_MSG_KIND      0x52E5u
+#define RESOT_TEXT_SLOT     96u
+#define RESOT_TEXTS         80u
+enum { T_ROOT, T_GRAPHICS, T_CONTROLS, T_KEY0, T_KEY1, T_KEY2, T_JOY0, T_JOY1, T_JOY2,
+       T_RESET, T_GFX = 10, T_KEYS = 20, T_JOYS = 50 };
+static const char *const s_static_texts[] = {
+    "reSOT Options", "Graphics", "Controls",
+    "Keyboard: move and fight", "Keyboard: actions", "Keyboard: menus and camera",
+    "Joystick: move and fight", "Joystick: actions", "Joystick: menus and camera",
+    "Reset all bindings",
+};
+static uint32_t s_text_va;
+
+static void resot_text(uint32_t index, char *out, unsigned size)
+{
+    if (index < sizeof s_static_texts / sizeof s_static_texts[0])
+        snprintf(out, size, "%s", s_static_texts[index]);
+    else if (index >= T_GFX && index < T_GFX + RESOT_NATIVE_GRAPHICS_ITEMS)
+        resot_native_label(RESOT_NATIVE_GRAPHICS, (int)(index - T_GFX), out, size);
+    else if (index >= T_KEYS && index < T_KEYS + RESOT_NATIVE_ACTIONS)
+        resot_native_label(RESOT_NATIVE_KEYS, (int)(index - T_KEYS), out, size);
+    else if (index >= T_JOYS && index < T_JOYS + RESOT_NATIVE_ACTIONS)
+        resot_native_label(RESOT_NATIVE_JOY, (int)(index - T_JOYS), out, size);
+    else
+        snprintf(out, size, "?");
+}
+
+void sub_001104E0(void)
+{
+    uint32_t index;
+    char text[RESOT_TEXT_SLOT];
+    if (GMEM32(g_edi) != RESOT_TEXT_GROUP) { sub_001104E0_gen(); return; }
+    index = GMEM32(g_edi + 4);
+    if (!s_text_va)
+        s_text_va = xbox_ContiguousAlloc(RESOT_TEXT_SLOT * RESOT_TEXTS, 16);
+    if (!s_text_va || index >= RESOT_TEXTS) {
+        g_eax = 0x00325305u;              /* the routine's own "no text" result */
+    } else {
+        resot_text(index, text, sizeof text);
+        memcpy((void *)((uintptr_t)g_xbox_mem_offset + s_text_va + index * RESOT_TEXT_SLOT),
+               text, strlen(text) + 1);
+        g_eax = s_text_va + index * RESOT_TEXT_SLOT;
+    }
+    g_esp += 4;                           /* ret */
+}
+
+/* Page layout: what each choice of a page built here does. */
+enum { DO_OPEN, DO_MSG };
+typedef struct { uint32_t text; int what; int arg; uint32_t choice; } NativeChoice;
+typedef struct { uint32_t title; float top, step; int n; NativeChoice c[12]; uint32_t page; } NativePage;
+enum { P_ROOT, P_GFX, P_CTRL, P_K0, P_K1, P_K2, P_J0, P_J1, P_J2, P_PAGES };
+#define MSG_ID(page, item) ((uint32_t)(page) << 8 | (uint32_t)(item))
+#define MSG_RESET 0xFF00u
+static NativePage s_pages[P_PAGES];
+/* Bindings in three pages each: actions 0-8, 9-15, 16-24. */
+static const int s_bind_first[3] = { 0, 9, 16 }, s_bind_count[3] = { 9, 7, 9 };
+
+static void native_choice(NativePage *p, int i, uint32_t text, int what, int arg)
+{
+    p->c[i].text = text; p->c[i].what = what; p->c[i].arg = arg; p->c[i].choice = 0;
+}
+
+static void native_layout(void)
+{
+    int i, j;
+    NativePage *p;
+    memset(s_pages, 0, sizeof s_pages);
+    p = &s_pages[P_ROOT]; p->title = T_ROOT; p->top = 0.36f; p->step = 0.0667f; p->n = 2;
+    native_choice(p, 0, T_GRAPHICS, DO_OPEN, P_GFX);
+    native_choice(p, 1, T_CONTROLS, DO_OPEN, P_CTRL);
+    p = &s_pages[P_GFX]; p->title = T_GRAPHICS; p->top = 0.32f; p->step = 0.0667f;
+    p->n = RESOT_NATIVE_GRAPHICS_ITEMS;
+    for (i = 0; i < p->n; i++)
+        native_choice(p, i, T_GFX + (uint32_t)i, DO_MSG, (int)MSG_ID(P_GFX, i));
+    p = &s_pages[P_CTRL]; p->title = T_CONTROLS; p->top = 0.26f; p->step = 0.05f; p->n = 7;
+    for (i = 0; i < 6; i++)
+        native_choice(p, i, T_KEY0 + (uint32_t)i, DO_OPEN, P_K0 + i);
+    native_choice(p, 6, T_RESET, DO_MSG, (int)MSG_RESET);
+    for (i = 0; i < 6; i++) {
+        int joy = i >= 3, part = i % 3;
+        p = &s_pages[P_K0 + i];
+        p->title = T_KEY0 + (uint32_t)i; p->top = 0.24f; p->step = 0.05f;
+        p->n = s_bind_count[part];
+        for (j = 0; j < p->n; j++) {
+            int action = s_bind_first[part] + j;
+            native_choice(p, j, (joy ? T_JOYS : T_KEYS) + (uint32_t)action, DO_MSG,
+                          (int)MSG_ID(P_K0 + i, action));
+        }
+    }
+}
+
+static uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
+
+/* 0x0023F110: eax = menu, ecx = &title reference, xmm0 = the column's left
+ * edge (stored at +0x294; every page of the game passes 0.4 from 0x003339EC,
+ * e.g. movss at 0x0015E81D); cdecl (handle out, menu, 0, top, line step,
+ * 1, 1), the arguments the Load Map page is opened with at 0x0015E854.
+ * Without xmm0 the column started wherever the last SSE code left it.
+ * 0x0023FCA0: eax = menu, cdecl (menu). */
+typedef union { float f[4]; double d[2]; uint32_t u[4]; int32_t i[4]; uint64_t q[2]; } GuestXmm;
+extern RESOT_TLS GuestXmm g_xmm0;          /* the runtime's RecompXmm */
+#define MENU_PAGE_X 0.4f
+
+static uint32_t native_build_page(uint32_t menu, NativePage *p)
+{
+    GuestRegs saved;
+    GuestXmm xmm0 = g_xmm0;
+    uint32_t scratch, args[7], page;
+    int i;
+    regs_save(&saved);
+    g_esp -= 0x40;
+    scratch = g_esp;
+    GMEM32(scratch + 0x20) = RESOT_TEXT_GROUP;
+    GMEM32(scratch + 0x24) = p->title;
+    GMEM32(scratch + 0x30) = 0;
+    args[0] = scratch + 0x30; args[1] = menu; args[2] = 0;
+    args[3] = f2u(p->top); args[4] = f2u(p->step); args[5] = 1; args[6] = 1;
+    g_eax = GMEM32(MENU_CURRENT); g_ecx = scratch + 0x20;
+    g_xmm0.f[0] = MENU_PAGE_X;
+    guest_cdecl(sub_0023F110, args, 7);
+    page = GMEM32(scratch + 0x30);
+    regs_load(&saved);
+    g_xmm0 = xmm0;
+    for (i = 0; i < p->n; i++)
+        p->c[i].choice = menu_add_choice(menu, RESOT_TEXT_GROUP, p->c[i].text);
+    regs_save(&saved);
+    args[0] = menu;
+    g_eax = GMEM32(MENU_CURRENT);
+    guest_cdecl(sub_0023FCA0, args, 1);
+    regs_load(&saved);
+    return page;
+}
+
+static int s_native_built, s_native_bound;
+
+static void native_build(uint32_t menu)
+{
+    int i;
+    if (s_native_built)
+        return;
+    s_native_built = 1;
+    native_layout();
+    for (i = 0; i < P_PAGES; i++)
+        s_pages[i].page = native_build_page(menu, &s_pages[i]);
+    s_resot_root = s_pages[P_ROOT].page;
+    fprintf(stderr, "[MENU] reSOT Options: %d pages built, root page %08X\n", P_PAGES, s_resot_root);
+}
+
+/* Message action as the options binder makes it at 0x0015B681..0x0015B6D8:
+ * 0x00018170 (cdecl menu, &descriptor) then 0x00117580 to attach it. */
+static int menu_bind_message(uint32_t choice, uint32_t id)
+{
+    GuestRegs saved;
+    uint32_t scratch, args[3], action, i;
+    if (!choice || !s_bind_edx)
+        return 0;
+    regs_save(&saved);
+    g_esp -= 0x80;
+    scratch = g_esp;
+    for (i = 0; i < 0x34; i += 4)
+        GMEM32(scratch + 0x40 + i) = 0;
+    GMEM32(scratch + 0x40 + 0x28) = RESOT_MSG_KIND;
+    GMEM32(scratch + 0x40 + 0x30) = id;
+    args[0] = GMEM32(MENU_CURRENT); args[1] = scratch + 0x40;
+    g_eax = GMEM32(MENU_CURRENT);
+    action = guest_cdecl(sub_00018170, args, 2);
+    GMEM32(scratch + 0x30) = 0;
+    args[0] = scratch + 0x30; args[1] = action; args[2] = choice;
+    g_eax = GMEM32(MENU_CURRENT); g_edx = s_bind_edx;
+    guest_cdecl(sub_00117580, args, 3);
+    regs_load(&saved);
+    return 1;
+}
+
+static void native_bind(void)
+{
+    int i, j, ok = 0, all = 0;
+    if (!s_native_built || s_native_bound)
+        return;
+    s_native_bound = 1;
+    for (i = 0; i < P_PAGES; i++)
+        for (j = 0; j < s_pages[i].n; j++) {
+            NativeChoice *c = &s_pages[i].c[j];
+            all++;
+            ok += c->what == DO_OPEN ? menu_bind_open_page(c->choice, s_pages[c->arg].page)
+                                     : menu_bind_message(c->choice, (uint32_t)c->arg);
+        }
+    fprintf(stderr, "[MENU] reSOT Options: %d of %d choices bound\n", ok, all);
+}
+
+/* Labels. 0x0023EB10 gives each choice's object (+0x9C, stored at
+ * 0x0023ED5B) a text object whose text action (0x00060770 -> 0x00060160,
+ * vtable 0x0032380C, TEXT reference at +0x34/+0x38) is asked for its string
+ * (slot 1, 0x00060210 -> 0x001104E0) only when 0x000605C0 runs it: on page
+ * changes, not when a value changes. 0x000605C0 (esi = text object, skipped
+ * while +0x28 is 0) is what 0x00017D10 runs over every text object; it is
+ * run here for our own choices once the options' revision moves. The text
+ * object is checked to still carry our reference before it is touched. */
+extern void sub_000605C0(void);
+#define TEXT_MANAGER       0x0064D1E4u   /* +0x44: objects by choice handle */
+#define TEXT_ACTION_VTABLE 0x0032380Cu
+
+static int native_text_object(uint32_t choice, uint32_t *out)
+{
+    uint32_t mgr = GMEM32(TEXT_MANAGER), obj, text, it, end;
+    if (!mgr || !choice || !GMEM32(mgr + 0x44))
+        return 0;
+    obj = GMEM32(GMEM32(mgr + 0x44) + choice * 4);
+    text = obj ? GMEM32(obj + 0x9C) : 0;
+    if (!text)
+        return 0;
+    for (it = GMEM32(text + 0x0C), end = GMEM32(text + 0x10); it && it < end; it += 4) {
+        uint32_t action = GMEM32(it);
+        if (action && GMEM32(action) == TEXT_ACTION_VTABLE
+                && GMEM32(action + 0x34) == RESOT_TEXT_GROUP) {
+            *out = text;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void native_refresh(void)
+{
+    static long seen;
+    long revision;
+    int i, j, n = 0;
+    if (!s_native_bound || (revision = resot_native_revision()) == seen)
+        return;
+    seen = revision;
+    for (i = 0; i < P_PAGES; i++)
+        for (j = 0; j < s_pages[i].n; j++) {
+            GuestRegs saved;
+            uint32_t text;
+            if (s_pages[i].c[j].what != DO_MSG
+                    || !native_text_object(s_pages[i].c[j].choice, &text))
+                continue;
+            regs_save(&saved);
+            g_esi = text;
+            guest_cdecl(sub_000605C0, NULL, 0);
+            regs_load(&saved);
+            n++;
+        }
+    if (menu_trace())
+        fprintf(stderr, "[MENU] reSOT labels refreshed (%d, revision %ld)\n", n, revision);
+}
+
+/* Message action execute: this = ecx, the descriptor copied at +0x24. */
+void sub_00061470(void)
+{
+    uint32_t self = g_ecx, id;
+    if (GMEM32(self + 0x24 + 0x28) != RESOT_MSG_KIND) { sub_00061470_gen(); return; }
+    id = GMEM32(self + 0x24 + 0x30);
+    if (menu_trace())
+        fprintf(stderr, "[MENU] reSOT choice %04X\n", id);
+    if (id == MSG_RESET)
+        resot_native_reset_bindings();
+    else if ((id >> 8) == P_GFX)
+        resot_native_activate(RESOT_NATIVE_GRAPHICS, (int)(id & 0xFF));
+    else if ((id >> 8) >= P_K0 && (id >> 8) <= P_J2)
+        resot_native_activate((id >> 8) >= P_J0 ? RESOT_NATIVE_JOY : RESOT_NATIVE_KEYS,
+                              (int)(id & 0xFF));
+    g_esp += 8;                           /* ret 4 */
 }

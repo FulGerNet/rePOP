@@ -198,6 +198,86 @@ static void irql_track(KIRQL old_level, KIRQL new_level, void *ra)
     }
 }
 
+/* RE-SoT: uniprocessor DISPATCH_LEVEL exclusion.
+ *
+ * The console has one CPU: while a guest thread is at DISPATCH_LEVEL or
+ * above, no DPC and no other thread runs. DirectSound relies on exactly that
+ * when it raises IRQL to edit its stream packet lists, which its APU DPC also
+ * edits. Here DPCs and timer DPCs run on the timer thread and the APU ISR on
+ * the APU thread, concurrently with the title, so the lists could change
+ * under DirectSound's feet; streams (music, speech, cutscene audio) then
+ * stopped for good (user report, 2026-10-17).
+ *
+ * A guest thread owns this lock from its raise to DISPATCH_LEVEL until it
+ * lowers below it; DPC drains and the APU ISR only run while they can take
+ * it. Delivery threads never wait for it. A guest waits a bounded time and
+ * then proceeds unowned (logged), so a leaked raise elsewhere cannot hang the
+ * title. Recursive for the owner, so a DPC that raises nests. */
+static volatile LONG s_disp_owner;
+static LONG s_disp_depth;                       /* owner thread only */
+static XBOX_THREAD_LOCAL int t_disp_guest;      /* this thread's raise owns it */
+
+static int dispatch_try(LONG me)
+{
+    if (s_disp_owner == me) { s_disp_depth++; return 1; }
+    if (InterlockedCompareExchange(&s_disp_owner, me, 0) == 0) {
+        s_disp_depth = 1;
+        return 1;
+    }
+    return 0;
+}
+
+int xbox_DispatchTryEnter(void)
+{
+    return dispatch_try((LONG)GetCurrentThreadId());
+}
+
+void xbox_DispatchLeave(void)
+{
+    if (s_disp_owner != (LONG)GetCurrentThreadId())
+        return;
+    if (--s_disp_depth == 0)
+        InterlockedExchange(&s_disp_owner, 0);
+}
+
+static void dispatch_guest_raise(void)
+{
+    LONG me = (LONG)GetCurrentThreadId();
+    DWORD start;
+    unsigned spins = 0;
+    if (t_disp_guest)
+        return;
+    start = GetTickCount();
+    while (!dispatch_try(me)) {
+        if (GetTickCount() - start > 100) {
+            static volatile LONG told;
+            if (InterlockedIncrement(&told) <= 5)
+                fprintf(stderr, "  [IRQL] tid %lu raised without the dispatch lock"
+                        " (held by tid %ld for >100 ms)\n",
+                        (unsigned long)me, (long)s_disp_owner);
+            return;
+        }
+        if (++spins < 64) SwitchToThread(); else Sleep(1);
+    }
+    t_disp_guest = 1;
+}
+
+static void dispatch_guest_lower(void)
+{
+    if (!t_disp_guest)
+        return;
+    t_disp_guest = 0;
+    xbox_DispatchLeave();
+}
+
+static void dispatch_guest_edge(KIRQL old_level, KIRQL new_level)
+{
+    if (old_level < DISPATCH_LEVEL && new_level >= DISPATCH_LEVEL)
+        dispatch_guest_raise();
+    else if (old_level >= DISPATCH_LEVEL && new_level < DISPATCH_LEVEL)
+        dispatch_guest_lower();
+}
+
 /* Bracket a host-delivered ISR or DPC.
  *
  * The kernel's interrupt and DPC dispatchers put the processor back at the
@@ -246,6 +326,7 @@ KIRQL __fastcall xbox_KfRaiseIrql(KIRQL NewIrql)
     irql_track(old, NewIrql, IRQL_CALLER());
     g_current_irql = NewIrql;
     irql_publish();
+    dispatch_guest_edge(old, NewIrql); /* RE-SoT: uniprocessor exclusion */
     return old;
 }
 
@@ -280,9 +361,13 @@ VOID __fastcall xbox_KfLowerIrql(KIRQL NewIrql)
             g_current_irql, NewIrql);
     }
 
-    irql_track(g_current_irql, NewIrql, IRQL_CALLER());
-    g_current_irql = NewIrql;
-    irql_publish();
+    {
+        KIRQL old = g_current_irql;
+        irql_track(old, NewIrql, IRQL_CALLER());
+        g_current_irql = NewIrql;
+        irql_publish();
+        dispatch_guest_edge(old, NewIrql); /* RE-SoT: uniprocessor exclusion */
+    }
 }
 
 /*
@@ -295,6 +380,7 @@ KIRQL __stdcall xbox_KeRaiseIrqlToDpcLevel(void)
     irql_track(old, DISPATCH_LEVEL, IRQL_CALLER());
     g_current_irql = DISPATCH_LEVEL;
     irql_publish();
+    dispatch_guest_edge(old, DISPATCH_LEVEL); /* RE-SoT: uniprocessor exclusion */
     return old;
 }
 

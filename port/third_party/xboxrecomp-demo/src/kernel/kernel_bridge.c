@@ -92,6 +92,9 @@ static int bridge_va_mapped(uint32_t va, uint32_t bytes)
         return 0;
     if (end <= mapped)
         return 1;
+    /* RE-SoT: the demo CRT can use committed virtual reservations too. */
+    if (guest_vmem_accessible(va, bytes))
+        return 1;
     return va >= XBOX_CONTIG_BASE
         && end <= (uint64_t)XBOX_CONTIG_BASE + XBOX_CONTIG_SIZE;
 }
@@ -1919,6 +1922,16 @@ static void bridge_MmGetPhysicalAddress(void)
      * are static and driven by guest CPU state, and nothing in tests/ can
      * reach them. */
     g_eax = (uint32_t)xbox_MmGetPhysicalAddress((PVOID)(uintptr_t)addr);
+    /* RE-SoT: demo boot reserves then commits virtual memory too. The
+     * opt-in VM tracker has no DMA page mapping: log high addresses so an
+     * A/B run cannot silently alias them through the APU's 26-bit fallback. */
+    if (guest_vmem_accessible(addr, 1)) {
+        static unsigned reports;
+        if (reports++ < 32)
+            fprintf(stderr, "  [VMEM] MmGetPhysicalAddress on extended VA %08X"
+                            " from %08X: DMA translation is not implemented\n",
+                    addr, g_xbox_kernel_caller);
+    }
     /* RE-SoT: DirectSound's buffers outside the contiguous window get an
      * address the audio processor cannot confuse with contiguous memory
      * (see xbox_SetApuPhysicalCallers in xbox_memory_layout.h). */
@@ -2152,7 +2165,13 @@ static void bridge_KeSynchronizeExecution(void)
      * the dummy return address and the argument, so g_esp needs no fixup. */
     g_esp -= 4; BRIDGE_MEM32(g_esp) = context;
     g_esp -= 4; BRIDGE_MEM32(g_esp) = 0;
-    fn();
+    /* RE-SoT: at the interrupt's IRQL on the console, so neither its ISR nor
+     * a DPC can run meanwhile; the raise takes the dispatch lock. */
+    {
+        KIRQL old = xbox_KfRaiseIrql(16);
+        fn();
+        xbox_KfLowerIrql(old);
+    }
     /* g_eax is whatever the routine returned, which is this call's result. */
 }
 
@@ -2215,6 +2234,18 @@ static void dpc_lock(void)
     EnterCriticalSection(&g_dpc_lock);
 }
 
+/* RE-SoT: F6 diagnostics. DPCs queued, run and dropped since start, and the
+ * queue depth now. */
+static volatile LONG g_dpc_diag[3];
+int xbox_DiagDpc(int *out, int n)
+{
+    int i, v[4];
+    v[0] = (int)g_dpc_diag[0]; v[1] = (int)g_dpc_diag[1]; v[2] = (int)g_dpc_diag[2];
+    v[3] = (int)((g_dpc_tail - g_dpc_head + XBOX_MAX_PENDING_DPC) % XBOX_MAX_PENDING_DPC);
+    for (i = 0; i < n && i < 4; i++) out[i] = v[i];
+    return i;
+}
+
 static void bridge_KeInsertQueueDpc(void)
 {
     uint32_t dpc  = STACK_ARG(0);
@@ -2234,6 +2265,7 @@ static void bridge_KeInsertQueueDpc(void)
     next = (tail + 1) % XBOX_MAX_PENDING_DPC;
     if (next == g_dpc_head) {
         LeaveCriticalSection(&g_dpc_lock);
+        InterlockedIncrement(&g_dpc_diag[2]);
         fprintf(stderr, "  [KERNEL] DPC queue full, dropping 0x%08X\n", dpc);
         fflush(stderr);
         g_eax = 0;
@@ -2244,6 +2276,7 @@ static void bridge_KeInsertQueueDpc(void)
     g_dpc_queue[tail].arg2 = arg2;
     BRIDGE_MEM8(dpc + 2) = 1;
     g_dpc_tail = next;
+    InterlockedIncrement(&g_dpc_diag[0]);
     LeaveCriticalSection(&g_dpc_lock);
     g_eax = 1;
 }
@@ -2373,8 +2406,36 @@ static void kernel_vblank_tick(void)
     }
 }
 
+/* RE-SoT: the uniprocessor dispatch lock (kernel_hal.c). */
+extern int  xbox_DispatchTryEnter(void);
+extern void xbox_DispatchLeave(void);
+
+/* RE-SoT: may deferred work run now? Not while a guest thread is at
+ * DISPATCH_LEVEL or above, as on the single-CPU console. After 250 ms of
+ * refusals it runs anyway (once logged): a leaked raise must not stop every
+ * DPC and timer for the rest of the run. Returns 1 owned, 2 forced, 0 no. */
+static int kernel_dispatch_enter(void)
+{
+    static DWORD refused_since;
+    if (xbox_DispatchTryEnter()) {
+        refused_since = 0;
+        return 1;
+    }
+    if (!refused_since)
+        refused_since = GetTickCount() | 1;
+    if (GetTickCount() - refused_since > 250) {
+        static int told;
+        if (told++ < 5)
+            fprintf(stderr, "  [KERNEL] DPCs held off >250 ms by raised IRQL;"
+                            " running them anyway\n");
+        refused_since = 0;
+        return 2;
+    }
+    return 0;
+}
+
 /* Run whatever is queued. Called from the timer thread, which has the guest
- * stack and TIB that a deferred routine needs. */
+ * stack and TIB that a deferred routine needs, with the dispatch lock held. */
 static void kernel_drain_dpcs(void)
 {
     for (;;) {
@@ -2391,8 +2452,10 @@ static void kernel_drain_dpcs(void)
         if (d.dpc)
             BRIDGE_MEM8(d.dpc + 2) = 0;
         LeaveCriticalSection(&g_dpc_lock);
-        if (d.dpc)
+        if (d.dpc) {
+            InterlockedIncrement(&g_dpc_diag[1]);
             kernel_run_dpc(d.dpc, d.arg1, d.arg2);
+        }
     }
 }
 
@@ -2657,18 +2720,22 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
 
     for (;;) {
         long long now;
-        int i;
+        int i, disp;
 
         Sleep(1);              /* RE-SoT: was 10; the vblank clock needs 1 ms */
         kernel_vblank_tick();  /* the GPU's frame clock */
-        kernel_drain_dpcs();   /* deferred work, before due timers */
+        /* RE-SoT: DPCs and timer DPCs wait while the title is at raised IRQL. */
+        disp = kernel_dispatch_enter();
+        if (disp)
+            kernel_drain_dpcs();   /* deferred work, before due timers */
         now = (long long)GetTickCount64();
 
         for (i = 0; i < XBOX_MAX_TIMERS; i++) {
             uint32_t dpc, fired_va;
 
             EnterCriticalSection(&g_timer_lock);
-            if (!g_timers[i].timer_va || now < g_timers[i].due_ms) {
+            if (!g_timers[i].timer_va || now < g_timers[i].due_ms
+                || (!disp && g_timers[i].dpc_va)) {
                 LeaveCriticalSection(&g_timer_lock);
                 continue;
             }
@@ -2694,6 +2761,8 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
                 }
             }
         }
+        if (disp == 1)
+            xbox_DispatchLeave();
     }
 }
 

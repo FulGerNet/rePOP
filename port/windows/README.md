@@ -21,19 +21,25 @@ enabled. Space or controller A skips a Bink video, including videos whose
 original skip permission is disabled. F5 opens/closes the compact translucent top-left panel
 with game FPS and `Current WOW`, the loaded BF world's own name (`None`
 when no world is loaded). Alt+Enter/F11 changes window mode; Alt+F4 exits.
-F6 opens the translucent `reSOT Options` panel. Click Graphics or Controls
-to expand/collapse that section; use the right scrollbar or mouse wheel.
-Graphics contains a live FPS limiter (30/60/120/None), VSync On/Off,
-Post-processing On/Off and
-screen resolution choices. The resolution sets the game window's client
-size; Monitor uses the desktop in a borderless window. The game's own
-timing can still limit FPS. Direct3D 11 is the active renderer; Direct3D 12
-and Vulkan are placeholders marked unavailable. To remove both host limits,
-select FPS None and VSync Off; changing VSync alone keeps the selected FPS cap.
-In Controls, choose Keyboard + Mouse or Joystick and double-click a binding
-to capture a replacement. Esc cancels capture, right-click clears a binding,
-and Reset restores the defaults. Game input is suppressed while F6 is open.
-Settings are saved in `resot-options.ini` beside the executable.
+F6 opens the translucent diagnostics panel. Like F5 it leaves the game
+playable. It shows, twice a second: frame rate and frame time with the
+current graphics settings; executor time (interpreter, draw calls), present
+and title time; draws, triangles, vertices and texture uploads per frame;
+batch reuse hits and misses; guest heap and contiguous memory; the host
+process's memory and CPU; active APU voices (2D, 3D, multipass), streaming
+voices and voices held by a DirectSound lock; DPCs queued and run per second;
+threads at raised IRQL and IRQL transitions per second; the current world;
+and the last lines of this run's log. Ctrl+Shift+C or the Copy button puts
+all of it, with the last 80 log lines, on the clipboard.
+
+The settings are in the game's main menu under `reSOT Options` (demo and
+retail): Graphics has the FPS limiter (30/60/120/None), VSync, post-processing
+and the window resolution (Monitor is a borderless window on the desktop);
+each choice cycles its value. Controls has the keyboard and joystick
+bindings in three pages each; choosing a binding waits for the next key,
+mouse button or joystick input (Esc cancels), and `Reset all bindings`
+restores the defaults. The game's own timing can still limit FPS. Settings
+are saved in `resot-options.ini` beside the executable.
 Logs and shader caches are kept beside the executable. Save data stays in
 that game folder, so keep it writable.
 
@@ -139,7 +145,13 @@ monitor; `-Windowed` opens a window instead, and Alt+Enter or F11 switch
 between the two while it runs. `-NoVsync` stops waiting for the
 display, `-NoAudio` leaves the sound hardware out.
 
-Diagnostics go to `logs/<target>-err.txt`. Useful switches: `-Software` (CPU
+Diagnostics go to `logs/<target>-err.txt`; previous runs are kept in
+`logs/history/` so relaunching does not erase a crash. Retail uses separate
+virtual reservations and committed pages by default; developers can compare
+the previous allocator with `-Set @{RECOMP_EXT_VMA='0'}`. That comparison
+path can exhaust the guest heap during gameplay.
+
+Useful switches: `-Software` (CPU
 rasteriser, for comparison), `-Seconds N`, `-SnapshotEvery S` (frame dumps in
 `logs/fb`), `-Set @{RECOMP_HW_SCALE='3'}` (internal resolution multiple),
 `-Set @{RECOMP_APU_WAV='out.wav'}` (record the sound). More in

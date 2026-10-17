@@ -91,8 +91,23 @@ static const char *resot_game_dir(void)
 static void resot_redirect_log(FILE *stream, const char *path)
 {
     FILE *reopened = NULL, *log;
+    const char *mode = "w";
+    /* Preserve the previous run before opening the familiar latest-log name.
+     * A fresh launch must not erase the crash we are about to investigate. */
+    if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) {
+        SYSTEMTIME now;
+        char archive[MAX_PATH];
+        const char *name = strrchr(path, '\\');
+        GetLocalTime(&now);
+        CreateDirectoryA("logs\\history", NULL);
+        snprintf(archive, sizeof archive,
+                 "logs\\history\\%04u%02u%02u-%02u%02u%02u-%03u-%lu-%s",
+                 now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute,
+                 now.wSecond, now.wMilliseconds, GetCurrentProcessId(), name ? name + 1 : path);
+        if (!CopyFileA(path, archive, TRUE)) mode = "a";
+    }
     if (freopen_s(&reopened, "NUL", "w", stream) != 0) return;
-    log = _fsopen(path, "w", _SH_DENYNO);
+    log = _fsopen(path, mode, _SH_DENYNO);
     if (log) {
         _dup2(_fileno(log), _fileno(stream));
         fclose(log);
@@ -166,7 +181,6 @@ int resot_movie_skip_down(void)
     extern int usb_gamepad_report(int pad, uint8_t *out, int max);
     uint8_t report[20];
     HWND window = (HWND)xbox_FramebufferWindowHandle();
-    if (resot_options_blocks_input()) return 0;
     if (!window || GetForegroundWindow() != window) return 0;
     return xbox_FramebufferKeyDown(VK_SPACE)
         || (usb_gamepad_report(0, report, sizeof report) == 20 && report[4] > 30);
@@ -779,6 +793,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             if (!getenv(defaults[i][0]))
                 _putenv_s(defaults[i][0], defaults[i][1]);
     }
+#if defined(RESOT_DEFAULT_EXT_VMA) && RESOT_DEFAULT_EXT_VMA
+    if (!getenv("RECOMP_EXT_VMA"))
+        _putenv_s("RECOMP_EXT_VMA", "1");
+#endif
     {
         extern void resot_current_wow(char *, size_t);
         extern void xbox_FramebufferSetWowProvider(void (*)(char *, size_t));
@@ -833,6 +851,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     }
 
     printf("=== " RESOT_TARGET_NAME " - static recompilation ===\n");
+    fprintf(stderr, "[SESSION] target=%s pid=%lu ext-vma=%s xbe=%s\n",
+            RESOT_TARGET_ID, GetCurrentProcessId(),
+            getenv("RECOMP_EXT_VMA") ? getenv("RECOMP_EXT_VMA") : "0", RESOT_XBE_SHA256);
     printf("Loading compiled Xbox image...\n");
 
     /* Install VEH handler (first handler in chain) */

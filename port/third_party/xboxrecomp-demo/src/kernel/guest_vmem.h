@@ -42,6 +42,8 @@ int guest_vmem_active(void);
  * with its own path. Otherwise they return 1 with *status set. */
 int guest_vmem_allocate(uint32_t *base, uint32_t *size, uint32_t alloc_type,
                         uint32_t protect, uint32_t *status);
+/* RE-SoT: validates complete committed ranges before passing them to host I/O. */
+int guest_vmem_accessible(uint32_t address, uint32_t bytes);
 int guest_vmem_free(uint32_t *base, uint32_t *size, uint32_t free_type,
                     uint32_t *status);
 /* info[7] = { BaseAddress, AllocationBase, AllocationProtect, RegionSize,

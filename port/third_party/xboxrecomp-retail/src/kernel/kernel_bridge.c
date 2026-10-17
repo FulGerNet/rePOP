@@ -26,6 +26,7 @@
  */
 
 #include "kernel.h"
+#include "xbox_apu_dma.h" /* RE-SoT: DirectSound extended-VA DMA tokens. */
 #include "guest_vmem.h"
 #include "xbox_memory_layout.h"
 #include "recomp_icall_feedback.h"
@@ -52,6 +53,16 @@ extern RECOMP_TLS uint32_t g_eax, g_ecx, g_edx, g_esp;
 extern RECOMP_TLS uint32_t g_ebx, g_esi, g_edi;
 extern uint32_t g_xbox_code_lo, g_xbox_code_hi;
 extern RECOMP_TLS uint32_t g_seh_ebp;
+/* RE-SoT: APCs restore the interrupted floating-point/SIMD context too. */
+extern RECOMP_TLS uint32_t g_ebp, g_fs_base;
+extern RECOMP_TLS int g_df;
+extern RECOMP_TLS double g_fp_stack[8];
+extern RECOMP_TLS int g_fp_top, g_fp_cmp;
+extern RECOMP_TLS uint16_t g_fp_control_word, g_fp_cc;
+extern RECOMP_TLS RecompXmm g_xmm0, g_xmm1, g_xmm2, g_xmm3;
+extern RECOMP_TLS RecompXmm g_xmm4, g_xmm5, g_xmm6, g_xmm7;
+extern RECOMP_TLS RecompMmx g_mm0, g_mm1, g_mm2, g_mm3;
+extern RECOMP_TLS RecompMmx g_mm4, g_mm5, g_mm6, g_mm7;
 extern ptrdiff_t g_xbox_mem_offset;
 
 /* Dispatch table lookup (for function pointer args) */
@@ -91,6 +102,9 @@ static int bridge_va_mapped(uint32_t va, uint32_t bytes)
     if (va < 0x1000)            /* page zero is deliberately unmapped */
         return 0;
     if (end <= mapped)
+        return 1;
+    /* RE-SoT: retail's CRT can put files and counted paths in committed VM. */
+    if (guest_vmem_accessible(va, bytes))
         return 1;
     return va >= XBOX_CONTIG_BASE
         && end <= (uint64_t)XBOX_CONTIG_BASE + XBOX_CONTIG_SIZE;
@@ -1919,6 +1933,20 @@ static void bridge_MmGetPhysicalAddress(void)
      * are static and driven by guest CPU state, and nothing in tests/ can
      * reach them. */
     g_eax = (uint32_t)xbox_MmGetPhysicalAddress((PVOID)(uintptr_t)addr);
+    /* RE-SoT: retail DirectSound at 0x003EA0CC supplies committed high VA
+     * pages (retail-vma-audio-probe.txt). Publish a 28-bit audio-only token
+     * before the APU's masks can alias them into unrelated low RAM. */
+    if (guest_vmem_accessible(addr, 1)
+            && g_xbox_kernel_caller >= s_apu_callers_lo
+            && g_xbox_kernel_caller < s_apu_callers_hi) {
+        static unsigned reports, failures;
+        g_eax = xbox_ApuDmaMap(addr);
+        if (g_eax ? reports++ < 16 : failures++ < 4)
+            fprintf(stderr, "  [APU-DMA] VA %08X -> token %08X from %08X%s\n",
+                addr, g_eax, g_xbox_kernel_caller,
+                g_eax ? "" : " (translation slots exhausted)");
+        return;
+    }
     /* RE-SoT: DirectSound's buffers outside the contiguous window get an
      * address the audio processor cannot confuse with contiguous memory
      * (see xbox_SetApuPhysicalCallers in xbox_memory_layout.h). */
@@ -2152,7 +2180,13 @@ static void bridge_KeSynchronizeExecution(void)
      * the dummy return address and the argument, so g_esp needs no fixup. */
     g_esp -= 4; BRIDGE_MEM32(g_esp) = context;
     g_esp -= 4; BRIDGE_MEM32(g_esp) = 0;
-    fn();
+    /* RE-SoT: at the interrupt's IRQL on the console, so neither its ISR nor
+     * a DPC can run meanwhile; the raise takes the dispatch lock. */
+    {
+        KIRQL old = xbox_KfRaiseIrql(16);
+        fn();
+        xbox_KfLowerIrql(old);
+    }
     /* g_eax is whatever the routine returned, which is this call's result. */
 }
 
@@ -2215,6 +2249,18 @@ static void dpc_lock(void)
     EnterCriticalSection(&g_dpc_lock);
 }
 
+/* RE-SoT: F6 diagnostics. DPCs queued, run and dropped since start, and the
+ * queue depth now. */
+static volatile LONG g_dpc_diag[3];
+int xbox_DiagDpc(int *out, int n)
+{
+    int i, v[4];
+    v[0] = (int)g_dpc_diag[0]; v[1] = (int)g_dpc_diag[1]; v[2] = (int)g_dpc_diag[2];
+    v[3] = (int)((g_dpc_tail - g_dpc_head + XBOX_MAX_PENDING_DPC) % XBOX_MAX_PENDING_DPC);
+    for (i = 0; i < n && i < 4; i++) out[i] = v[i];
+    return i;
+}
+
 static void bridge_KeInsertQueueDpc(void)
 {
     uint32_t dpc  = STACK_ARG(0);
@@ -2234,6 +2280,7 @@ static void bridge_KeInsertQueueDpc(void)
     next = (tail + 1) % XBOX_MAX_PENDING_DPC;
     if (next == g_dpc_head) {
         LeaveCriticalSection(&g_dpc_lock);
+        InterlockedIncrement(&g_dpc_diag[2]);
         fprintf(stderr, "  [KERNEL] DPC queue full, dropping 0x%08X\n", dpc);
         fflush(stderr);
         g_eax = 0;
@@ -2244,6 +2291,7 @@ static void bridge_KeInsertQueueDpc(void)
     g_dpc_queue[tail].arg2 = arg2;
     BRIDGE_MEM8(dpc + 2) = 1;
     g_dpc_tail = next;
+    InterlockedIncrement(&g_dpc_diag[0]);
     LeaveCriticalSection(&g_dpc_lock);
     g_eax = 1;
 }
@@ -2373,8 +2421,36 @@ static void kernel_vblank_tick(void)
     }
 }
 
+/* RE-SoT: the uniprocessor dispatch lock (kernel_hal.c). */
+extern int  xbox_DispatchTryEnter(void);
+extern void xbox_DispatchLeave(void);
+
+/* RE-SoT: may deferred work run now? Not while a guest thread is at
+ * DISPATCH_LEVEL or above, as on the single-CPU console. After 250 ms of
+ * refusals it runs anyway (once logged): a leaked raise must not stop every
+ * DPC and timer for the rest of the run. Returns 1 owned, 2 forced, 0 no. */
+static int kernel_dispatch_enter(void)
+{
+    static DWORD refused_since;
+    if (xbox_DispatchTryEnter()) {
+        refused_since = 0;
+        return 1;
+    }
+    if (!refused_since)
+        refused_since = GetTickCount() | 1;
+    if (GetTickCount() - refused_since > 250) {
+        static int told;
+        if (told++ < 5)
+            fprintf(stderr, "  [KERNEL] DPCs held off >250 ms by raised IRQL;"
+                            " running them anyway\n");
+        refused_since = 0;
+        return 2;
+    }
+    return 0;
+}
+
 /* Run whatever is queued. Called from the timer thread, which has the guest
- * stack and TIB that a deferred routine needs. */
+ * stack and TIB that a deferred routine needs, with the dispatch lock held. */
 static void kernel_drain_dpcs(void)
 {
     for (;;) {
@@ -2391,8 +2467,10 @@ static void kernel_drain_dpcs(void)
         if (d.dpc)
             BRIDGE_MEM8(d.dpc + 2) = 0;
         LeaveCriticalSection(&g_dpc_lock);
-        if (d.dpc)
+        if (d.dpc) {
+            InterlockedIncrement(&g_dpc_diag[1]);
             kernel_run_dpc(d.dpc, d.arg1, d.arg2);
+        }
     }
 }
 
@@ -2657,18 +2735,22 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
 
     for (;;) {
         long long now;
-        int i;
+        int i, disp;
 
         Sleep(1);              /* RE-SoT: was 10; the vblank clock needs 1 ms */
         kernel_vblank_tick();  /* the GPU's frame clock */
-        kernel_drain_dpcs();   /* deferred work, before due timers */
+        /* RE-SoT: DPCs and timer DPCs wait while the title is at raised IRQL. */
+        disp = kernel_dispatch_enter();
+        if (disp)
+            kernel_drain_dpcs();   /* deferred work, before due timers */
         now = (long long)GetTickCount64();
 
         for (i = 0; i < XBOX_MAX_TIMERS; i++) {
             uint32_t dpc, fired_va;
 
             EnterCriticalSection(&g_timer_lock);
-            if (!g_timers[i].timer_va || now < g_timers[i].due_ms) {
+            if (!g_timers[i].timer_va || now < g_timers[i].due_ms
+                || (!disp && g_timers[i].dpc_va)) {
                 LeaveCriticalSection(&g_timer_lock);
                 continue;
             }
@@ -2694,6 +2776,8 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
                 }
             }
         }
+        if (disp == 1)
+            xbox_DispatchLeave();
     }
 }
 
@@ -3259,13 +3343,52 @@ static void deliver_one_apc(uint32_t apc_routine, uint32_t apc_context,
     if (!fn) fn = recomp_lookup_manual(apc_routine);
     if (!fn) fn = recomp_lookup_kernel(apc_routine);
     if (fn) {
+        /* RE-SoT: an I/O APC interrupts the issuing thread; it is not the
+         * return value of NtReadFile/NtWriteFile. Preserve the interrupted
+         * volatile registers and stack, including the NTSTATUS in eax.
+         * Both a lifted stdcall callback and a kernel thunk already consume
+         * their arguments. Adding 12 again used to move the enclosing file
+         * bridge's stack into its caller's frame. */
+        uint32_t saved_eax = g_eax, saved_ecx = g_ecx, saved_edx = g_edx;
+        uint32_t saved_esp = g_esp, saved_seh_ebp = g_seh_ebp;
+        uint32_t saved_ebp = g_ebp, saved_fs_base = g_fs_base;
+        uint32_t saved_ebx = g_ebx, saved_esi = g_esi, saved_edi = g_edi;
+        int saved_df = g_df;
+        uint32_t saved_caller = g_xbox_kernel_caller;
+        double saved_fp[8];
+        int saved_fp_top = g_fp_top, saved_fp_cmp = g_fp_cmp;
+        uint16_t saved_fp_control = g_fp_control_word, saved_fp_cc = g_fp_cc;
+        RecompXmm saved_xmm[8] = {g_xmm0, g_xmm1, g_xmm2, g_xmm3,
+                                  g_xmm4, g_xmm5, g_xmm6, g_xmm7};
+        RecompMmx saved_mm[8] = {g_mm0, g_mm1, g_mm2, g_mm3,
+                                g_mm4, g_mm5, g_mm6, g_mm7};
+        memcpy(saved_fp, g_fp_stack, sizeof(saved_fp));
         /* VOID ApcRoutine(PVOID ApcContext, PIO_STATUS_BLOCK, ULONG) */
         g_esp -= 4; BRIDGE_MEM32(g_esp) = 0;
         g_esp -= 4; BRIDGE_MEM32(g_esp) = iostatus;
         g_esp -= 4; BRIDGE_MEM32(g_esp) = apc_context;
         g_esp -= 4; BRIDGE_MEM32(g_esp) = 0;   /* dummy return address */
         fn();
-        g_esp += 12;
+        g_eax = saved_eax;
+        g_ecx = saved_ecx;
+        g_edx = saved_edx;
+        g_esp = saved_esp;
+        g_seh_ebp = saved_seh_ebp;
+        g_ebp = saved_ebp; g_fs_base = saved_fs_base;
+        g_ebx = saved_ebx; g_esi = saved_esi; g_edi = saved_edi;
+        g_df = saved_df;
+        g_xbox_kernel_caller = saved_caller;
+        memcpy(g_fp_stack, saved_fp, sizeof(saved_fp));
+        g_fp_top = saved_fp_top; g_fp_cmp = saved_fp_cmp;
+        g_fp_control_word = saved_fp_control; g_fp_cc = saved_fp_cc;
+        g_xmm0 = saved_xmm[0]; g_xmm1 = saved_xmm[1];
+        g_xmm2 = saved_xmm[2]; g_xmm3 = saved_xmm[3];
+        g_xmm4 = saved_xmm[4]; g_xmm5 = saved_xmm[5];
+        g_xmm6 = saved_xmm[6]; g_xmm7 = saved_xmm[7];
+        g_mm0 = saved_mm[0]; g_mm1 = saved_mm[1];
+        g_mm2 = saved_mm[2]; g_mm3 = saved_mm[3];
+        g_mm4 = saved_mm[4]; g_mm5 = saved_mm[5];
+        g_mm6 = saved_mm[6]; g_mm7 = saved_mm[7];
     } else {
         uint32_t ord = 0;
         if (apc_routine >= KERNEL_VA_BASE && apc_routine < KERNEL_VA_END) {
@@ -3588,6 +3711,21 @@ static void bridge_NtWriteFile(void)
     }
     g_eax = (uint32_t)xbox_NtWriteFile(handle, NULL, NULL, NULL, &ios,
                 XBOX_TO_NATIVE(buffer_va), length, poff);
+    /* RE-SoT: opt-in checkpoint diagnostics. Use the open handle's path,
+     * not the last path translated on this thread, which may name another file. */
+    if (getenv("RECOMP_TRACE_WRITES")) {
+#if defined(_WIN32)
+        WCHAR path[MAX_PATH] = {0};
+        DWORD count = GetFinalPathNameByHandleW(handle, path, MAX_PATH, 0);
+        if (!count || count >= MAX_PATH) path[0] = 0;
+        fprintf(stderr, "  [WRITE] path=%ls ", path);
+#else
+        fprintf(stderr, "  [WRITE] ");
+#endif
+        fprintf(stderr, "from=%08X buffer=%08X offset=%lld want=%u wrote=%u status=%08X\n",
+                g_xbox_kernel_caller, buffer_va, poff ? (long long)off.QuadPart : -1LL,
+                length, (uint32_t)ios.Information, (uint32_t)ios.Status);
+    }
     bridge_write_iostatus(iostatus, ios.Status, (uint32_t)ios.Information);
     bridge_complete_file_io(STACK_ARG(1), STACK_ARG(2), STACK_ARG(3),
                             iostatus);

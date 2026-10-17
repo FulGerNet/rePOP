@@ -33,7 +33,7 @@
  * the window borderless over its monitor (0: a window; Alt+Enter or F11
  * switches while running).
  *
- * Known gaps: stencil, cube maps (face 0 only), bump-env and dot-product
+ * Known gaps: stencil, bump-env and dot-product
  * texture modes, point/line primitives, guest-visible framebuffer contents
  * (nothing is copied back to guest memory).
  */
@@ -85,6 +85,7 @@ typedef struct {
 
 typedef struct {
     uint32_t offset, fmt, w, h, pitch, palette;
+    uint32_t cube, levels; /* RE-SoT: resource shape is part of the cache key. */
     uint32_t hash, checked_frame, used_frame;
     ID3D11Texture2D *tex;
     ID3D11ShaderResourceView *srv;
@@ -187,6 +188,44 @@ static struct {
     int batch_hud;                       /* RE-SoT: flat upper-left demo HUD */
 } s_hw;
 
+/* RE-SoT: retail XBE 0x000CE32E/0x000CE366 issue visibility tests.
+ * The old hardware path always reported zero because only the software
+ * rasterizer updated zpass_count. Queries cover enabled intervals, not batches. */
+#include "nv2a_hw_visibility.inc"
+static NvHwVisibility s_hw_visibility;
+static void hw_visibility_complete(void *opaque, uint32_t at, uint64_t stamp, uint32_t count)
+{
+    uint8_t *mem = (uint8_t *)xbox_GetMemoryOffset();
+    (void)opaque;
+    memcpy(mem + at, &stamp, 8);
+    memcpy(mem + at + 8, &count, 4);
+    MemoryBarrier(); /* publish count before the guest's completion marker */
+    InterlockedExchange((volatile LONG *)(mem + at + 12), 0);
+}
+static void hw_visibility_poll(void)
+{
+    HRESULT before = s_hw_visibility.device_error;
+    nv_hw_vis_poll(&s_hw_visibility, s_hw.ctx, hw_visibility_complete, NULL);
+    if (SUCCEEDED(before) && FAILED(s_hw_visibility.device_error)) {
+        fprintf(stderr, "[HW] fatal visibility query failure 0x%08lX\n",
+                (unsigned long)s_hw_visibility.device_error);
+        abort(); /* RE-SoT: device failure must not leave the guest polling forever. */
+    }
+}
+static void hw_visibility_method(uint32_t method, uint32_t value, uint64_t stamp)
+{
+    EnterCriticalSection(&s_hw.lock);
+    hw_visibility_poll();
+    if (method == 0x17C8) nv_hw_vis_clear(&s_hw_visibility, s_hw.ctx);
+    else if (method == 0x17CC) nv_hw_vis_enable(&s_hw_visibility, s_hw.ctx, value != 0);
+    else if (!nv_hw_vis_report(&s_hw_visibility, s_hw.ctx, value, stamp)) {
+        fprintf(stderr, "[HW] fatal visibility report allocation failure\n");
+        abort(); /* RE-SoT: no fabricated visibility result on host allocation failure. */
+    }
+    hw_visibility_poll();
+    LeaveCriticalSection(&s_hw.lock);
+}
+
 /* Shared by every vertex shader: the constants and what a vertex leaves as.
  * vs_finish is the tail of the pipeline -- the program's oPos is already in
  * screen space (pixels, depth-buffer z, clip w), so this only maps it to
@@ -264,6 +303,9 @@ static const char s_hw_hlsl[] =
 "  o.uv = p; o.pos = float4(p * float2(2, -2) + float2(-1, 1), 0, 1); return o; }\n"
 "Texture2D tx0 : register(t0); Texture2D tx1 : register(t1);\n"
 "Texture2D tx2 : register(t2); Texture2D tx3 : register(t3);\n"
+/* RE-SoT: separate slots keep 2D blits and cube sampling type-correct. */
+"TextureCube cx0 : register(t4); TextureCube cx1 : register(t5);\n"
+"TextureCube cx2 : register(t6); TextureCube cx3 : register(t7);\n"
 "SamplerState sm0 : register(s0); SamplerState sm1 : register(s1);\n"
 "SamplerState sm2 : register(s2); SamplerState sm3 : register(s3);\n"
 "float4 ps_blit(BO i) : SV_Target { return float4(tx0.Sample(sm0, i.uv).rgb, 1.0); }\n"
@@ -307,10 +349,10 @@ static const char s_hw_hlsl[] =
 "  return float4(0, 0, 0, 0); }\n"
 "float2 proj_uv(float4 tc, float4 sc) { float q = tc.w != 0.0 ? tc.w : 1.0; return tc.xy / q * sc.xy; }\n"
 "float4 ps_main(VO i) : SV_Target {\n"
-"  float4 s0 = tx0.Sample(sm0, proj_uv(i.t0, tscale[0]));\n"
-"  float4 s1 = tx1.Sample(sm1, proj_uv(i.t1, tscale[1]));\n"
-"  float4 s2 = tx2.Sample(sm2, proj_uv(i.t2, tscale[2]));\n"
-"  float4 s3 = tx3.Sample(sm3, proj_uv(i.t3, tscale[3]));\n"
+"  float4 s0 = tscale[0].w > 0.5 ? cx0.Sample(sm0, i.t0.xyz) : tx0.Sample(sm0, proj_uv(i.t0, tscale[0]));\n"
+"  float4 s1 = tscale[1].w > 0.5 ? cx1.Sample(sm1, i.t1.xyz) : tx1.Sample(sm1, proj_uv(i.t1, tscale[1]));\n"
+"  float4 s2 = tscale[2].w > 0.5 ? cx2.Sample(sm2, i.t2.xyz) : tx2.Sample(sm2, proj_uv(i.t2, tscale[2]));\n"
+"  float4 s3 = tscale[3].w > 0.5 ? cx3.Sample(sm3, i.t3.xyz) : tx3.Sample(sm3, proj_uv(i.t3, tscale[3]));\n"
 "  bool keep = true; uint sp = ctl.y; uint cpm = atest.w;\n"
 "  float4 R[16];\n"
 "  for (int k = 0; k < 16; k++) R[k] = float4(0, 0, 0, 0);\n"
@@ -883,7 +925,8 @@ static uint32_t hw_tex_bytes(const Texture *t)
 static uint32_t hw_tex_hash(const Texture *t)
 {
     const uint8_t *p = (const uint8_t *)xbox_GetMemoryOffset() + t->offset;
-    uint32_t n = hw_tex_bytes(t) / 4, step = n > 2048 ? n / 2048 : 1, i;
+    /* RE-SoT: hash every face; rewriting a nonzero face must invalidate it. */
+    uint32_t n = (t->cube ? 6 * tex_face_stride(t) : hw_tex_bytes(t)) / 4, step = n > 2048 ? n / 2048 : 1, i;
     uint32_t h = 2166136261u;
     for (i = 0; i < n; i += step)
         h = (h ^ ((const uint32_t *)p)[i]) * 16777619u;
@@ -909,7 +952,7 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
 {
     const Texture *t = &s_gpu.texs[stage];
     HwTexture *c = NULL, *victim = NULL;
-    uint32_t i, slot, hash, x, y, *px;
+    uint32_t i, slot, hash, x, y, face, face_stride, *px;
     D3D11_TEXTURE2D_DESC td;
     int mips;
 
@@ -924,7 +967,7 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
         HwSurface *best = NULL;
         for (i = 0; i < HW_MAX_SURFACES; i++) {
             HwSurface *c2 = &s_hw.surf[i];
-            if (!c2->tex || c2->offset != t->offset)
+            if (t->cube || !c2->tex || c2->offset != t->offset)
                 continue;
             if (!best || (c2->w == t->width && best->w != t->width)
                 || ((c2->w == t->width) == (best->w == t->width)
@@ -934,7 +977,7 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
         if (best)
             return best == target ? NULL : best->srv;
     }
-    if (!hw_mem_ok(t->offset, hw_tex_bytes(t)))
+    if (!hw_mem_ok(t->offset, t->cube ? 6 * tex_face_stride(t) : hw_tex_bytes(t)))
         return NULL;
 
     slot = (t->offset >> 6) * 2654435761u >> 22;      /* 10 bits */
@@ -942,7 +985,8 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
         HwTexture *e = &s_hw.texs[(slot + i) & (HW_MAX_TEXTURES - 1)];
         if (e->srv && e->offset == t->offset && e->fmt == t->color
             && e->w == t->width && e->h == t->height && e->pitch == t->pitch
-            && e->palette == t->palette) {
+            && e->palette == t->palette && e->cube == (uint32_t)t->cube
+            && e->levels == t->levels) {
             c = e;
             break;
         }
@@ -967,25 +1011,29 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
         memset(c, 0, sizeof *c);
     }
 
-    px = (uint32_t *)malloc((size_t)t->width * t->height * 4);
+    px = (uint32_t *)malloc((size_t)t->width * t->height * 4 * (t->cube ? 6 : 1));
     if (!px)
         return NULL;
+    /* RE-SoT: NV2A stores each face with its mip chain and 128-byte alignment. */
+    face_stride = t->cube ? tex_face_stride(t) : 0;
+    for (face = 0; face < (t->cube ? 6u : 1u); face++)
     for (y = 0; y < t->height; y++)
         for (x = 0; x < t->width; x++) {
             uint32_t argb = 0xFFFFFFFFu;
-            if (!sample_tex(t, 0, x, y, &argb))
+            if (!sample_tex(t, face * face_stride, x, y, &argb))
                 argb = 0xFFFFFFFFu;
-            px[(size_t)y * t->width + x] = argb;
+            px[((size_t)face * t->height + y) * t->width + x] = argb;
         }
     mips = t->levels > 1 && tex_size_from_format(t->color);
     if (!c->tex) {
         memset(&td, 0, sizeof td);
         td.Width = t->width; td.Height = t->height;
-        td.MipLevels = mips ? 0 : 1; td.ArraySize = 1;
+        td.MipLevels = mips ? 0 : 1; td.ArraySize = t->cube ? 6 : 1;
         td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
         td.SampleDesc.Count = 1;
         td.BindFlags = D3D11_BIND_SHADER_RESOURCE | (mips ? D3D11_BIND_RENDER_TARGET : 0);
-        td.MiscFlags = mips ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0;
+        td.MiscFlags = (mips ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0)
+                     | (t->cube ? D3D11_RESOURCE_MISC_TEXTURECUBE : 0);
         if (FAILED(ID3D11Device_CreateTexture2D(s_hw.dev, &td, NULL, &c->tex))) {
             free(px);
             memset(c, 0, sizeof *c);
@@ -994,15 +1042,24 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
         ID3D11Device_CreateShaderResourceView(s_hw.dev, (ID3D11Resource *)c->tex,
                                               NULL, &c->srv);
     }
-    ID3D11DeviceContext_UpdateSubresource(s_hw.ctx, (ID3D11Resource *)c->tex, 0,
-                                          NULL, px, t->width * 4, 0);
+    /* RE-SoT: subresources are mip + face * host mip count. */
+    ID3D11Texture2D_GetDesc(c->tex, &td);
+    for (face = 0; face < (t->cube ? 6u : 1u); face++)
+        ID3D11DeviceContext_UpdateSubresource(s_hw.ctx, (ID3D11Resource *)c->tex,
+            face * td.MipLevels, NULL, px + (size_t)face * t->width * t->height,
+            t->width * 4, 0);
     if (mips)
         ID3D11DeviceContext_GenerateMips(s_hw.ctx, c->srv);
     free(px);
     c->offset = t->offset; c->fmt = t->color; c->w = t->width; c->h = t->height;
     c->pitch = t->pitch; c->palette = t->palette;
+    c->cube = t->cube; c->levels = t->levels; /* RE-SoT: cache resource shape. */
     c->hash = hash;
     c->checked_frame = c->used_frame = s_hw.frame;
+    /* RE-SoT: make real cube use observable in an explicitly requested trace. */
+    if (t->cube && s_ftrace == 2)
+        fprintf(stderr, "  [HW-CUBE] stage=%d offset=%08X size=%ux%u stride=%u levels=%u\n",
+            stage, t->offset, t->width, t->height, face_stride, t->levels);
     s_hw.tex_uploads++;
     return c->srv;
 }
@@ -1141,7 +1198,7 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     D3D11_MAPPED_SUBRESOURCE map;
     D3D11_VIEWPORT vp;
     D3D11_RECT sc;
-    ID3D11ShaderResourceView *srv[4];
+    ID3D11ShaderResourceView *srv[8] = {0}; /* RE-SoT: four 2D and four cube slots. */
     ID3D11SamplerState *smp[4];
     HwVsConst *vc = &s_hw.vs_last;
     /* The header (vp, fogp, ws, pad) and then cur[]: everything in HwVsConst
@@ -1207,6 +1264,12 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
         pc.tscale[st][2] = srv[st] ? 1.0f : 0.0f;
         if (!srv[st])
             srv[st] = s_hw.white;
+        /* RE-SoT: cube directions use xyz without projective division. */
+        pc.tscale[st][3] = t->cube && pc.tscale[st][2] > 0.5f ? 1.0f : 0.0f;
+        if (pc.tscale[st][3] > 0.5f) {
+            srv[st + 4] = srv[st];
+            srv[st] = s_hw.white;
+        }
         smp[st] = hw_sampler(t);
     }
     /* Consecutive batches mostly share their combiner set-up. */
@@ -1282,9 +1345,18 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     ID3D11DeviceContext_VSSetConstantBuffers(s_hw.ctx, 0, 1, &s_hw.vs_cb);
     ID3D11DeviceContext_PSSetShader(s_hw.ctx, s_hw.ps, NULL, 0);
     ID3D11DeviceContext_PSSetConstantBuffers(s_hw.ctx, 0, 1, &s_hw.ps_cb);
-    ID3D11DeviceContext_PSSetShaderResources(s_hw.ctx, 0, 4, srv);
+    ID3D11DeviceContext_PSSetShaderResources(s_hw.ctx, 0, 8, srv);
     ID3D11DeviceContext_PSSetSamplers(s_hw.ctx, 0, 4, smp);
 
+    /* RE-SoT: normalize supersampled/widened host pixels to guest pixels. */
+    {
+        double pixel_scale = ((double)hw_px(s->w, s->sc) / s->w) * s->sc;
+        hw_visibility_poll();
+        if (!nv_hw_vis_draw(&s_hw_visibility, s_hw.dev, s_hw.ctx, pixel_scale)) {
+            fprintf(stderr, "[HW] fatal visibility query creation/allocation failure\n");
+            abort(); /* RE-SoT: propagate terminal renderer failure immediately. */
+        }
+    }
     s->drawn_frame = s_hw.frame;
     area = s->w * s->h;
     if (!s_hw.biggest || area >= s_hw.biggest_area) {
@@ -1422,6 +1494,10 @@ static void hw_trace_end(void)
 /* Reserve `bytes` at the ring's write position (aligned to `align`), wrapping
  * with a discard when it does not fit. The caller writes at *off and then
  * advances it by what it used. */
+/* RE-SoT: a DISCARD map invalidates everything earlier in that ring; batch
+ * reuse (hw_reuse_find) only trusts ranges written in the current generation. */
+static uint32_t s_hw_vb_gen = 1, s_hw_ib_gen = 1;
+
 static int hw_ring_map(ID3D11Buffer *buf, uint32_t *off, uint32_t size,
                        uint32_t bytes, uint32_t align, D3D11_MAPPED_SUBRESOURCE *map)
 {
@@ -1433,6 +1509,8 @@ static int hw_ring_map(ID3D11Buffer *buf, uint32_t *off, uint32_t size,
     if (*off == 0 || *off + bytes > size) {
         *off = 0;
         how = D3D11_MAP_WRITE_DISCARD;
+        if (buf == s_hw.vb) s_hw_vb_gen++;
+        else if (buf == s_hw.ib) s_hw_ib_gen++;
     }
     return SUCCEEDED(ID3D11DeviceContext_Map(s_hw.ctx, (ID3D11Resource *)buf, 0,
                                              how, 0, map));
@@ -1601,6 +1679,89 @@ static int hw_skip_postprocess(const Nv2aVshOutput *v, uint32_t n)
     return !enabled;
 }
 
+/* RE-SoT: batch reuse, ported from the demo copy (2026-10-17). There, the
+ * first level's vegetation is ~1290 instances per frame of the same three
+ * batches (same arrays and index list, only instance constants differ), and
+ * re-converting them held the executor to 26 fps; reuse measured 43 fps.
+ * Retail's own instancing was not profiled before this port. A batch whose index list,
+ * attribute layout and sampled source bytes match one already uploaded in
+ * this frame and ring generation draws from those host ranges instead. */
+#define HW_REUSE_ENTRIES 1024
+typedef struct {
+    uint64_t key;
+    uint32_t content, frame, vb_gen, ib_gen, vb_off, ib_off, ni, n, prim, nslot;
+    VertexAttr attr[HW_VSP_SLOTS];
+} HwReuse;
+static HwReuse s_hw_reuse[HW_REUSE_ENTRIES];
+static uint64_t s_hw_reuse_hits, s_hw_reuse_misses;
+
+static uint32_t hw_attr_bytes(const VertexAttr *a)
+{
+    switch (a->type) {
+    case 0: case 6: return 4;
+    case 4:         return a->size;
+    case 1: case 5: return 2 * a->size;
+    default:        return 4 * a->size;
+    }
+}
+
+/* Key: primitive, layout and the whole index list. Content: every dword of
+ * a small source range, 64 spread dwords of a large one. Returns 0 when the
+ * batch cannot be checked (inline arrays, memory outside the guest RAM). */
+static int hw_reuse_key(const uint8_t *slot_attr, uint32_t nslot,
+                        uint64_t *key, uint32_t *content)
+{
+    const uint8_t *mem = (const uint8_t *)xbox_GetMemoryOffset();
+    uint64_t h = 1469598103934665603ull;
+    uint32_t c = 2166136261u, i, a, n = s_gpu.idx_count, top = 0;
+    if (s_gpu.inline_active)
+        return 0;
+    for (i = 0; i < n; i++) {
+        uint16_t ix = s_gpu.idx[i];
+        if (ix > top) top = ix;
+        h = (h ^ ix) * 1099511628211ull;
+    }
+    h = (h ^ ((uint64_t)n << 8 | s_gpu.prim)) * 1099511628211ull;
+    for (a = 0; a < nslot; a++) {
+        const VertexAttr *at = &s_gpu.attr[slot_attr[a]];
+        uint32_t span = top * at->stride + hw_attr_bytes(at), words, step, w;
+        const uint8_t *p;
+        h = (h ^ slot_attr[a]) * 1099511628211ull;
+        h = (h ^ at->offset) * 1099511628211ull;
+        h = (h ^ (at->type << 24 | at->size << 16 | at->stride)) * 1099511628211ull;
+        if (!hw_mem_ok(at->offset, span))
+            return 0;
+        p = mem + at->offset;
+        words = span / 4;
+        step = words > 4096 / 4 ? words / 64 : 1;
+        for (w = 0; w < words; w += step)
+            c = (c ^ ((const uint32_t *)p)[w]) * 16777619u;
+        if (words) c = (c ^ ((const uint32_t *)p)[words - 1]) * 16777619u;
+    }
+    *key = h;
+    *content = c;
+    return 1;
+}
+
+static HwReuse *hw_reuse_slot(uint64_t key)
+{
+    return &s_hw_reuse[(uint32_t)(key ^ (key >> 32)) & (HW_REUSE_ENTRIES - 1)];
+}
+
+static int hw_reuse_match(const HwReuse *e, uint64_t key, uint32_t content,
+                          const uint8_t *slot_attr, uint32_t nslot)
+{
+    uint32_t a;
+    if (e->key != key || e->content != content || e->frame != s_hw.frame
+        || e->vb_gen != s_hw_vb_gen || e->ib_gen != s_hw_ib_gen
+        || e->n != s_gpu.idx_count || e->prim != s_gpu.prim || e->nslot != nslot)
+        return 0;
+    for (a = 0; a < nslot; a++)
+        if (memcmp(&e->attr[a], &s_gpu.attr[slot_attr[a]], sizeof e->attr[a]))
+            return 0;
+    return 1;
+}
+
 /* Draw the current batch with its vertex program running on the GPU: the
  * distinct vertices of the batch go up as raw attributes, the primitive as an
  * index list. Returns 0 when the batch has to take the interpreter path. */
@@ -1616,6 +1777,10 @@ static int hw_draw_program_batch(void)
     float (*vout)[4];
     uint16_t *iout;
     LARGE_INTEGER t0, t1;
+    HwReuse *reuse = NULL;                  /* RE-SoT: see HwReuse */
+    uint64_t reuse_key = 0;
+    uint32_t reuse_content = 0;
+    int reuse_ok;
 
     if (s_hw.cpu_vsh || n < 3 || n > NV_MAX_INDICES)
         return 0;
@@ -1722,9 +1887,36 @@ static int hw_draw_program_batch(void)
     }
 
     QueryPerformanceCounter(&t0);
+    reuse_ok = hw_reuse_key(slot_attr, nslot, &reuse_key, &reuse_content);
     EnterCriticalSection(&s_hw.lock);
-    if (!(bound = hw_bind_draw_state(prog))
-        || !hw_ring_map(s_hw.vb, &s_hw.vb_off, HW_VB_BYTES,
+    if (!(bound = hw_bind_draw_state(prog))) {
+        LeaveCriticalSection(&s_hw.lock);
+        return 1;
+    }
+    /* RE-SoT: an identical batch already uploaded this frame (see HwReuse). */
+    reuse = reuse_ok ? hw_reuse_slot(reuse_key) : NULL;
+    if (reuse && hw_reuse_match(reuse, reuse_key, reuse_content, slot_attr, nslot)) {
+        s_hw_reuse_hits++;
+        if (reuse->ni) {
+            ID3D11DeviceContext_IASetIndexBuffer(s_hw.ctx, s_hw.ib, DXGI_FORMAT_R16_UINT, 0);
+            hw_glow_dump_check(bound, 0);
+            hw_trace_begin();
+            ID3D11DeviceContext_DrawIndexed(s_hw.ctx, reuse->ni, reuse->ib_off / 2,
+                                            (INT)(reuse->vb_off / (uint32_t)sizeof(HwVertex)));
+            hw_trace_end();
+            s_hw.draws++;
+            s_hw.gpu_vsh_batches++;
+            s_hw.tris += reuse->ni / 3;
+            s_gpu.tris_drawn += reuse->ni / 3;
+            s_gpu.xf_drawn += reuse->ni / 3;
+        }
+        LeaveCriticalSection(&s_hw.lock);
+        QueryPerformanceCounter(&t1);
+        s_hw_stat_draw_ticks += (uint64_t)(t1.QuadPart - t0.QuadPart);
+        return 1;
+    }
+    if (reuse) s_hw_reuse_misses++;
+    if (!hw_ring_map(s_hw.vb, &s_hw.vb_off, HW_VB_BYTES,
                         n * (uint32_t)sizeof(HwVertex), sizeof(HwVertex), &vmap)) {
         LeaveCriticalSection(&s_hw.lock);
         return 1;
@@ -1800,6 +1992,16 @@ static int hw_draw_program_batch(void)
         s_hw.tris += ni / 3;
         s_gpu.tris_drawn += ni / 3;
         s_gpu.xf_drawn += ni / 3;
+    }
+    if (reuse) {
+        /* Both maps are done, so these generations own the ranges just written. */
+        reuse->key = reuse_key; reuse->content = reuse_content;
+        reuse->frame = s_hw.frame;
+        reuse->vb_gen = s_hw_vb_gen; reuse->ib_gen = s_hw_ib_gen;
+        reuse->vb_off = s_hw.vb_off; reuse->ib_off = s_hw.ib_off;
+        reuse->ni = ni; reuse->n = n; reuse->prim = s_gpu.prim; reuse->nslot = nslot;
+        for (a = 0; a < nslot; a++)
+            reuse->attr[a] = s_gpu.attr[slot_attr[a]];
     }
     s_hw.vb_off += nv * (uint32_t)sizeof(HwVertex);
     s_hw.ib_off += ni * 2;
@@ -1923,6 +2125,7 @@ static void hw_clear(uint32_t param)
     uint32_t x1 = s_gpu.clip_x + s_gpu.clip_w, y1 = s_gpu.clip_y + s_gpu.clip_h;
 
     EnterCriticalSection(&s_hw.lock);
+    nv_hw_vis_end(&s_hw_visibility, s_hw.ctx); /* RE-SoT: exclude clear draws. */
     s = hw_surface();
     if (!s) {
         LeaveCriticalSection(&s_hw.lock);
@@ -2019,8 +2222,9 @@ static void hw_compose_locked(void) /* RE-SoT: snapshot before post-flip fences.
     uint32_t ow, oh, orect[4], oserial;
     float px, py, pw, ph;
     static const float black[4] = {0, 0, 0, 1}, bf[4] = {0, 0, 0, 0};
-    ID3D11ShaderResourceView *none[4] = {NULL, NULL, NULL, NULL};
+    ID3D11ShaderResourceView *none[8] = {0}; /* RE-SoT: unbind cubes too. */
 
+    nv_hw_vis_end(&s_hw_visibility, s_hw.ctx); /* RE-SoT: exclude host UI/blits. */
     hw_resize_backbuffer();
     if (!s_hw.bb_rtv)
         return;
@@ -2119,7 +2323,7 @@ static void hw_compose_locked(void) /* RE-SoT: snapshot before post-flip fences.
             ID3D11DeviceContext_Draw(s_hw.ctx, 3, 0);
         }
     }
-    ID3D11DeviceContext_PSSetShaderResources(s_hw.ctx, 0, 4, none);
+    ID3D11DeviceContext_PSSetShaderResources(s_hw.ctx, 0, 8, none);
 }
 
 /* RE-SoT: composition and the host wait are separate. The backbuffer holds
@@ -2163,7 +2367,12 @@ static void hw_present_locked(int vsync)
  * The completed picture was already captured into the swapchain at the flip. */
 void nv2a_hw_flush_present(void)
 {
-    if (!s_hw.ok || !s_hw.pending_present) return;
+    if (!s_hw.ok) return;
+    /* RE-SoT: visibility reports also progress in submissions without flips. */
+    EnterCriticalSection(&s_hw.lock);
+    hw_visibility_poll();
+    LeaveCriticalSection(&s_hw.lock);
+    if (!s_hw.pending_present) return;
     xbox_FramebufferLimitFrame(); /* never sleep while holding the D3D lock */
     EnterCriticalSection(&s_hw.lock);
     if (s_hw.pending_present) {
@@ -2172,6 +2381,62 @@ void nv2a_hw_flush_present(void)
         s_hw.last_flip_ms = GetTickCount();
     }
     LeaveCriticalSection(&s_hw.lock);
+}
+
+/* RE-SoT: the F6 diagnostics panel reads a half-second snapshot of what a
+ * frame costs (the same quantities as the five-second [HW] report): fps,
+ * frame ms, draws, GPU- and CPU-transformed batches, triangles, texture
+ * uploads, vertices, interpreter ms, draw-call ms, executor ms, present ms,
+ * title ms, then the cumulative batch reuse hits and misses. Doubles written
+ * by the flip and read by the window thread; a torn read shows one stale
+ * number for half a second. */
+#define HW_DIAG_N 15
+static volatile double s_hw_diag[HW_DIAG_N];
+int xbox_DiagRenderer(double *out, int n)
+{
+    int i;
+    for (i = 0; i < n && i < HW_DIAG_N; i++) out[i] = s_hw_diag[i];
+    return i;
+}
+
+static void hw_diag_sample(void)
+{
+    static DWORD t0;
+    static uint32_t f0;
+    static uint64_t d0, tr0, up0, vs0, dr0, vx0, pr0, ex0, gb0, cb0;
+    DWORD now = GetTickCount();
+    LARGE_INTEGER qf;
+    uint32_t frames;
+    if (t0 && now - t0 < 500) return;
+    frames = s_hw.frame - f0;
+    QueryPerformanceFrequency(&qf);
+    if (t0 && frames) {
+        double ms = 1000.0 / (double)qf.QuadPart / frames;
+        double frame_ms = (double)(now - t0) / frames;
+        double exec_ms = (double)(g_nv2a_exec_ticks - ex0) * ms;
+        double present_ms = (double)(s_hw.present_ticks - pr0) * ms;
+        int defer = xbox_FramebufferDeferPresent();
+        s_hw_diag[0] = frames * 1000.0 / (now - t0);
+        s_hw_diag[1] = frame_ms;
+        s_hw_diag[2] = (double)(s_hw.draws - d0) / frames;
+        s_hw_diag[3] = (double)(s_hw.gpu_vsh_batches - gb0) / frames;
+        s_hw_diag[4] = (double)(s_hw.cpu_vsh_batches - cb0) / frames;
+        s_hw_diag[5] = (double)(s_hw.tris - tr0) / frames;
+        s_hw_diag[6] = (double)(s_hw.tex_uploads - up0) / frames;
+        s_hw_diag[7] = (double)(s_hw_stat_verts - vx0) / frames;
+        s_hw_diag[8] = (double)(s_hw_stat_vsh_ticks - vs0) * ms;
+        s_hw_diag[9] = (double)(s_hw_stat_draw_ticks - dr0) * ms;
+        s_hw_diag[10] = exec_ms - (defer ? 0.0 : present_ms);
+        s_hw_diag[11] = present_ms;
+        s_hw_diag[12] = frame_ms - exec_ms - (defer ? present_ms : 0.0);
+    }
+    s_hw_diag[13] = (double)s_hw_reuse_hits;
+    s_hw_diag[14] = (double)s_hw_reuse_misses;
+    t0 = now; f0 = s_hw.frame;
+    d0 = s_hw.draws; tr0 = s_hw.tris; up0 = s_hw.tex_uploads;
+    vs0 = s_hw_stat_vsh_ticks; dr0 = s_hw_stat_draw_ticks; vx0 = s_hw_stat_verts;
+    pr0 = s_hw.present_ticks; ex0 = g_nv2a_exec_ticks;
+    gb0 = s_hw.gpu_vsh_batches; cb0 = s_hw.cpu_vsh_batches;
 }
 
 /* NV097_FLIP_STALL: the frame the title just finished becomes the one shown. */
@@ -2186,6 +2451,7 @@ static void hw_flip(void)
     s_hw.biggest = NULL;
     s_hw.biggest_area = 0;
     s_hw.frame++;
+    hw_diag_sample(); /* RE-SoT: F6 diagnostics */
     {
         /* Every five seconds: what a frame costs, so "slow" has a reason. */
         static DWORD t0;
@@ -2221,6 +2487,10 @@ static void hw_flip(void)
                         exec_ms - (xbox_FramebufferDeferPresent() ? 0.0 : present_ms),
                         present_ms, frame_ms - exec_ms
                             - (xbox_FramebufferDeferPresent() ? present_ms : 0.0));
+                /* RE-SoT: cumulative batch reuse (HwReuse). */
+                fprintf(stderr, "  [HW] batch reuse: %llu hits, %llu misses\n",
+                        (unsigned long long)s_hw_reuse_hits,
+                        (unsigned long long)s_hw_reuse_misses);
             }
             t0 = now; f0 = s_hw.frame;
             d0 = s_hw.draws; tr0 = s_hw.tris; up0 = s_hw.tex_uploads;
@@ -2245,6 +2515,11 @@ void nv2a_hw_idle_present(void)
 {
     if (!s_hw.ok)
         return;
+    /* RE-SoT: the title may be polling a report without submitting another
+     * frame. Nonblocking polling here lets that report finish independently. */
+    EnterCriticalSection(&s_hw.lock);
+    hw_visibility_poll();
+    LeaveCriticalSection(&s_hw.lock);
     if (GetTickCount() - s_hw.last_flip_ms < 100)
         return;
     EnterCriticalSection(&s_hw.lock);
@@ -2309,6 +2584,7 @@ static int hw_method(uint32_t method, uint32_t param)
 
 #else  /* !_WIN32 */
 static int  hw_active(void) { return 0; }
+static void hw_visibility_method(uint32_t m, uint32_t v, uint64_t t) { (void)m; (void)v; (void)t; }
 static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n) { (void)v; (void)n; }
 static int  hw_draw_program_batch(void) { return 0; }
 static void hw_clear(uint32_t param) { (void)param; }
@@ -2316,5 +2592,6 @@ static void hw_flip(void) {}
 static int  hw_method(uint32_t method, uint32_t param) { (void)method; (void)param; return 0; }
 void nv2a_hw_idle_present(void) {}
 void nv2a_hw_flush_present(void) {} /* RE-SoT: no hardware pending frame. */
+int  xbox_DiagRenderer(double *out, int n) { (void)out; (void)n; return 0; } /* RE-SoT */
 int  nv2a_hw_readback(uint32_t *dst, uint32_t w, uint32_t h) { (void)dst; (void)w; (void)h; return 0; }
 #endif

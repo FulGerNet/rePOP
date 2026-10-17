@@ -90,6 +90,7 @@ function(resot_add_target id exe_name)
         port/windows/src/main.c
         port/windows/src/scene.c
         port/windows/src/options.c
+        port/windows/src/diag.c
         port/game/recomp_manual.c
         "${guest_resource}"
         ${hooks}

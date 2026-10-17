@@ -42,9 +42,13 @@ int guest_vmem_active(void);
  * with its own path. Otherwise they return 1 with *status set. */
 int guest_vmem_allocate(uint32_t *base, uint32_t *size, uint32_t alloc_type,
                         uint32_t protect, uint32_t *status);
+/* RE-SoT: a null-base pure MEM_RESERVE also selects a tracked first-fit range.
+ * Commit-only/null requests retain the heap path. Still opt-in EXT_VMA. */
 int guest_vmem_free(uint32_t *base, uint32_t *size, uint32_t free_type,
                     uint32_t *status);
 /* info[7] = { BaseAddress, AllocationBase, AllocationProtect, RegionSize,
  *             State, Protect, Type } -- the 28-byte guest
  *             MEMORY_BASIC_INFORMATION layout. */
 int guest_vmem_query(uint32_t address, uint32_t info[7]);
+/* RE-SoT: true only if every page touched by a host I/O buffer is committed. */
+int guest_vmem_accessible(uint32_t address, uint32_t bytes);

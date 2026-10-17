@@ -23,6 +23,7 @@
 #include "apu.h"
 #include "apu_xaudio2.h"
 #include "fpconv.h"
+#include "../kernel/xbox_apu_dma.h" /* RE-SoT: extended-VA audio DMA tokens. */
 #include "../kernel/xbox_memory_layout.h"   /* XBOX_WORKER_STACK_TOP */
 
 /* ============================================================
@@ -73,9 +74,51 @@ void mcpx_debug_end_frame(void) {}
 extern uint32_t g_xbox_image_lo, g_xbox_image_hi;
 extern uint32_t xbox_ContiguousAllocatedBytes(void);
 
+/* RE-SoT: the kernel publishes mappings while the mixer resolves SGE pages.
+ * A read/write lock avoids publishing partially initialized mappings. */
+static xbox_apu_dma_table s_apu_dma;
+static SRWLOCK s_apu_dma_lock = SRWLOCK_INIT;
+
+uint32_t xbox_ApuDmaMap(uint32_t va)
+{
+    uint32_t token;
+    AcquireSRWLockExclusive(&s_apu_dma_lock);
+    token = xbox_apu_dma_map(&s_apu_dma, va);
+    ReleaseSRWLockExclusive(&s_apu_dma_lock);
+    return token;
+}
+uint32_t xbox_ApuDmaResolve(uint32_t token)
+{
+    uint32_t va;
+    AcquireSRWLockShared(&s_apu_dma_lock);
+    va = xbox_apu_dma_resolve(&s_apu_dma, token);
+    ReleaseSRWLockShared(&s_apu_dma_lock);
+    return va;
+}
+void xbox_ApuDmaUnmap(uint32_t va, uint32_t bytes)
+{
+    AcquireSRWLockExclusive(&s_apu_dma_lock);
+    xbox_apu_dma_unmap(&s_apu_dma, va, bytes);
+    ReleaseSRWLockExclusive(&s_apu_dma_lock);
+}
+
 uint8_t *mcpx_apu_phys(uint64_t addr)
 {
     uint32_t a = (uint32_t)addr & 0x0FFFFFFFu;
+    /* RE-SoT: SG entries for high guest VA must resolve before 26-bit fallback.
+     * Resolve to the original VA so a multi-byte sample/ADPCM memcpy crossing
+     * a page boundary still sees adjacent guest bytes, not adjacent tokens. */
+    if (a >= XBOX_APU_DMA_BASE && a < XBOX_APU_DMA_END) {
+        uint32_t va = xbox_ApuDmaResolve(a);
+        if (va) return g_apu_ram_ptr + va;
+        /* RE-SoT: a revoked/unassigned token is not low console RAM. A
+         * bounded scratch span makes stale bus reads silent and isolates
+         * stale bus writes, including reads crossing the page boundary. */
+        {
+            static uint8_t unmapped_dma[8192];
+            return unmapped_dma + (a & 4095u);
+        }
+    }
     /* RE-SoT: an address DirectSound was given for ordinary guest RAM
      * (kernel_bridge.c, MmGetPhysicalAddress): unambiguous, so first. */
     if (a >= XBOX_APU_HEAP_ALIAS && a < XBOX_APU_HEAP_ALIAS + 0x04000000u)
@@ -120,8 +163,9 @@ extern int  xbox_worker_stack_alloc(void);
 extern void xbox_worker_stack_free(int slot);
 extern uint32_t xbox_GetConnectedInterrupt(uint32_t vector);
 extern uint32_t xbox_AllocThreadTib(void);
-extern int xbox_IrqlBlocksInterrupts(void);
 extern int xbox_IrqlEnterInterrupt(int level);
+extern int  xbox_DispatchTryEnter(void);  /* RE-SoT: kernel_hal.c */
+extern void xbox_DispatchLeave(void);
 extern void xbox_IrqlLeaveInterrupt(int saved);
 #if defined(_MSC_VER)
 #  define APU_TLS __declspec(thread)
@@ -143,31 +187,43 @@ static void apu_deliver_irq(MCPXAPUState *d)
     static unsigned held_off;
     uint32_t kint, routine, context;
     apu_guest_fn fn;
-    int slot;
+    int slot, owned;
 
     if (!InterlockedCompareExchange(&s_irq_line, 0, 0))
         return;
-    if (xbox_IrqlBlocksInterrupts() && ++held_off <= 50)
+    /* RE-SoT: the ISR runs only while no guest thread is at raised IRQL
+     * (the dispatch lock, kernel_hal.c), and holds the lock while it runs so
+     * DirectSound cannot raise and edit its lists halfway through. The old
+     * 50-poll (~33 ms) escape could admit the ISR while DirectSound was at
+     * raised IRQL; it now takes 300 polls (~200 ms) and is logged. */
+    owned = xbox_DispatchTryEnter();
+    if (!owned && ++held_off <= 300)
         return;
+    if (!owned) {
+        static int told;
+        if (told++ < 5)
+            fprintf(stderr, "[APU] interrupt forced past raised IRQL after %u polls\n",
+                    held_off);
+    }
     held_off = 0;
     kint = xbox_GetConnectedInterrupt(APU_VECTOR);
     if (!kint)
-        return;
+        goto done;
     routine = *(uint32_t *)(g_apu_ram_ptr + kint + 0);
     context = *(uint32_t *)(g_apu_ram_ptr + kint + 4);
     fn = routine ? recomp_lookup(routine) : NULL;
     if (!fn)
-        return;
+        goto done;
     if (!tib_ready) {
         uint32_t tib = xbox_AllocThreadTib();
         if (!tib)
-            return;
+            goto done;
         g_fs_base = tib;
         tib_ready = 1;
     }
     slot = xbox_worker_stack_alloc();
     if (slot < 0)
-        return;
+        goto done;
 
     qemu_mutex_unlock(&d->lock);
     g_esp = XBOX_WORKER_STACK_TOP(slot);
@@ -176,6 +232,7 @@ static void apu_deliver_irq(MCPXAPUState *d)
     g_esp -= 4; *(uint32_t *)(g_apu_ram_ptr + g_esp) = kint;
     g_esp -= 4; *(uint32_t *)(g_apu_ram_ptr + g_esp) = 0xDEADBEEFu;
     { int _irql = xbox_IrqlEnterInterrupt(16); fn(); xbox_IrqlLeaveInterrupt(_irql); }
+    if (owned) { xbox_DispatchLeave(); owned = 0; }   /* before the device lock */
     xbox_worker_stack_free(slot);
     qemu_mutex_lock(&d->lock);
 
@@ -187,6 +244,8 @@ static void apu_deliver_irq(MCPXAPUState *d)
             fflush(stderr);
         }
     }
+done:
+    if (owned) xbox_DispatchLeave();
 }
 
 /* ============================================================

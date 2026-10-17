@@ -540,12 +540,15 @@ NTSTATUS __stdcall xbox_NtQueryVolumeInformationFile(
 
 NTSTATUS __stdcall xbox_NtFlushBuffersFile(HANDLE FileHandle, PXBOX_IO_STATUS_BLOCK IoStatusBlock)
 {
-    FlushFileBuffers(FileHandle);
+    /* RE-SoT: a failed flush must reach the save writer. Returning SUCCESS
+     * unconditionally hid invalid-handle and host storage failures, allowing
+     * the title to report completion without a successful flush. */
+    NTSTATUS status = FlushFileBuffers(FileHandle) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
     if (IoStatusBlock) {
-        IoStatusBlock->Status = STATUS_SUCCESS;
+        IoStatusBlock->Status = status;
         IoStatusBlock->Information = 0;
     }
-    return STATUS_SUCCESS;
+    return status;
 }
 
 NTSTATUS __stdcall xbox_NtQueryFullAttributesFile(

@@ -24,12 +24,11 @@ not a person.*
 | `xbox-demo` | E3 2003 demo, `default.xbe` built 2003-07-18 | Runs movies, menus, pause and the scripted level sections at about 58-60 FPS with VSync; played by a person to the third level without a freeze. Compact F5 and F6 options added. User-reported high audio pitch and intermittent visual defects are being corrected; no console comparison |
 | `xbox-retail` | NTSC retail, title `0x5553001D`, `default.xbe` built 2003-10-20 | Bring-up: first playable level reached by the user and a scripted run. The invalid-refresh timestep that caused extreme slow motion is corrected: gameplay measured 9.003 real seconds / 9.008 simulation seconds with the fix. Full-level accuracy, audio and visual validation remain incomplete |
 
-**Xbox demo recompilation milestone completed (2026-10-15).** The final
-adjustments cover the full-width pause backdrop, the Prince silhouette,
-health and sand HUD proportions, and process exit with Alt+F4. Build and
-runtime observations are recorded in [VALIDATION.md](docs/VALIDATION.md).
-The retail build is the next target; the component table below retains the
-remaining accuracy and validation limits.
+**Both targets remain under gameplay validation.** The user reports
+angle-dependent object flickering in the demo's first level and a crash at
+the garden lever; retail crashes at the second ladder of its first level
+and during saving, followed by a damaged-save warning (2026-10-16).
+Build and runtime observations are recorded in [VALIDATION.md](docs/VALIDATION.md).
 
 The goal is both games fully playable from the user's own disc files, with
 the generated code readable enough to be replaced by hand-written source
@@ -93,7 +92,8 @@ Keep your game data beside it (demo and retail in separate folders), or
 select the data folder when asked. `default.xbe` is a build input and is
 embedded in the compiled EXE; it is not required beside the player EXE.
 Space / controller A skips videos; F5 toggles the FPS / Current WOW panel;
-F6 opens graphics and controls options. See the [Windows instructions](port/windows/README.md#play-portable-folder)
+F6 toggles the diagnostics panel (copyable with Ctrl+Shift+C); graphics and
+controls settings are under `reSOT Options` in the game's main menu. See the [Windows instructions](port/windows/README.md#play-portable-folder)
 for the folder contents and packaging from a local build.
 
 | Platform | Instructions |
@@ -119,15 +119,16 @@ In short, on Windows:
 | Lift and build | 🟢 11,215 functions (2 of them written by hand: the D3D KickOff), 0 failed | 🟢 14,418 functions (2 by hand: the D3D KickOff), 0 failed |
 | Boot to first frame | 🟢 | 🟢 |
 | Portable launch / F5 overlay / video skip | 🟢 direct EXE launch; user confirmed Space/A and F5; compact translucent panel shows the BF scene name (`01_GP01_E3_Long` observed, 2026-10-15) | 🟡 implemented and built; this update's runtime behavior not tested |
-| External game folder / F6 options | 🟡 folder selection booted; Graphics/Controls, VSync, FPS cap and remapping implemented, host harness passed; full gameplay validation ongoing | 🟡 shared host options implemented; retail build/runtime validation ongoing |
+| External game folder / options / F6 diagnostics | 🟡 folder selection booted; native `reSOT Options` and `Load Map` in the main menu, user-checked (2026-10-17); F6 diagnostics panel and clipboard copy seen, user-checked | 🟡 native `reSOT Options` in the main menu: 63/63 choices bound, user-checked (2026-10-17); no hidden level select exists in this XBE; F6 panel built, not run by us |
 | Movies (Bink via overlay) | 🟢 picture; 🟡 sound produced, not checked by ear | 🟡 intro movies play to the end (picture in frame dumps); sound not checked by ear |
 | Menus | 🟢 main and pause; Prince silhouette visible in pause (2026-10-15) | 🟡 title, profile entry/selection, main menu seen in frame dumps; pause not reached; "Saving profile" dialog stays up after the save is written |
-| In-level rendering | 🟡 character shadows drawn (projected silhouettes); no stencil or cube maps | 🟡 opening in-engine scene only |
+| In-level rendering | 🟡 projected shadows; cube-map upload/sampling implemented and host GPU test passed, game appearance unverified; first-level flickering/distortion traced to ordered GPU fences: gone for the user with them off (2026-10-17), now the demo default; no stencil | 🟡 first playable level reached; cube-map upload/sampling implemented and host GPU test passed, game appearance unverified; rendering accuracy incomplete |
 | Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or Alt+Enter/F11; culling widened to the new sides; pause backdrop expanded and upper-left HUD double compression removed, including sand crescents (see validation); the menu garden is not modelled past its 4:3 edge | 🟡 16:9 by default; demo's projection and culling hooks ported to the retail addresses, projected-UI policy on (menu backdrop full width); dialog text wider than its box at 16:9; HUD not reached |
-| Frame rate | 🟢 60 fps (vsync) in every 5 s window after start-up in the runs of 2026-10-14 (afternoon); about half a core in the menu, one core in the intro scene | 🟡 user reports the game runs much slower despite indicating 60 fps (2026-10-15); correct simulation speed not established |
+| Frame rate | 🟡 26 fps at the user's first-level location (2026-10-17), executor-bound; batch reuse measured 42-44 fps there in a scripted run; 60 fps not reached in that scene | 🟡 user reports the game runs much slower despite indicating 60 fps (2026-10-15); correct simulation speed not established |
 | Controller / keyboard | 🟡 keyboard in the PC version's layout, mouse buttons and mouse camera, XInput pad or joystick through XAPI replaced on port 0 (no USB enumeration); played to the third level by a person, the camera keys' Xbox buttons not confirmed | ⚪ |
 | Audio | 🟡 DirectSound runs on the emulated APU; user reported high pitch, per-voice resampling correction under test; no DSP effects | 🟡 sound produced; same user-reported pitch problem, resampling correction under test |
-| Save / load, memory unit | ⚪ | 🟡 profile files written to `Assets/xbox-retail/UDATA`; loading not checked |
+| Save / load, memory unit | ⚪ | 🟡 profile files written; user reports crash when saving and damaged-save warning on reload (2026-10-16); under investigation |
+| Virtual memory reservations | 🟡 reserve/commit fix tested on synthetic input; optional, gameplay with this option not checked | 🟡 corrected reserve/commit and audio address translation; user passed the previous crash point; checkpoint save/load still untested |
 | Xbox Live (retail only) | n/a | ⚪ not planned |
 | Checked against the console | ⚪ | ⚪ |
 

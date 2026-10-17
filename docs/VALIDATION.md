@@ -7,6 +7,322 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-17 (night): retail reSOT Options, F6 diagnostics panel
+
+**Retail menu map.** The retail XBE's menu library was matched routine by
+routine to the demo's and checked in its code (addresses in
+`source/xbox-retail/target_hooks.c`). `RESOT_MENU_TRACE=1` run
+(`logs/retail-menu-trace-err.txt`): the main menu (init 0x002345D0) has
+Start New Game, Load Saved Game, Options, Xbox Live, Extra Features; the
+pause menu (0x001A2D60) has Pause, Options (Sound, Display, Camera,
+Controller), Language, Game Over and the Xbox Live pages; 0x002849C0 builds
+Load Saved Game and Making of; the 19-choice grid of 0x002C5FB0 is the Xbox
+Live name keyboard. `RESOT_TEXT_DUMP` shows that group 0x0B0041D2 still holds
+"View Cutscenes" (5), "Special" (7) and "Special Load Map" (8), but no
+routine of the XBE builds a page with them: there is no hidden level select
+to re-link in retail. (Dumping group 0x0B004619 faulted in 0x000F84A0: it is
+not a text group; the dump is a trace-only tool.)
+
+**Retail reSOT Options.** "reSOT Options" is added to the main page before
+its close (0x00234D86) and its nine pages are built before the next page
+(0x00234DC8), with xmm1 = 0.4 and flags 5; message choices are taken in the
+0x00039B20 override; labels refresh through 0x00038DD0 (eax = 1).
+`tools/recomp.ps1 -Target xbox-retail -SkipAnalysis`
+(`logs/retail-native-build.txt`), then a run with `RESOT_MENU_TRACE=1`
+(`logs/retail-native-err.txt`): `9 pages, 63 of 63 choices bound, main entry
+000000A9 bound`, and `reSOT labels refreshed (55, revision N)` after each
+change. The user checked the retail pages and reported them working.
+**Not checked:** returning to the main menu from a level (the pages are
+rebuilt for each new main menu by design, not yet seen).
+
+**F6 diagnostics.** F6 is now a diagnostics panel (`port/windows/src/diag.c`)
+fed by new runtime counters in both copies (`xbox_DiagRenderer`,
+`xbox_DiagAudio`, `xbox_DiagDpc`, `xbox_DiagMemory`, marked RE-SoT); the old
+options panel was removed from `options.c`, whose settings are reached from
+the game's menu. Demo run, F6 then Ctrl+Shift+C (`logs/diag-f6-demo.png`):
+the panel showed frame, executor, renderer, reuse, heap, contiguous, host,
+audio, DPC, IRQL, world and log lines; the clipboard held 94 lines
+(12 measurements, 80 log lines). The user then checked the demo build.
+**Not checked:** the panel in retail by us; the click on Copy (only the
+keyboard shortcut was driven).
+
+## 2026-10-17 (night): xbox-demo, reSOT Options pages placed and live
+
+- Two faults in the native reSOT Options pages, both in
+  `source/xbox-demo/target_hooks.c`. (1) 0x0023F110 takes the column's left
+  edge in xmm0 (stored at +0x294); every game page passes 0.4 from
+  0x003339EC, our pages passed whatever xmm0 held, so Graphics and the
+  binding pages started at different places and ran off the right edge.
+  `native_build_page` now sets xmm0 = 0.4 and restores it. (2) A choice's
+  label is copied into its text object only when 0x000605C0 runs the text
+  actions (page changes), so a changed value kept its old label.
+  `options.c` now counts changes (`resot_native_revision`), and the
+  XInputGetState hook runs 0x000605C0 for our value choices when the count
+  moves, after checking that the text object still carries the injected
+  reference (text action vtable 0x0032380C, group 0x0B00FE00).
+- `python tools/check-hlsl.py` ok; `tools/recomp.ps1 -Target xbox-demo
+  -BuildOnly` (`logs/resot-options-fix-build.txt`).
+- Run with `RESOT_MENU_TRACE=1` (`logs/resot-options-fix-run.txt`): stderr
+  shows `reSOT labels refreshed (55, revision N)` after each change. The user
+  checked the pages in this build and reported the layout and the labels
+  correct. **Not checked:** a capture of the binding pages after the fix by
+  us; the labels after returning to the menu from a level.
+
+## 2026-10-17 (evening): xbox-demo, Language entry removed
+
+- `source/xbox-demo/target_hooks.c`: the hidden-menu table now adds only
+  "Load Map" before Quit; the Language page (+0x284) stays unlinked.
+  `nv2a_hw_text.inc` (menu text capture, no longer used) removed from the
+  demo runtime with its three call sites.
+- `python tools/check-hlsl.py` ok; `tools/recomp.ps1 -Target xbox-demo
+  -BuildOnly` linked after a transient LNK1104 lock on the exe.
+- `bin/sot-xbox-demo.exe` run for 40 s: stderr shows `"Load Map" choice
+  00000042 added to the main page` and `opens page 00000007`, no Language
+  line. **Not checked:** the menu on screen, selecting Load Map in this build.
+
+## 2026-10-17 (afternoon): batch reuse, uniprocessor dispatch lock
+
+**Demo frame rate.** `tools/run.ps1 -Target xbox-demo -Windowed -Seconds 100
+-Set @{RECOMP_PAD_SCRIPT='15000:start:500,22000:a:500,50000:start:500';
+RESOT_PROFILE_MS='2'}` at the user's flicker location in the first level
+reported 26 fps: 4,600 draws, 720k vertices per frame, 35 ms executor and
+3.5 ms title per frame; the executor thread's samples were 30% `fetch_attr`
+and 22% `hw_draw_program_batch`. A frame trace shows ~1,290 instances per
+frame of the same three vegetation batches (same arrays and index list,
+different instance constants). Both runtime copies now reuse the host vertex
+and index ranges of an identical batch already uploaded in the same frame
+and ring generation (`HwReuse` in `nv2a_hw_d3d11.inc`; key: index list,
+attribute layout; content: sampled source bytes). After `python
+tools/check-hlsl.py` and `tools/recomp.ps1 -Target xbox-demo -BuildOnly`
+(`logs/issue-2026-10-17/demo-reuse-build.txt`), the same scripted run
+reported 42-44 fps, 71-76k vertices and 9.3 ms draw calls per frame, 20 ms
+executor. The remaining executor time was not profiled. Not checked: whether
+any batch is reused with stale content (no visual difference was looked for
+beyond the user's play).
+
+**Demo flicker.** In the paired traces, the frame without the sword lacks the
+draws of three textures (`80BDB000`, `80C17000`, `813C8000`) that the frame
+with it has: the title did not submit them. The user reports flicker, and
+sometimes distorted objects, unchanged at 43 fps and at `-Aspect 4:3
+-Set @{RESOT_NO_FOV_HOOK='1'}`, so neither frame rate nor the widescreen
+projection/culling hooks explain it. The user recalled it did not happen
+originally; it was first reported 2026-10-16, the day ordered GPU fences
+became the default. With `tools/run.ps1 -Target xbox-demo -Windowed -Set
+@{RESOT_ORDERED_FENCES='0'}` the user played to the same place and saw no
+flicker. The demo's default is now the poll mirror; `RESOT_ORDERED_FENCES=1`
+selects ordered release. The mechanism (the title omitting draws while the
+previous frame's fences are still pending behind the executor) is inferred,
+not traced in the title. The ordered release had been added for a "rare
+distorted vertex" report that a person never confirmed; that report could
+return. Retail still defaults to ordered fences and was not checked for the
+same symptom. `tools/recomp.ps1 -Target xbox-demo -BuildOnly`
+(`demo-fence-build.txt`) passed; a 90 s scripted run logged `ordered GPU
+fences: off`, no crash, audio in every window. That run and the user's ran
+uncapped (90-217 fps) because the user's options set VSync off and no FPS
+limit; whether the demo's simulation speed is correct above 60 fps was not
+measured.
+
+**Dispatch lock (both copies).** DPCs and timer DPCs ran on the kernel timer
+thread, and the APU ISR on the APU thread, while guest threads were at raised
+IRQL and concurrently with each other, which the single-CPU console never
+allows. `kernel_hal.c` now gives a guest thread a recursive lock from its
+raise to DISPATCH_LEVEL until it lowers (bounded 100 ms wait, then logged);
+DPC drains, timer DPCs and the APU ISR run only while holding it and never
+wait for it (after 250 ms / 300 polls they run anyway, logged).
+`KeSynchronizeExecution` raises to 16 around its routine. Retail's VP now
+waits up to 2 ms for a voice DirectSound holds locked and otherwise defers it,
+as xemu does, and logs a non-persistent stream that runs out of segments. The
+demo copy got the same; its audio-only gate from 2026-10-16 is superseded
+(the scope hooks no longer take it: gate then dispatch versus dispatch then
+gate would stall).
+
+Before this, the demo's ISR-only gate had not stopped the audio crash: the
+user's run at 12:37 with that build faulted in `sub_002EF6CD+0x219` at guest
+address `0xFFFFFFBE`, with registers identical to the 2026-10-16 crash.
+
+Builds: `tools/recomp.ps1 -Target xbox-retail -BuildOnly`
+(`retail-dispatch-build.txt`) and `-Target xbox-demo -BuildOnly`
+(`demo-dispatch-build.txt`) passed. Retail, 90 s with the pad script from
+2026-10-15: no crash, no forced-DPC/ISR or stream-end lines, audio non-silent
+in every 10 s window, 110-140 fps (300-540 draws). Demo, 150 s scripted in
+Entree: no crash, audio non-silent in every window, 39-41 fps. Not checked:
+the retail music/speech dropouts the user reported and the demo garden lever
+crash, both need human play; neither is established as fixed.
+
+## 2026-10-17: retail revisit confirmed; normal-launch memory policy
+
+The user confirms that the corrected-memory retail playthrough passed the
+previous failure point; saving was **not** tested. The original A/B run's
+latest-log file was replaced by a subsequent launch. That later log ends
+with `[FBWIN] close requested`, not a crash; it does not prove that the A/B
+run itself finished normally. It is preserved as
+`logs/issue-2026-10-17/retail-last-normal-close.txt`.
+
+Retail now selects `RECOMP_EXT_VMA=1` by default through its target header.
+An explicit `RECOMP_EXT_VMA=0` retains the comparison path. The demo's policy
+is being checked separately. Direct launches archive previous diagnostics in
+`logs/history/` before opening the latest-log name; if archiving fails, the
+host appends instead of truncating. The developer run script also preserves
+its previous log pair. Session headers record target, PID, XBE hash and the
+selected VMA policy. Build/runtime checks for this update follow below.
+
+The F5 scene reader's previous fixed 64 MB checks would reject worlds and
+lookup arrays allocated in virtual heaps. It now also accepts fully committed
+tracked ranges; reserved/unmapped ranges remain rejected.
+
+`python tools/test-visibility.py` passed 1/1 on D3D11 WARP after correcting
+the harness include order. The production query manager returned the expected
+counts for visible and depth-occluded geometry, repeated reports, clear/reuse,
+continued counting and render-scale normalization. Retail now uses these
+asynchronous queries rather than returning a constant zero visibility count;
+the demo was not changed because usage of this API was not established there.
+This has not yet been validated in a retail gameplay run.
+
+`python tools/test-retail-save-io.py` passed 1/1 using real runtime bridges
+and a synthetic file under `build/`: write/event/flush/close/reopen/readback,
+explicit offset, truncation, EOF and invalid-handle flush. The retail backend
+now propagates a failed host flush rather than always returning success.
+The game's checkpoint serializer and existing user saves were not exercised.
+Test logs are under `logs/issue-2026-10-17/`.
+
+`python tools/check-hlsl.py` passed 14 entries, then
+`tools/recomp.ps1 -Target xbox-retail -BuildOnly` passed
+(`logs/issue-2026-10-17/retail-build.txt`). Its EXE was copied to the existing
+portable retail folder. Normal-launch defaults, F5 with virtual heaps and
+log-history retention still need a launch with this build.
+
+The user chose to reproduce demo flickering first. The existing tested demo
+build was launched with VMA off, scripted entry to Entree, a frame-dump prefix
+and one-frame method tracing. With the camera held still, the user reports
+blinking of the Prince's sword, scene props and wall vegetation. Local
+`temporal-0.bmp` and `temporal-7.bmp` show the sword present/absent from the
+same viewpoint. Two complete traces are preserved in
+`logs/issue-2026-10-17/demo-temporal-traces.txt`. Each contains thousands of
+repeated draws with identical geometry/bounds; their cause and relation to
+the flicker are under investigation. No flicker fix has been validated.
+
+The previous demo session requested title exit through `HalReturnToFirmware`
+without a recorded native exception; its log is preserved as
+`logs/issue-2026-10-17/demo-repro-ended.txt`. This alone does not establish
+why the title exited. After `python tools/check-hlsl.py` passed all 14 entries,
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly` passed with expanded constant
+and program tracing and frame-numbered, synchronized GPU captures. The first
+capture (`demo-paired_flip5868_after.bmp`) shows the opening cinematic;
+flickering gameplay still needs matching captures with this build.
+
+The subsequent user-positioned capture pair provides matching gameplay
+evidence: `demo-paired_flip9544_before.bmp` and `_after.bmp` omit the sword,
+while `demo-paired_flip10004_before.bmp` and `_after.bmp` show it from the same
+viewpoint. The difference already exists before glow compositing. Full method,
+program and constant data for both frames is preserved in
+`logs/issue-2026-10-17/demo-paired-gameplay-trace.txt`. This localizes the
+observed sword disappearance to the scene rendering or its submission, but
+does not yet identify the cause.
+
+## 2026-10-16: reported gameplay failures, audio IRQ and cube maps
+
+The user reports angle-dependent object disappearance in the demo's first
+level and a crash while operating a garden lever. Retail is reported to
+crash at the second ladder in the first level and when saving, with a
+damaged-save warning on subsequent profile selection. These reports reopen
+gameplay validation; the earlier demo milestone did not establish completion.
+
+The existing portable demo log records an audio-worker access violation in
+`sub_002EF6CD+0x219`, guest address `0xFFFFFFBE`, through `apu_deliver_irq`.
+It is preserved locally as `logs/issue-2026-10-16/demo-user-crash.txt`.
+The demo APU dispatcher no longer overrides a raised guest IRQL after 50
+polls. `python tools/test-apu-irq.py` passed: 10,000 masked dispatch attempts
+retain the pending line, then one delivery follows unmasking. This tests
+the production dispatcher with mocks. A subsequent audit of the demo's
+DirectSound ISR followed 38 directly reachable routines and resolved its
+heap callback in this XBE. Entry hooks on its IRQL scopes `0x002E9F30` /
+`0x002E9F52` now share a recursive audio-only gate with the ISR; interrupt
+dispatch tries the gate without waiting and rechecks IRQL. A second test
+uses real Windows threads to cover guest-first and ISR-first acquisition,
+nested scopes and deferred delivery (2/2 tests passed). The garden lever
+crash is not established as fixed by these host tests.
+
+Both hardware renderers now upload six cube-map faces and sample a
+`TextureCube` using xyz coordinates. The existing per-target CPU decoder
+and face/mip stride supply the pixels; the cache also distinguishes cube
+shape and mip count. `python tools/check-hlsl.py` passed all seven entries
+for each target. A Direct3D 11 WARP harness sampled six coloured faces in
+the axis directions and read back the expected BGRA values. This establishes
+host resource/view/sampling behavior, not real guest face contents or
+correct appearance in a game scene. Stencil, bump-env and dot-product
+texture modes remain incomplete. The reported flickering is unresolved.
+
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly` passed after these changes
+(`logs/issue-2026-10-16/demo-build.txt`); MSBuild first failed in the sandbox
+with FileTracker `E_ACCESSDENIED` and succeeded outside it. This first build
+preceded the scope hooks, which require a subsequent relift. No seeds changed.
+
+The retail portable executable was launched for a human reproduction. The
+user passed the second ladder without a crash, chose **not** to save at the
+save point, advanced, then returned there and crashed. The preserved log
+`logs/issue-2026-10-16/retail-repro-crash.txt` records repeated heap allocation
+failures (50,831,040 / 50,855,936 bytes used), followed by a bad-pointer read
+in `sub_000CF790+0x162` on the world/render path. This reproduction does not
+establish that a save write caused the crash.
+
+Retail's virtual-memory bridge charged pure MEM_RESERVE requests to the
+physical heap and reduced reservations that did not fit, including a
+non-page-aligned 68,398-byte result. An optional fix extends the existing
+`RECOMP_EXT_VMA=1` tracker to choose an address for null-base reservations,
+grant the full requested range and commit only requested pages. Host I/O
+validation accepts these ranges only when all pages are committed. The
+demo was checked independently: its log also has a 1 MB null-base reserve
+followed by 4 KB commits, and its bridge has the same flaw. Its latest audio
+crash log has no allocation failure; an older pre-reclaim freeze log does.
+The fix was ported to its own runtime and tested separately.
+
+The memory-regression suites for both copies passed 4/4 tests, covering
+default, reclaim, extended VMA and 128 MB-map modes. Extended-VMA tests cover
+full null-base reservation, oversized failure without clamping, commit,
+decommit, zeroed recommit, release/reuse and host I/O access checks. The option
+remains off by default: a retail startup probe with it enabled immediately
+showed DirectSound physical-address requests for high virtual memory, which
+the existing APU decoder could not translate. That probe was stopped before
+using it as gameplay validation; see `retail-vma-audio-probe.txt` in the same
+local log directory. Physical DMA handling needs validation alongside the
+reservation change.
+
+Retail subsequently gained a page-token translation namespace for APU DMA
+outside the legacy 64 MB RAM and heap aliases. The mapper preserves page
+offsets, serializes publication, and invalidates tokens on virtual-memory
+decommit/release. `python tools/test-apu-dma.py` passed 1/1, including actual
+production resolver/SG lookup, nonadjacent tokens, multibyte and ADPCM reads
+across guest pages, concurrent mapping, revocation, reuse and exhaustion.
+These tokens translate host-backed guest addresses; they do not model the
+console's physical page accounting or pin pages for in-flight DMA.
+
+Retail's I/O APC dispatcher also now restores the interrupted register,
+floating-point and SIMD context and avoids popping stdcall callback arguments
+twice. `python tools/test-retail-io-apc.py` passed 1/1. This isolated correction
+does not establish that checkpoint saving/loading works. The zero-filled,
+correctly signed `pop2.sav` files examined read-only are profile placeholders:
+the retail XBE explicitly creates them at `0x000D9BE0`. Its checkpoint writer
+instead uses `0x00102900` -> `0x000D9030`, a `%02d_%03d_%d.sav` name and a
+36,220-byte payload. `RECOMP_TRACE_WRITES=1` now records the open file's actual
+path, buffer, requested/written bytes and status for subsequent save tests.
+
+Both updated executables built. The demo's scope hooks required
+`tools/recomp.ps1 -Target xbox-demo -SkipAnalysis`
+(`logs/issue-2026-10-16/demo-relift-build.txt`); generation inserted both
+entry hooks. `tools/run.ps1 -Target xbox-demo -Windowed -Seconds 65 -Set
+@{RECOMP_PAD_SCRIPT='15000:start:500,22000:a:500,50000:start:500'}` loaded
+`0101_Entree`, continued rendering and delivered audio interrupts without
+an allocation failure or crash in its log (`demo-audio-gate-smoke65.txt`).
+The script stopped the process at 65 seconds; this did not reach the garden.
+
+Retail was rebuilt (`retail-dma-build.txt`) and launched with
+`RECOMP_EXT_VMA=1; RECOMP_TRACE_WRITES=1` for another human playthrough.
+The log confirms high-VA APU mappings. The user hears audio but reports some
+sounds missing, probably already present in the previous version; the new
+mapper is not thereby proved to be a regression or fully correct. DSP effects
+remain incomplete. Full checkpoint/revisit and save/load verification are
+still required.
+
 ## 2026-10-16: embedded guest image and additional player options
 
 `tools/recomp.ps1 -Target xbox-demo -BuildOnly` passed with the original
@@ -83,8 +399,9 @@ deferred swap are now the demo defaults. Diagnostic opt-outs are
 `RESOT_ORDERED_FENCES=0` and `RESOT_DEFER_PRESENT=0`; the earlier legacy
 comparison flag remains `RESOT_LEGACY_FENCES=1`.
 
-The unpaused before/after post-processing captures are kept locally under
-`logs/demo-defer-unpaused-` and `logs/demo-snapshot-unpaused-`. Traced render
+The unpaused before/after post-processing captures were taken as
+`logs/demo-defer-unpaused-*` and `logs/demo-snapshot-unpaused-*`; they were
+deleted in the 2026-10-17 logs cleanup and are no longer available. Traced render
 target samples selected the current frame's surfaces. The rare distorted
 vertex report and complete disappearance of the user's doubled contours
 have not been confirmed by a person; a short stable run is not proof that
