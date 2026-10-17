@@ -11,6 +11,16 @@
 Static recompilation of the original Xbox builds of
 **Prince of Persia: The Sands of Time** into native Windows executables.
 
+<img src="docs/media/gameplay-xbox-retail.jpg" alt="The Xbox retail game recompiled, 16:9: the ramparts cutscene, the Vizier's guard, the Prince in the courtyard, a wall run, a ladder, the inner courtyard, two sword fights, the pause menu">
+
+*The Xbox retail game, recompiled, at 16:9 (Hor+), from one run
+(2026-10-17) through the first areas (`0101_Porte`, `0102_Rempart_Couloir`):
+a cutscene on the ramparts, the Vizier's guard, the courtyard, the wall-run
+and ladder tutorials, two fights and the pause menu. Captures of the game
+window; inputs from the scripted pad (`RECOMP_PAD_SCRIPT` / `RECOMP_PAD_LIVE`),
+not a person. In the two cutscene frames the F5 panel, which sat on the
+letterbox bar, was painted over in black.*
+
 <img src="docs/media/gameplay-xbox-demo.jpg" alt="The Xbox demo recompiled, 16:9: main menu, intro, the Prince waking, the Vizier's soldiers, explosions on the ramparts, a ledge, the Sands of Time transition">
 
 *The Xbox demo, recompiled, at 16:9 (Hor+), from one scripted 185-second
