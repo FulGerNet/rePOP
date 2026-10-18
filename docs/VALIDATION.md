@@ -7,6 +7,203 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-18 (night): Android ISO installation, first runs reported by the user
+
+**Update, third APK (Java ISO reader, handle registry):** the user reports
+that the installation from ISO and the game's start now work on their phone.
+What the game shows (rendering, audio, controls, frame rate) has not been
+described yet and is unverified; which disc and device were used is not
+recorded.
+
+**Reported by the user on their phone, first APK:**
+
+- Install from ISO failed: *Installation failed: open error: /proc/self/fd/124
+  permission denied*. extract-xiso opened the picked document by path, which
+  Android refuses. Replaced by `XisoExtractor.java`, which reads the granted
+  descriptor's FileChannel (the approach of halo-ce-universal); the `:xiso`
+  service and the native extract-xiso run are gone from the Android build.
+- An extracted demo folder copied to `files/xbox-demo` started and the game
+  process ended. The user's `xbox_kernel.log` stops after `Path init`
+  (`game=/storage/emulated/0/Android/data/com.fulger.resot/files/xbox-demo`)
+  and `Unrecognized Xbox path: ERRasser.log`; a Windows run of the same demo
+  continues from there with `NtReleaseMutant` and `AvSetDisplayMode`.
+  The user's `files/logs/xbox-demo-err.txt` shows that the game got much
+  further than the kernel log suggests: memory mapped at offset
+  `0x74EDE71000`, BF reads, the widescreen hooks, `KeConnectInterrupt` for
+  vector 3, `[NV2A] first submission: ring base 0x80004000` and
+  `[NV2A] vblank -> ISR claimed it`, then
+  `[CRASH] signal 11 ... fault addr=0x2AA24C` with eax=0x002AA24C,
+  esi=0x002AA0B8 (the D3D device), edi=0xFD000000. In the lifted vblank
+  handler `sub_0029F730` the next call after the last logged instruction
+  (`in al, dx` at 0x0029F7AD) is the import at [0x0031C794] with
+  esi+0x194 = 0x002AA24C, KeSetEvent on the device's event (XBE 0x0029F7F8).
+  `bridge_KeSetEvent` falls back to `SetEvent((HANDLE)guest_va)` for a KEVENT
+  it does not know; Windows refuses that handle (its guest offset is 0x10000,
+  and the call fails harmlessly), the POSIX `win32_compat` dereferenced it.
+  Fixed in `win32_compat.c`: every handle is looked up in a registry of live
+  objects and an unknown one gets the Win32 failure (`ERROR_INVALID_HANDLE`,
+  `WAIT_FAILED`). Not yet run on the device; the Windows build does not use
+  this file. The crash report now also names the routine at PC and LR
+  (`dladdr`).
+
+**Checked here:** the extractor, compiled with the desktop JDK 21
+(`javac`, a small harness calling `XisoExtractor.extractAll`), on
+`Prince of Persia - The Sands of Time (USA).iso` (2,500,657,152 bytes):
+171 files, 2,499,878,784 bytes in 3.2 s; `default.xbe` SHA-256
+`753C58B1...E379` (the supported retail build); every one of the 171 files
+byte-identical (`cmp`) to `Assets/xbox-retail` (whose extra files are the
+game's saves and cache). Not checked: a demo ISO (none on this machine), the
+extractor on the device, cancelling, a full-storage failure.
+
+Also changed: case-insensitive name matching on Android (`kernel_path.c`,
+`host_files.c` for the launcher's detection and the game's start-up check).
+`.\tools\build-android.ps1`: `BUILD SUCCESSFUL`, APK 50.8 MB. Not run.
+
+## 2026-10-18: first Android build (one APK, both targets, Vulkan)
+
+**Built, not run.** No Android device was connected (`adb devices` listed
+none), so nothing below has executed on Android: boot, the AArch64 MMIO
+decoder, the 4 GB reservation, rendering, audio, touch and controller input,
+the launcher and the ISO installation are all unverified there.
+
+- `.\tools\build-android.ps1` (NDK 29.0.14206865, CMake 3.30.3, AGP 9.0.1,
+  Gradle 9.1.0, compileSdk 36, minSdk 29): `BUILD SUCCESSFUL`,
+  `bin/reSOT-android.apk`, 50.8 MB, package `com.fulger.resot` 0.1.0, signed
+  with the debug key (`apksigner verify`). It holds `libresot_demo.so`
+  (21.1 MB), `libresot_retail.so` (26.5 MB), `libSDL3.so` and
+  `libresot_launcher.so` for arm64-v8a, the logo, the Atlantis MF face and the
+  licences under `assets/licenses/`. Both game libraries link with
+  `-Wl,--no-undefined`; `SDL_main` and the three `TouchControls` JNI
+  functions are exported; `libSDL3.so` exports `RESOT_GetVulkanQueryAPI`.
+- Before Gradle, the same `port/android/CMakeLists.txt` built by hand
+  (`cmake -G Ninja` with the NDK toolchain): every lifted file of both
+  targets compiles for AArch64 with clang, with no change to
+  `source/*/gen`. Leaving out `src/nv2a` and `src/d3d` was needed to link:
+  `nv2a_pb_replay.c`, `nv2a_pgraph_d3d11.c`, `nv2a_core.c` and
+  `nv2a_pb_test.c` reference the D3D8 layer and xemu's register model, which
+  nothing on Windows pulls from their static libraries either.
+- The shared changes (GPU backend split by `RESOT_HW_D3D11`, `fb_present.c`,
+  `scene.c`, the MMIO decoder, `win32_compat`, the SDL export) were rebuilt
+  for Windows: `.\tools\recomp.ps1 -Target xbox-demo -BuildOnly` and
+  `-Target xbox-retail -BuildOnly` both rebuilt `bin/sot-xbox-*.exe` with no
+  errors; the warnings in the touched files are the existing ones. The
+  Windows executables were **not run** after these changes.
+
+Not checked: anything at run time on Android; whether the device's Vulkan
+driver offers `occlusionQueryPrecise` (the retail game refuses the native
+renderer without it); behaviour when the app goes to the background (the
+game keeps running and the swapchain may disappear); case-sensitivity of
+game file names on devices whose shared storage is not case-insensitive;
+reading an ISO from a cloud document provider.
+
+## 2026-10-18: native D3D12/Vulkan options and encoder; joystick bindings
+
+**Joystick swapped in game.** The user's pad is an XInput Xbox 360
+controller. A probe of `XInputGetState` (xinput1_4, all four slots, 30 s,
+the user pressing A B X Y) read slot 0 as A=0x1000, B=0x2000, X=0x4000,
+Y=0x8000: the system reports the buttons correctly, and the host chain
+(`xinput_device.c` -> `options.c` filter -> `xbox_HlePadState`) is an
+identity with the default bindings and was not changed by 7b82563. The
+player's `resot-options.ini` held `[Joystick] Action5=2` (Jump on B) and
+`Action9=0` (Cancel unbound). Two ways that file gets rewritten were found:
+
+- A capture opened from the game's Joystick page took the next new pad
+  press; the pad has no Esc, so pressing B to leave bound B. Now a capture
+  is armed only once every pad input is released, Back cancels one opened
+  from the game's menu, and an untouched one lapses after 8 s.
+- A run with `RECOMP_PAD_SCRIPT` saved whatever its timed presses changed.
+  A smoke run here with the demo's old script logged `post-processing
+  off/on/off`, `FPS limit: 0` and `host VSync off` and wrote them into
+  `bin/resot-options.ini` (restored to its previous `[Launcher]`-only
+  content afterwards). Scripted runs (`RECOMP_PAD_SCRIPT`/`RECOMP_PAD_LIVE`)
+  now keep option changes for the run only (`[OPTIONS] scripted pad:
+  changes not saved`).
+
+Not checked: the user rebinding from the game's menu with the new capture,
+and gameplay with the pad after the ini reset.
+
+**Post-processing on the native backends.** `hw_postprocess_candidate`
+looked for the glow's 160x120 source among the D3D11 surfaces only, which
+are empty when SDL GPU renders, so `PostProcessing=0` had no effect there.
+The native encoder now answers it from its own surfaces
+(`ng_postprocess_source`). VSync off falls back to mailbox where immediate
+presentation is not offered, instead of to VSync.
+
+**Encoder.** One persistent vertex transfer buffer cycled on map (it was
+created and released at every flush); one vertex-buffer binding per pass
+with draws selecting their run by first vertex; pipeline, sampler and
+uniform pushes skipped when identical to the previous draw. The D3D12
+sampler-heap guard now counts sampler descriptors actually written (budget
+1536, as before) instead of 192 draws, and Vulkan has no such submit
+limit. Overlay and F5/F6 panel images are kept and cycled instead of
+created every frame; the overlay uploads only when its serial moves.
+
+Checks: `tools/recomp.ps1 -Target xbox-demo -BuildOnly` and `-Target
+xbox-retail -BuildOnly` (both built; only existing warnings). Isolated runs,
+the executable copied to a scratch folder with its own ini
+(`PostProcessing=0`, `VSync=1`, `FPSLimit=60`), a frame trace mid-run:
+
+| Run | Renderer line | Glow composite | FPS samples (5 s windows) |
+| --- | --- | --- | --- |
+| demo, 55 s, D3D12 | `d3d12 native (SDL GPU direct3d12)` | `skipped frame=1706` | 47, 60, 87, 56, 49, 46, 46, 53, 43, 46 |
+| demo, 55 s, Vulkan | `vulkan native (SDL GPU vulkan)` | `skipped frame=1204` | 30, 39, 50, 50, 44, 36, 45, 41, 48, 45 |
+| retail, 90 s, Vulkan | `vulkan native`, queries ABI 1 | no `[POSTFX]` line in the traced frame | 12, 30, 29, 32, 39, 29, 33, 42, 36, 36, 42 |
+| retail, 90 s, D3D12 | `d3d12 native`, queries ABI 1 | no `[POSTFX]` line in the traced frame | 15, 52, 54, 59, 56, 49, 45, 40, 47, 46, 38 |
+
+The pad script reached reSOT Options in every run and turned the FPS limit
+to None and VSync off partway (logged, not saved), so the samples mix
+settings and scenes; they are not a before/after comparison. No `fatal`
+line in any run. Retail logged zero visibility queries, as in the earlier
+retail runs. Not checked: the picture (no readback or screenshot), the
+retail glow skip, gameplay, a controlled performance comparison with
+7b82563.
+
+## 2026-10-18: both targets, HUD anchored to the sides at 16:9
+
+The HUD passes through the Hor+ projection hook, so it arrives with its 4:3
+proportions, centred. The renderer's HUD rule (`hw_classify_screen`,
+`hw_hud_shift` in `nv2a_hw_d3d11.inc`, also used by the native D3D12/Vulkan
+path) no longer keeps the demo's old anchor: a flat, depth-test-off batch
+inside the projected 4:3 frame, wholly on one side of the centre, in the top
+or bottom band, moves 80 px (16:9) to that side. `RECOMP_HW_HUD_EDGE=0` keeps
+it in the 4:3 frame. Frame traces now print `hud -1/0/1`, and the CPU path
+prints a bbox for its flat batches.
+
+Checks: `python tools/check-hlsl.py` (seven entries passed), `git diff
+--check`, `tools/recomp.ps1 -Target xbox-demo -BuildOnly` and `-Target
+xbox-retail -BuildOnly` (both built).
+
+Retail, before and after, the same pad timeline with frame traces at 80, 105
+and 125 s:
+
+```powershell
+./tools/run.ps1 -Target xbox-retail -Seconds 130 -Windowed -SnapshotEvery 5 -Set @{
+  RECOMP_PAD_SCRIPT='15000:start:400,25000:start:400,35000:a:400,45000:start:400,60000:a:400,75000:a:400,90000:start:400,100000:a:400,110000:a:400'
+  RECOMP_FRAME_TRACE='logs/retail-hud-after.flag'
+}
+```
+
+Before: the health bar batches were x=107.531..250.892, y=36.531..68.531
+(top left, already narrowed by the projection); the readback showed the bar
+about a quarter of the way in from the left edge. After: the same three
+batches are traced `hud -1`; the 45-120 s readbacks
+(`logs/retail-hud-after/`) show the bar near the left edge in the first
+courtyard, the centred tutorial text ("left thumbstick controls Prince",
+"Run toward edge and press A to jump") and the cutscene bars unchanged. No
+other batch was classified as HUD in the traced frames.
+
+Demo: the user ran the new build and confirmed the HUD is moved correctly.
+A scripted demo run (`RECOMP_PAD_SCRIPT='22000:start:800,28000:a:800,62000:start:800,70000:start:800,78000:start:800,100000:start:800,140000:start:800'`)
+stayed on the menus' Controller page from 65 s and exited by itself at about
+140 s with no crash report in its log (why was not established). Its traced
+frame classified nothing as HUD (the menu logo and text are not w=1); the
+Controller page was not compared with a build before this change.
+
+Not checked: a right-side or bottom HUD element (none was seen in either
+game), other ratios than 16:9, the native D3D12/Vulkan path at runtime (same
+constant, built only), the software rasteriser (no widescreen 2D handling),
+every HUD state (sand tanks full, enemy fights, rewind), or the console.
+
 ## 2026-10-18: native D3D12/Vulkan retail bring-up and hardware visibility queries
 
 Both native renderer selections now initialize on retail, without D3D11On12,

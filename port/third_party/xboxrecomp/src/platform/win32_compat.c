@@ -29,6 +29,9 @@
 #include <sched.h>
 #include <fenv.h>
 #include <sys/mman.h>
+#if defined(__ANDROID__)
+#include <sys/syscall.h> /* RE-SoT: memfd_create below API 30 */
+#endif
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
 #include <sys/stat.h>
@@ -310,7 +313,9 @@ typedef struct w32_object {
 /* pseudo handles for "current thread"/"current process" */
 #define PSEUDO_CURRENT_PROCESS ((HANDLE)(LONG_PTR)-1)
 #define PSEUDO_CURRENT_THREAD  ((HANDLE)(LONG_PTR)-2)
+#ifndef STILL_ACTIVE
 #define STILL_ACTIVE 259u
+#endif
 
 static __thread w32_object *t_self_obj = NULL;
 static __thread DWORD       t_tid      = 0;
@@ -327,9 +332,90 @@ DWORD GetCurrentProcessId(void) { return (DWORD)getpid(); }
 HANDLE GetCurrentThread(void)   { return t_self_obj ? (HANDLE)t_self_obj : PSEUDO_CURRENT_THREAD; }
 HANDLE GetCurrentProcess(void)  { return PSEUDO_CURRENT_PROCESS; }
 
+/* RE-SoT: the live objects, so a HANDLE is checked before it is used.
+ *
+ * Win32 answers a value that is not a handle with ERROR_INVALID_HANDLE; this
+ * layer used to treat every HANDLE as a pointer to one of its objects. The
+ * kernel bridge relies on the Win32 behaviour: for a guest KEVENT it does
+ * not know, bridge_KeSetEvent ends with SetEvent on the raw guest address
+ * (the demo's vblank ISR, XBE 0x0029F7F8, signals device+0x194 = 0x002AA24C),
+ * which Windows refuses and which crashed Android at that address. Every
+ * handle entry point now looks the value up here first; anything else gets
+ * the Win32 failure. An open-addressing set of pointers, read under a
+ * read lock. */
+static pthread_rwlock_t s_objects_lock = PTHREAD_RWLOCK_INITIALIZER;
+static uintptr_t *s_objects;          /* 0 empty, 1 removed */
+static size_t s_objects_cap, s_objects_used;
+
+static size_t obj_slot(uintptr_t p, size_t cap)
+{
+    return (size_t)((p >> 4) * 0x9E3779B97F4A7C15ull) & (cap - 1);
+}
+
+static void obj_register(w32_object *o)
+{
+    uintptr_t p = (uintptr_t)o;
+    size_t i;
+    pthread_rwlock_wrlock(&s_objects_lock);
+    if ((s_objects_used + 1) * 2 > s_objects_cap) {
+        size_t cap = s_objects_cap ? s_objects_cap * 2 : 4096, j, used = 0;
+        uintptr_t *grown = (uintptr_t *)calloc(cap, sizeof *grown);
+        if (grown) {
+            for (j = 0; j < s_objects_cap; j++)
+                if (s_objects[j] > 1) {
+                    size_t k = obj_slot(s_objects[j], cap);
+                    while (grown[k]) k = (k + 1) & (cap - 1);
+                    grown[k] = s_objects[j];
+                    used++;
+                }
+            free(s_objects);
+            s_objects = grown; s_objects_cap = cap; s_objects_used = used;
+        }
+    }
+    if (s_objects_cap) {
+        i = obj_slot(p, s_objects_cap);
+        while (s_objects[i] > 1) i = (i + 1) & (s_objects_cap - 1);
+        if (!s_objects[i]) s_objects_used++;
+        s_objects[i] = p;
+    }
+    pthread_rwlock_unlock(&s_objects_lock);
+}
+
+static void obj_unregister(w32_object *o)
+{
+    uintptr_t p = (uintptr_t)o;
+    size_t i, n;
+    pthread_rwlock_wrlock(&s_objects_lock);
+    if (s_objects_cap) {
+        i = obj_slot(p, s_objects_cap);
+        for (n = 0; n < s_objects_cap && s_objects[i]; n++, i = (i + 1) & (s_objects_cap - 1))
+            if (s_objects[i] == p) { s_objects[i] = 1; break; }
+    }
+    pthread_rwlock_unlock(&s_objects_lock);
+}
+
+/* The object behind a handle, or NULL (and ERROR_INVALID_HANDLE). */
+static w32_object *obj_of(HANDLE h)
+{
+    uintptr_t p = (uintptr_t)h;
+    size_t i, n;
+    int found = 0;
+    if (!h) return NULL;
+    pthread_rwlock_rdlock(&s_objects_lock);
+    if (s_objects_cap) {
+        i = obj_slot(p, s_objects_cap);
+        for (n = 0; n < s_objects_cap && s_objects[i]; n++, i = (i + 1) & (s_objects_cap - 1))
+            if (s_objects[i] == p) { found = 1; break; }
+    }
+    pthread_rwlock_unlock(&s_objects_lock);
+    if (!found) SetLastError(ERROR_INVALID_HANDLE);
+    return found ? (w32_object *)h : NULL;
+}
+
 static w32_object *obj_alloc(w32_kind kind)
 {
     w32_object *o = (w32_object *)calloc(1, sizeof(w32_object));
+    obj_register(o);
     o->kind     = kind;
     o->refcount = 1;
     pthread_mutex_init(&o->lock, NULL);
@@ -350,6 +436,7 @@ static void obj_release(w32_object *o)
     } else if (o->kind == K_WAITABLE_TIMER) {
         /* Waitable timers: no special cleanup needed */
     }
+    obj_unregister(o);
     pthread_mutex_destroy(&o->lock);
     pthread_cond_destroy(&o->cond);
     pthread_cond_destroy(&o->gate);
@@ -367,13 +454,13 @@ HANDLE w32_open_handle(int fd, const char *host_path)
 
 int w32_handle_fd(HANDLE h)
 {
-    w32_object *o = (w32_object *)h;
+    w32_object *o = obj_of(h);
     return (o && o->kind == K_FILE) ? o->fd : -1;
 }
 
 const char *w32_handle_path(HANDLE h)
 {
-    w32_object *o = (w32_object *)h;
+    w32_object *o = obj_of(h);
     return (o && o->kind == K_FILE) ? o->file_path : NULL;
 }
 
@@ -382,7 +469,11 @@ BOOL CloseHandle(HANDLE h)
     if (!h || h == PSEUDO_CURRENT_THREAD || h == PSEUDO_CURRENT_PROCESS ||
         h == INVALID_HANDLE_VALUE)
         return TRUE;
-    obj_release((w32_object *)h);
+    {
+        w32_object *o = obj_of(h);   /* RE-SoT */
+        if (!o) return FALSE;
+        obj_release(o);
+    }
     return TRUE;
 }
 
@@ -394,7 +485,8 @@ BOOL DuplicateHandle(HANDLE srcProc, HANDLE src, HANDLE dstProc, PHANDLE dst,
     if (src == PSEUDO_CURRENT_THREAD)  src = GetCurrentThread();
     if (src == PSEUDO_CURRENT_PROCESS) { *dst = src; return TRUE; }
     if (src == PSEUDO_CURRENT_THREAD || !src) { *dst = src; return TRUE; }
-    w32_object *o = (w32_object *)src;
+    w32_object *o = obj_of(src);   /* RE-SoT */
+    if (!o) return FALSE;
     InterlockedIncrement(&o->refcount);
     *dst = src;
     if (options & DUPLICATE_CLOSE_SOURCE)
@@ -514,7 +606,11 @@ DWORD WaitForSingleObject(HANDLE h, DWORD ms)
 {
     if (!h || h == PSEUDO_CURRENT_THREAD || h == PSEUDO_CURRENT_PROCESS)
         return WAIT_OBJECT_0;
-    return wait_single((w32_object *)h, ms);
+    {
+        w32_object *o = obj_of(h);   /* RE-SoT: Win32 fails an invalid handle */
+        if (!o) return WAIT_FAILED;
+        return wait_single(o, ms);
+    }
 }
 
 DWORD WaitForSingleObjectEx(HANDLE h, DWORD ms, BOOL alertable)
@@ -586,7 +682,7 @@ HANDLE CreateEventW(LPSECURITY_ATTRIBUTES sa, BOOL manualReset, BOOL initialStat
 
 BOOL SetEvent(HANDLE h)
 {
-    w32_object *o = (w32_object *)h;
+    w32_object *o = obj_of(h);
     if (!o || o->kind != K_EVENT) return FALSE;
     pthread_mutex_lock(&o->lock);
     o->signaled = 1;
@@ -597,7 +693,7 @@ BOOL SetEvent(HANDLE h)
 
 BOOL ResetEvent(HANDLE h)
 {
-    w32_object *o = (w32_object *)h;
+    w32_object *o = obj_of(h);
     if (!o || o->kind != K_EVENT) return FALSE;
     pthread_mutex_lock(&o->lock);
     o->signaled = 0;
@@ -607,7 +703,7 @@ BOOL ResetEvent(HANDLE h)
 
 BOOL PulseEvent(HANDLE h)
 {
-    w32_object *o = (w32_object *)h;
+    w32_object *o = obj_of(h);
     if (!o || o->kind != K_EVENT) return FALSE;
     pthread_mutex_lock(&o->lock);
     o->signaled = 1;
@@ -637,7 +733,7 @@ HANDLE CreateSemaphoreW(LPSECURITY_ATTRIBUTES sa, LONG initial, LONG maximum, LP
 
 BOOL ReleaseSemaphore(HANDLE h, LONG releaseCount, PLONG previousCount)
 {
-    w32_object *o = (w32_object *)h;
+    w32_object *o = obj_of(h);
     if (!o || o->kind != K_SEM) return FALSE;
     pthread_mutex_lock(&o->lock);
     if (previousCount) *previousCount = (LONG)o->sem_count;
@@ -667,7 +763,7 @@ HANDLE CreateMutexW(LPSECURITY_ATTRIBUTES sa, BOOL initialOwner, LPCWSTR name)
 
 BOOL ReleaseMutex(HANDLE h)
 {
-    w32_object *o = (w32_object *)h;
+    w32_object *o = obj_of(h);
     if (!o || o->kind != K_MUTEX) {
         SetLastError(ERROR_INVALID_HANDLE);
         return FALSE;
@@ -730,6 +826,13 @@ HANDLE CreateThread(LPSECURITY_ATTRIBUTES sa, SIZE_T stackSize,
 
     pthread_attr_t attr;
     pthread_attr_init(&attr);
+#if defined(__ANDROID__)
+    /* RE-SoT: lifted guest code runs on the host stack, one C frame per guest
+     * call. Bionic's default is 1 MB less its guard; ask for 8 MB, reserved
+     * address space only, as Windows' 1 MB reserve grows on demand. */
+    if (stackSize < (8u << 20))
+        stackSize = 8u << 20;
+#endif
     if (stackSize)
         pthread_attr_setstacksize(&attr, stackSize < 65536 ? 65536 : stackSize);
 
@@ -762,9 +865,18 @@ VOID ExitThread(DWORD exitCode)
     pthread_exit(NULL);
 }
 
+/* RE-SoT: nonzero for a live thread object, as Win32 GetThreadId is. */
+DWORD GetThreadId(HANDLE h)
+{
+    w32_object *o = obj_of(h);
+    if (h == PSEUDO_CURRENT_THREAD) return GetCurrentThreadId();
+    if (!o || o->kind != K_THREAD) return 0;
+    return o->tid ? o->tid : 1u;
+}
+
 BOOL GetExitCodeThread(HANDLE h, LPDWORD exitCode)
 {
-    w32_object *o = (w32_object *)h;
+    w32_object *o = obj_of(h);
     if (!o || o->kind != K_THREAD || !exitCode) return FALSE;
     pthread_mutex_lock(&o->lock);
     *exitCode = o->exited ? o->exit_code : STILL_ACTIVE;
@@ -774,7 +886,7 @@ BOOL GetExitCodeThread(HANDLE h, LPDWORD exitCode)
 
 DWORD ResumeThread(HANDLE h)
 {
-    w32_object *o = (w32_object *)h;
+    w32_object *o = obj_of(h);
     if (!o || o->kind != K_THREAD) return (DWORD)-1;
     pthread_mutex_lock(&o->lock);
     DWORD prev = (DWORD)o->suspend_count;
@@ -788,7 +900,7 @@ DWORD SuspendThread(HANDLE h)
 {
     /* True mid-run suspension is not supported on POSIX; only the
      * CREATE_SUSPENDED start gate is. Track the count for ResumeThread. */
-    w32_object *o = (w32_object *)h;
+    w32_object *o = obj_of(h);
     if (!o || o->kind != K_THREAD) return (DWORD)-1;
     pthread_mutex_lock(&o->lock);
     DWORD prev = (DWORD)o->suspend_count;
@@ -799,9 +911,14 @@ DWORD SuspendThread(HANDLE h)
 
 BOOL TerminateThread(HANDLE h, DWORD exitCode)
 {
-    w32_object *o = (w32_object *)h;
+    w32_object *o = obj_of(h);
     if (!o || o->kind != K_THREAD) return FALSE;
+#if defined(__ANDROID__)
+    /* RE-SoT: bionic has no pthread_cancel. The thread is reported as ended;
+     * it stops at its next exit point (every caller is process teardown). */
+#else
     pthread_cancel(o->thread);
+#endif
     pthread_mutex_lock(&o->lock);
     o->exit_code = exitCode;
     o->exited    = 1;
@@ -813,14 +930,14 @@ BOOL TerminateThread(HANDLE h, DWORD exitCode)
 
 BOOL SetThreadPriority(HANDLE h, int priority)
 {
-    w32_object *o = (h == PSEUDO_CURRENT_THREAD) ? t_self_obj : (w32_object *)h;
+    w32_object *o = (h == PSEUDO_CURRENT_THREAD) ? t_self_obj : obj_of(h);
     if (o && o->kind == K_THREAD) o->priority = priority;
     return TRUE;   /* real RT priorities need privileges; tracked only */
 }
 
 int GetThreadPriority(HANDLE h)
 {
-    w32_object *o = (h == PSEUDO_CURRENT_THREAD) ? t_self_obj : (w32_object *)h;
+    w32_object *o = (h == PSEUDO_CURRENT_THREAD) ? t_self_obj : obj_of(h);
     return (o && o->kind == K_THREAD) ? o->priority : THREAD_PRIORITY_NORMAL;
 }
 
@@ -828,7 +945,7 @@ VOID SwitchToThread(void) { sched_yield(); }
 
 DWORD QueueUserAPC(PAPCFUNC func, HANDLE thread, ULONG_PTR data)
 {
-    w32_object *o = (thread == PSEUDO_CURRENT_THREAD) ? t_self_obj : (w32_object *)thread;
+    w32_object *o = (thread == PSEUDO_CURRENT_THREAD) ? t_self_obj : obj_of(thread);
     if (!o || o->kind != K_THREAD) return 0;
     pthread_mutex_lock(&o->lock);
     DWORD ok = 0;
@@ -923,7 +1040,7 @@ BOOL CreateTimerQueueTimer(PHANDLE newTimer, HANDLE timerQueue,
 BOOL ChangeTimerQueueTimer(HANDLE timerQueue, HANDLE timer, ULONG dueTime, ULONG period)
 {
     (void)timerQueue;
-    w32_object *o = (w32_object *)timer;
+    w32_object *o = obj_of(timer);
     if (!o || o->kind != K_TIMER) return FALSE;
     o->timer_due    = dueTime;
     o->timer_period = period;
@@ -933,7 +1050,7 @@ BOOL ChangeTimerQueueTimer(HANDLE timerQueue, HANDLE timer, ULONG dueTime, ULONG
 BOOL DeleteTimerQueueTimer(HANDLE timerQueue, HANDLE timer, HANDLE completionEvent)
 {
     (void)timerQueue;
-    w32_object *o = (w32_object *)timer;
+    w32_object *o = obj_of(timer);
     if (!o || o->kind != K_TIMER) return FALSE;
     o->timer_cancel = 1;
     if (completionEvent) SetEvent(completionEvent);
@@ -980,7 +1097,7 @@ HANDLE CreateWaitableTimerW(LPSECURITY_ATTRIBUTES sa, BOOL manualReset, LPCWSTR 
 BOOL SetWaitableTimer(HANDLE h, const LARGE_INTEGER *dueTime, LONG period,
                       PTIMERAPCROUTINE completion, PVOID arg, BOOL resume)
 {
-    w32_object *o = (w32_object *)h;
+    w32_object *o = obj_of(h);
     (void)completion; (void)arg; (void)resume;
     if (!o || o->kind != K_WAITABLE_TIMER || !dueTime) return FALSE;
     pthread_mutex_lock(&o->lock);
@@ -1012,7 +1129,7 @@ BOOL SetWaitableTimer(HANDLE h, const LARGE_INTEGER *dueTime, LONG period,
 
 BOOL CancelWaitableTimer(HANDLE h)
 {
-    w32_object *o = (w32_object *)h;
+    w32_object *o = obj_of(h);
     if (!o || o->kind != K_WAITABLE_TIMER) return FALSE;
     pthread_mutex_lock(&o->lock);
     o->waitable_triggered = 0;
@@ -1124,10 +1241,29 @@ static void *mach_map_fixed(void *address, size_t size, int prot)
 void view_register(void *addr, size_t len);
 size_t view_take(const void *addr);
 
+/* RE-SoT: the guest reservation (see win32_compat.h). Android places the
+ * ART heap and libraries in the low 4 GB and wherever the kernel chooses; the
+ * Xbox apertures (contiguous window, NV2A, MCPX, flash) are fixed offsets
+ * from one base, so they are only safe inside a range this process owns. */
+static uintptr_t s_owned_lo, s_owned_hi;
+
+void w32_compat_own_range(void *base, SIZE_T size)
+{
+    s_owned_lo = (uintptr_t)base;
+    s_owned_hi = (uintptr_t)base + size;
+}
+
+static int owned_range(const void *address, SIZE_T size)
+{
+    uintptr_t a = (uintptr_t)address;
+    return s_owned_hi && a >= s_owned_lo && size <= s_owned_hi - a;
+}
+
 LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD protect)
 {
     int prot  = prot_from_page(protect);
     int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+    int owned = address && owned_range(address, size);
 
     /* MEM_COMMIT on a region already reserved by a prior VirtualAlloc:
      * just adjust protection. */
@@ -1138,10 +1274,20 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD pro
     }
 
 #if defined(MAP_FIXED_NOREPLACE)
-    if (address) flags |= MAP_FIXED_NOREPLACE;
+    if (address && !owned) flags |= MAP_FIXED_NOREPLACE;
 #endif
+    if (owned) flags |= MAP_FIXED;   /* RE-SoT: replaces our own reservation */
 
     void *p;
+#if defined(__ANDROID__)
+    /* RE-SoT: a pure reservation commits nothing. Mapped read-write, a 4 GB
+     * guest reservation is refused by the kernel's overcommit heuristic. */
+    if ((allocationType & MEM_RESERVE) && !(allocationType & MEM_COMMIT)) {
+        prot = PROT_NONE;
+        flags |= MAP_NORESERVE;
+        p = mmap(address, size, PROT_NONE, flags, -1, 0);
+    } else
+#endif
 #if defined(__APPLE__)
     if (address) {
         p = mach_map_fixed(address, size, prot ? prot : PROT_READ | PROT_WRITE);
@@ -1152,6 +1298,15 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD pro
         SetLastError(ERROR_NOT_ENOUGH_MEMORY);
         return NULL;
     }
+#if defined(__ANDROID__)
+    /* RE-SoT: kernels before 4.17 ignore MAP_FIXED_NOREPLACE and treat the
+     * address as a hint; a different address is a refusal, as on Win32. */
+    if (address && p != address) {
+        munmap(p, size);
+        SetLastError(ERROR_INVALID_ADDRESS);
+        return NULL;
+    }
+#endif
     /* Remember the length: VirtualFree(MEM_RELEASE) is passed size 0 by every
      * Win32 caller, and munmap cannot be called without one. */
     view_register(p, size);
@@ -1180,6 +1335,10 @@ BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD freeType)
         size_t len = view_take(address);
         if (size == 0) size = len;
         if (size == 0) return FALSE;
+        if (owned_range(address, size))   /* RE-SoT: back to reserved */
+            return mmap(address, size, PROT_NONE,
+                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_NORESERVE,
+                        -1, 0) == address;
         return munmap(address, size) == 0;
     }
     if (freeType & MEM_DECOMMIT)
@@ -1311,6 +1470,10 @@ VOID SecureZeroMemory(PVOID ptr, SIZE_T cnt)
 {
 #if defined(__APPLE__)
     memset_s(ptr, cnt, 0, cnt);
+#elif defined(__ANDROID__)
+    /* RE-SoT: bionic has no explicit_bzero; a volatile store loop is not elided. */
+    volatile unsigned char *p = (volatile unsigned char *)ptr;
+    while (cnt--) *p++ = 0;
 #else
     explicit_bzero(ptr, cnt);
 #endif
@@ -1604,6 +1767,10 @@ static int anon_map_fd(const char *name)
     int fd = shm_open(shm_name, O_CREAT | O_RDWR | O_EXCL, 0600);
     if (fd >= 0) shm_unlink(shm_name);
     return fd;
+#elif defined(__ANDROID__)
+    /* RE-SoT: memfd_create is declared from API 30; the system call exists
+     * on every arm64 kernel Android supports (3.17+). */
+    return (int)syscall(__NR_memfd_create, name ? name : "xbox_map", 0);
 #else
     return memfd_create(name ? name : "xbox_map", 0);
 #endif
@@ -1640,7 +1807,7 @@ HANDLE CreateFileMappingW(HANDLE file, LPSECURITY_ATTRIBUTES sa, DWORD protect,
 LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offHigh, DWORD offLow,
                        SIZE_T count, LPVOID baseAddr)
 {
-    w32_object *o = (w32_object *)mapping;
+    w32_object *o = obj_of(mapping);
     if (!o || o->kind != K_FILEMAP) { SetLastError(ERROR_INVALID_HANDLE); return NULL; }
 
     off_t  off = ((off_t)offHigh << 32) | offLow;
@@ -1654,7 +1821,9 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offHigh, DWORD offLow
      * addresses, so with a base the OS chose rather than one we picked, that
      * difference is the process quietly destroying its own libraries and heap
      * and dying somewhere unrelated a moment later. */
-    if (baseAddr) {
+    if (baseAddr && owned_range(baseAddr, len)) {
+        flags |= MAP_FIXED;   /* RE-SoT: replaces our own reservation */
+    } else if (baseAddr) {
 #if defined(MAP_FIXED_NOREPLACE)
         flags |= MAP_FIXED_NOREPLACE;
 #elif defined(__APPLE__)
@@ -1693,6 +1862,10 @@ BOOL UnmapViewOfFile(LPCVOID baseAddr)
 {
     size_t len = view_take(baseAddr);
     if (len == 0) return FALSE;
+    if (owned_range(baseAddr, len))   /* RE-SoT: back to reserved */
+        return mmap((void *)baseAddr, len, PROT_NONE,
+                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_NORESERVE,
+                    -1, 0) == baseAddr;
     return munmap((void *)baseAddr, len) == 0;
 }
 

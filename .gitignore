@@ -8,6 +8,14 @@
 /logs/
 /xbox_kernel.log
 resot-options.ini
+# Android (port/android): Gradle and NDK outputs, the SDK location, APKs.
+/port/android/.gradle/
+/port/android/build/
+/port/android/app/build/
+/port/android/app/.cxx/
+/port/android/local.properties
+*.apk
+*.aab
 /port/third_party/xboxrecomp/tools/*/output/
 /port/third_party/xboxrecomp-demo/tools/*/output/
 /port/third_party/xboxrecomp-retail/tools/*/output/

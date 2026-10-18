@@ -65,8 +65,14 @@ and the window resolution (Monitor is a borderless window on the desktop);
 each choice cycles its value. Controls has the keyboard and joystick
 bindings in three pages each; choosing a binding waits for the next key,
 mouse button or joystick input (Esc cancels), and `Reset all bindings`
-restores the defaults. The game's own timing can still limit FPS. Settings
-are saved in `resot-options.ini` beside the executable.
+restores the defaults. A joystick binding is taken only after every pad
+input has been released, so the press that opened the row is never bound;
+from the game's menu, Back cancels it and an untouched one lapses after
+8 seconds (pressing B to leave the page used to bind B). The game's own
+timing can still limit FPS. Settings are saved in `resot-options.ini`
+beside the executable, except in runs with `RECOMP_PAD_SCRIPT` or
+`RECOMP_PAD_LIVE`: their scripted presses can reach these pages, so their
+changes last only for that run.
 F7 Graphics selects `Direct3D 11`, `D3D12 (native)` or `Vulkan (native)`
 after restarting the game. The two native modes use SDL GPU's D3D12/Vulkan
 command encoders, with DXIL/SPIR-V shaders, native GPU resources and GPU draws.
@@ -199,7 +205,8 @@ pad, for comparison.
 
 `-Aspect 16:9` (or any `w:h`; 16:9 is the default build's) widens the
 picture Hor+: more scene at the sides, the same vertical view, the 2D at its
-original 4:3 size. The game opens as a borderless window over the whole
+original 4:3 size; the in-game HUD moves out to the screen's sides
+(`-Set @{RECOMP_HW_HUD_EDGE='0'}` keeps it in the 4:3 frame). The game opens as a borderless window over the whole
 monitor; `-Windowed` opens a window instead, and Alt+Enter or F11 switch
 between the two while it runs. `-NoVsync` stops waiting for the
 display, `-NoAudio` leaves the sound hardware out.

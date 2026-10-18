@@ -459,6 +459,21 @@ static void ac97_arm_write_trap(void)
     if (!g_mcpx_memory || g_ac97_page)
         return;
     g_ac97_page = (char *)g_mcpx_memory + AC97_NABM_OFFSET;
+#if defined(__ANDROID__)
+    /* RE-SoT: no vectored handlers or trap flag on Android. The host's
+     * SIGSEGV handler calls xbox_Ac97HandleFault, which performs the write
+     * itself (below). */
+    if (!VirtualProtect(g_ac97_page, AC97_TRAP_BYTES, PAGE_READONLY, &old)) {
+        g_ac97_page = NULL;
+        fprintf(stderr, "  AC97: could not arm the bus-master write trap;"
+                        " a channel reset will spin\n");
+        return;
+    }
+    fprintf(stderr, "  AC97: bus-master writes trapped at 0x%08X"
+                    " (channel reset completes on write)\n",
+            XBOX_MCPX_BASE + AC97_NABM_OFFSET);
+    return;
+#endif
     /* First, so it runs before the game target's own crash reporter, which
      * would otherwise print the write as an access violation. */
     g_ac97_veh = AddVectoredExceptionHandler(1, ac97_write_veh);
@@ -478,6 +493,48 @@ static void ac97_arm_write_trap(void)
                     " (channel reset completes on write)\n",
             XBOX_MCPX_BASE + AC97_NABM_OFFSET);
 }
+
+#if defined(__ANDROID__) && defined(__aarch64__)
+/* RE-SoT: the Android half of the trap. The faulting store is decoded
+ * (platform/mmio_decode.h) and performed with the page briefly writable,
+ * then RR is masked as the single-step path does. The protection covers a
+ * whole host page, which on 16 KB-page devices is more than AC97_TRAP_BYTES;
+ * every write inside it is performed the same way. */
+#include "../platform/mmio_decode.h"
+
+static size_t ac97_trap_span(void)
+{
+    long page = sysconf(_SC_PAGESIZE);
+    return page > (long)AC97_TRAP_BYTES ? (size_t)page : AC97_TRAP_BYTES;
+}
+
+static uint64_t ac97_a64_read(void *dev, uint32_t off, int size)
+{
+    uint64_t v = 0;
+    (void)dev;
+    memcpy(&v, (char *)g_ac97_page + off, (size_t)size);
+    return v;
+}
+
+static void ac97_a64_write(void *dev, uint32_t off, uint64_t val, int size)
+{
+    DWORD old;
+    (void)dev;
+    VirtualProtect(g_ac97_page, ac97_trap_span(), PAGE_READWRITE, &old);
+    memcpy((char *)g_ac97_page + off, &val, (size_t)size);
+    ac97_clear_reset_bits();
+    VirtualProtect(g_ac97_page, ac97_trap_span(), PAGE_READONLY, &old);
+}
+
+int xbox_Ac97HandleFault(void *ucontext, uintptr_t fault)
+{
+    if (!g_ac97_page || fault < (uintptr_t)g_ac97_page
+            || fault >= (uintptr_t)g_ac97_page + ac97_trap_span())
+        return 0;
+    return mmio_emulate(ucontext, (uint32_t)(fault - (uintptr_t)g_ac97_page), NULL,
+                        ac97_a64_read, ac97_a64_write);
+}
+#endif
 
 /*
  * Command words the DSP stub completes instantly. A bring-up probe, not a
@@ -1973,7 +2030,18 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
          * this on Windows needs placeholder reservations (VirtualAlloc2). */
 #ifndef _WIN32
         g_span_size = g_memory_size * (size_t)(1 + XBOX_NUM_MIRRORS);
+#if defined(__ANDROID__)
+        /* RE-SoT: reserve the whole 4 GB guest space. The contiguous window,
+         * NV2A, MCPX and flash apertures are fixed offsets from the base, and
+         * an Android process has ART and its libraries wherever the kernel
+         * put them; inside a range we own they cannot collide. */
+        g_span_size = (size_t)0x100000000ull;
+#endif
         g_span_base = VirtualAlloc(NULL, g_span_size, MEM_RESERVE, PAGE_NOACCESS);
+#if defined(__ANDROID__)
+        if (g_span_base)
+            w32_compat_own_range(g_span_base, g_span_size);
+#endif
         if (g_span_base) {
             VirtualFree(g_span_base, g_memory_size, MEM_RELEASE);
             g_memory_base = MapViewOfFileEx(g_mapping_handle,

@@ -9,7 +9,8 @@
 # reSOT
 
 Static recompilation of the original Xbox builds of
-**Prince of Persia: The Sands of Time** into native Windows executables.
+**Prince of Persia: The Sands of Time** into native Windows executables
+and one native Android app for both games (first build, not yet run on a device).
 
 <img src="docs/media/gameplay-xbox-retail.jpg" alt="The Xbox retail game recompiled, 16:9: the ramparts cutscene, the Vizier's guard, the Prince in the courtyard, a wall run, a ladder, the inner courtyard, two sword fights, the pause menu">
 
@@ -111,6 +112,7 @@ for the folder contents and packaging from a local build.
 | Platform | Instructions |
 | --- | --- |
 | Windows 10/11 x64 (Direct3D 11, XInput, XAudio2; MSVC, CMake) | [port/windows/README.md](port/windows/README.md): requirements, build, run, controls |
+| Android 10+ arm64 (Vulkan via SDL GPU, SDL3 input and audio; NDK, Gradle): one app, `com.fulger.resot`, for both games, installed from their ISOs | [port/android/README.md](port/android/README.md): game files, touch controls, build |
 
 In short, on Windows:
 
@@ -134,16 +136,17 @@ In short, on Windows:
 | External game folder / options / F6 diagnostics (F7 panel restored: both builds pass, in-game check pending) | 🟢 verified by the user (2026-10-18), including Load Map; launcher with ISO installation run once by the user (demo ISO, 2026-10-18) | 🟢 verified by the user (2026-10-18); no hidden level select exists in this XBE |
 | Movies (Bink via overlay) | 🟢 audio and video verified by the user (2026-10-18) | 🟢 audio and video verified by the user (2026-10-18) |
 | Menus | 🟢 verified by the user (2026-10-18) | 🟢 verified by the user (2026-10-18) |
-| Native D3D12 (optional in F7; restart required; SDL GPU, no 11On12) | 🟡 builds; 55-second demo run and menu GPU readback checked (2026-10-18); vertex programs on CPU; 25–63 FPS in sampled windows; gameplay validation pending | 🟡 builds; 115-second retail run and first-level GPU readback checked (2026-10-18), after stale menu-label fix; native visibility contract passes GPU tests; full gameplay/performance validation pending |
-| Native Vulkan (optional in F7; restart required; SDL GPU, no DXVK) | 🟡 builds; 45-second demo run and animated scene GPU readback checked (2026-10-18); vertex programs on CPU; 10–63 FPS in sampled windows; gameplay validation pending | 🟡 builds; 150-second retail run reached first-level courtyard and ramparts; GPU readbacks checked (2026-10-18); native visibility contract passes GPU tests; full gameplay validation pending |
+| Native D3D12 (optional in F7; restart required; SDL GPU, no 11On12) | 🟡 builds; 55-second runs (2026-10-18): post-processing off skips the glow composite (trace), FPS limit/VSync options logged as applied; vertex programs on CPU; 43–87 FPS in sampled windows (not an A/B comparison); gameplay validation pending | 🟡 builds; 90-second run (2026-10-18) after the encoder changes, 38–59 FPS in sampled windows; post-processing skip not seen in the traced retail frame; native visibility contract passes GPU tests; full gameplay/performance validation pending |
+| Native Vulkan (optional in F7; restart required; SDL GPU, no DXVK) | 🟡 builds; 55-second run (2026-10-18): post-processing off skips the glow composite (trace); vertex programs on CPU; 36–50 FPS in sampled windows (not an A/B comparison); gameplay validation pending | 🟡 builds; 150-second retail run reached first-level courtyard and ramparts; GPU readbacks checked (2026-10-18); 90-second run after the encoder changes, 28–42 FPS in sampled windows; native visibility contract passes GPU tests; full gameplay validation pending |
 | In-level rendering | 🟡 projected shadows; cube-map upload/sampling implemented and host GPU test passed, game appearance unverified; first-level flickering/distortion traced to ordered GPU fences: gone for the user with them off (2026-10-17), now the demo default; no stencil | 🟡 first playable level reached; cube-map upload/sampling implemented and host GPU test passed, game appearance unverified; rendering accuracy incomplete |
-| Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or Alt+Enter/F11; culling widened to the new sides; pause backdrop expanded and upper-left HUD double compression removed, including sand crescents (see validation); the menu garden is not modelled past its 4:3 edge | 🟡 16:9 by default; demo's projection and culling hooks ported to the retail addresses, projected-UI policy on (menu backdrop full width); dialog text wider than its box at 16:9; HUD not reached |
+| Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or Alt+Enter/F11; culling widened to the new sides; pause backdrop expanded; HUD at its 4:3 proportions and anchored to the screen's left edge, confirmed by the user (2026-10-18); the menu garden is not modelled past its 4:3 edge | 🟡 16:9 by default; demo's projection and culling hooks ported to the retail addresses, projected-UI policy on (menu backdrop full width); dialog text wider than its box at 16:9; health bar anchored to the left edge in first-level readbacks (2026-10-18), tutorial text unchanged |
 | Frame rate | 🟡 120+ FPS reported by the user (2026-10-18); first-use shader stalls moved off the executor (hourglass room: lowest 80 fps, was 7); batches reused across frames (garden 93-100 fps at ~880 draws, was 67-78); title and executor still run in lockstep; broader performance validation incomplete | 🟡 120+ FPS reported by the user (2026-10-18); broader performance validation incomplete |
 | Controller / keyboard | 🟢 verified by the user (2026-10-18) | 🟢 verified by the user (2026-10-18) |
 | Audio | 🟡 audio corrected, confirmed by the user (2026-10-18); bath-fight stutter fixed, user confirmed (2026-10-18 evening); broader audio validation incomplete | 🟡 audio corrected, confirmed by the user (2026-10-18); broader audio validation incomplete |
 | Save / load, memory unit | 🟡 save crash reported resolved by the user (2026-10-18); full save/load and memory-unit validation incomplete | 🟡 save crash reported resolved by the user (2026-10-18); full save/load and memory-unit validation incomplete |
 | Virtual memory reservations | 🟡 reserve/commit fix tested on synthetic input; optional, gameplay with this option not checked | 🟡 corrected reserve/commit and audio address translation; user passed the previous crash point; checkpoint save/load still untested |
 | Xbox Live (retail only) | n/a | ⚪ not planned |
+| Android (arm64, Vulkan; one APK for both) | 🟡 builds and links (2026-10-18); not yet run on a device: boot, rendering, audio, touch and ISO installation unverified | 🟡 builds and links (2026-10-18); not yet run on a device |
 | Checked against the console | ⚪ | ⚪ |
 
 ## Repository layout
@@ -157,10 +160,11 @@ reSOT/
   port/                  what replaces the console
     windows/src/         Windows host: entry point, launcher (title screen, ISO install), crash report, profiler
     windows/res/         icon, version resource, launcher face (AtlantisMF.ttf, see docs/LICENSING.md)
+    android/             Android app: native host (src/), NDK CMakeLists.txt, Gradle project, launcher, touch controls (app/)
     game/                hand-written overrides the lifted code calls
     third_party/xboxrecomp/      recompiler (tools/) and Xbox runtime (src/) for both targets, patched; changes marked RE-SoT
     third_party/extract-xiso/    extract-xiso 2.7.1, unchanged: the launcher's ISO installation
-  tools/                 recomp.ps1, run.ps1, shortcut.ps1, seed-scan.py, xbe-dis.py, check-hlsl.py
+  tools/                 recomp.ps1, build-android.ps1, run.ps1, shortcut.ps1, seed-scan.py, xbe-dis.py, check-hlsl.py
   docs/                  RECOMP.md, VALIDATION.md, LICENSING.md, history/, media/ (logo, screenshots)
   research/              analysis databases and Ghidra notes (ignored)
   Assets/                your game files (ignored)

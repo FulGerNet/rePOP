@@ -51,6 +51,59 @@ Native GPU vertex-program translation, border-address sampling, full stencil
 and broader gameplay/performance validation remain unfinished. See the latest
 entry in `VALIDATION.md` for observations, commands and remaining limits.
 
+## Android host (arm64)
+
+The same lifted C and the same runtime are built for Android by the NDK
+(`port/android/CMakeLists.txt`), one shared library per target in one APK.
+The lifted code needs nothing new: it compiles for AArch64 as it is, with
+`-fwrapv -fsigned-char -ffp-contract=off -fno-strict-aliasing` so clang keeps
+x86's wrapping arithmetic, signed `char`, separate (unfused) floating-point
+operations and the type punning of `MEM*()`. What the runtime needed
+(all marked `RE-SoT`):
+
+- **GPU.** `nv2a_hw_d3d11.inc` builds on Android with `RESOT_HW_D3D11` 0:
+  the NV2A state, surface bookkeeping and dispatch are shared, every Direct3D
+  11 body is compiled out, and `hw_init` goes straight to the native encoder
+  on Vulkan. `nv2a_hw_native.inc` takes the host's SDL window instead of
+  wrapping an HWND, sizes the composition from it, and calls the retail query
+  table directly (SDL is linked, not delay-loaded; the patch exports
+  `RESOT_GetVulkanQueryAPI` from SDL's version script).
+- **MMIO.** The APU, AC'97 bus-master and OHCI registers are trapped as on
+  Windows, but the fault is a SIGSEGV and the instruction AArch64:
+  `platform/mmio_decode.h` gains a decoder for the load/store forms clang
+  emits for the volatile `MEM*()` accesses (immediate, unscaled, pre/post
+  index, register offset, LDP/STP, LDAR/STLR), used by `apu_mmio_hook.c`,
+  `ohci.c` and the AC'97 trap (`xbox_Ac97HandleFault`, which performs the
+  store itself instead of single-stepping).
+- **Address space.** `xbox_memory_layout.c` reserves the whole 4 GB guest
+  space PROT_NONE before mapping into it; `win32_compat.c` maps fixed
+  addresses inside that reservation with `MAP_FIXED`, returns released ranges
+  to it, commits nothing for pure reservations and rejects a fixed mapping the
+  kernel placed elsewhere (kernels before 4.17 ignore `MAP_FIXED_NOREPLACE`).
+- **Handles.** `win32_compat.c` keeps a registry of its live objects and
+  answers a value that is not one of them as Win32 does (failure,
+  `ERROR_INVALID_HANDLE`) instead of dereferencing it; the bridge relies on
+  that (`bridge_KeSetEvent` on an unknown guest KEVENT, the demo's vblank
+  handler at XBE 0x0029F7F8).
+- **Bionic.** `memfd_create` through the system call below API 30, no
+  `pthread_cancel` or `explicit_bzero`, `GetThreadId`/`STILL_ACTIVE` for the
+  bridge's thread objects, an 8 MB default host stack for guest threads, the
+  sided modifier and keypad virtual keys.
+- **File names.** `kernel_path.c` (Android) matches each path component
+  without regard to case when the exact path does not exist, as Windows and
+  the Xbox do; the retail disc's `VIDEO/` and `SOUND/` are asked for in other
+  spellings.
+- **Presentation.** `fb_present.c` shares the PVIDEO overlay, frame limiter,
+  key state and option callbacks with Android; the window, GDI and the window
+  procedure stay Windows-only, and Android's thread only latches the overlay
+  and repaints while the title is not flipping.
+
+Not built on Android: `src/d3d` and `src/nv2a` (the D3D8 layer and xemu's
+register model, which the pushbuffer executor replaced; on Windows nothing
+pulls them from their static libraries either), `xinput_device.c`,
+`apu_xaudio2.c` and the Windows host files, which `port/android/src`
+replaces. See [port/android/README.md](../port/android/README.md).
+
 ## Pipeline
 
 ### Portable host and player overlay
@@ -215,14 +268,22 @@ the variable is not already set; an empty `RESOT_ASPECT` builds 4:3.
   demo enables `RECOMP_HW_PROJECTED_UI=1`: its full-height flat pause layers
   have already been narrowed by the projection (x=80.531..560.531 at 16:9),
   so they are expanded back to the full display rather than compressed again.
-  Flat HUD batches in the upper-left region, with depth testing disabled (regardless of the depth-write mask),
-  also skip the second compression; a common translation preserves their
-  existing left anchor and keeps frame and fill aligned. At 16:9 this restores
-  one third of the previous HUD width, with the same height. The bounds come
-  from frame traces, not fixed texture heap addresses. `-Set
-  @{RECOMP_HW_PROJECTED_UI='0'}` restores the previous behaviour for comparison.
-  Retail does not enable this policy. Render targets of other sizes (the glow
-  chain) are left alone.
+  The HUD also passes through the projection, so it already has its 4:3
+  proportions, centred. A flat batch with depth testing disabled (either
+  depth-write mask) that lies inside the projected 4:3 frame, wholly on one
+  side of x=320 and in the top (y <= 192) or bottom (y >= 288) band skips the
+  second compression and moves by `320 * (1 - 1/widen)` (80 at 16:9) towards
+  its side: its margin from the wide picture's edge is the 4:3 one. All
+  pieces on a side move together, so frame, fill and pips stay aligned;
+  pieces across the centre keep the default rule. Traced: demo health
+  frame/sand x=118.931..280.211 y=38.931..115.731, retail health bar
+  x=107.531..250.892 y=36.531..68.531 (both at 16:9, top left). The bounds
+  come from frame traces, not texture heap addresses; the frame trace prints
+  `hud -1/1` for the batches the rule moves. `-Set @{RECOMP_HW_HUD_EDGE='0'}`
+  keeps the HUD inside the centred 4:3 frame; `-Set
+  @{RECOMP_HW_PROJECTED_UI='0'}` turns the whole policy off for comparison.
+  Both targets enable it (`RESOT_PROJECTED_UI` in `target.h`). Render targets
+  of other sizes (the glow chain) are left alone.
 - The window keeps the picture's shape; movies stay 4:3 in the middle.
   Alt+Enter or F11 switches between the window and a borderless window over
   the monitor (a maximised window keeps its title bar and so gets bars).

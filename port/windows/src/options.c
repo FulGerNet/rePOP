@@ -92,7 +92,7 @@ static const char *active_renderer(void)
            backend==11?"D3D11":"initializing";
 }
 static int s_joy_was[25], s_walk, s_walk_was, s_pending_size, s_size_posted;
-static int s_native_capture, s_native_since;
+static int s_native_capture, s_native_since, s_capture_armed;
 static int s_keyboard_enabled=1, s_mouse_speed=43, s_walk_deflection=12000;
 static char s_path[1024];
 
@@ -126,6 +126,16 @@ static int save_config(void)
 {
     char name[32], value[32];
     int i, ok = 1;
+    /* A scripted pad (RECOMP_PAD_SCRIPT / RECOMP_PAD_LIVE) is a test run: its
+     * timed presses can land on reSOT Options and toggle settings or rebind
+     * buttons. Keep those changes for the run, never in the player's file. */
+    if (getenv("RECOMP_PAD_SCRIPT") || getenv("RECOMP_PAD_LIVE")) {
+        static int logged;
+        if (!logged++) fprintf(stderr,"[OPTIONS] scripted pad: changes not saved to %s\n",s_path);
+        snprintf(s_status,sizeof s_status,"Scripted run: changes are not saved.");
+        mark_dirty();
+        return 1;
+    }
     ok &= WritePrivateProfileStringA("Graphics","Renderer",s_renderer_tokens[s_renderer],s_path);
     snprintf(value,sizeof value,"%d",s_fps);
     ok &= WritePrivateProfileStringA("Graphics","FPSLimit",value,s_path);
@@ -368,7 +378,7 @@ static int event(void *handle, unsigned message, uintptr_t wp, intptr_t lp)
             else if(s_controls_expanded && body>=controls_top()+38 && body<controls_top()+71) { s_tab=x<255?0:1; s_capture=-1; }
             else if(action>=0 && x>=245) {
                 if(message==WM_RBUTTONDOWN) { (s_tab?s_joy:s_keys)[action]=0; save_config(); }
-                else if(message==WM_LBUTTONDBLCLK) { s_capture=action;s_capture_tab=s_tab;
+                else if(message==WM_LBUTTONDBLCLK) { s_capture=action;s_capture_tab=s_tab;s_capture_armed=0;
                     strcpy(s_status,s_tab?"Press a joystick button or move a stick. Esc cancels.":
                            "Press a key or mouse button. Esc cancels."); }
             }
@@ -519,10 +529,27 @@ static void input(void *state,unsigned port)
         if(scripted)foreground=1;}
     AcquireSRWLockExclusive(&s_lock);
     blocked=s_native_capture || resot_options_blocks_input();
-    if(port==0)for(i=1;i<=24;i++) {
-        int down=source_value(&raw,i)>16000;
-        if(foreground && blocked && s_capture>=0 && s_capture_tab && down && !s_joy_was[i])assign_binding(i);
-        s_joy_was[i]=down;
+    /* A pad binding is taken only once every pad input has been released
+     * after the capture started, so the press that opened the row is never
+     * bound. From the game's menu the pad has no Esc: Back cancels there and
+     * an untouched capture lapses after 8 s, instead of the next button (B,
+     * pressed to leave the page) silently replacing the binding. */
+    if(port==0) {
+        int any=0,taken=0;
+        for(i=1;i<=24;i++)any|=source_value(&raw,i)>16000;
+        if(s_capture>=0 && s_capture_tab && s_native_capture &&
+           GetTickCount()-(DWORD)s_native_since>8000) {s_capture=-1;s_native_capture=0;mark_dirty();}
+        if(s_capture>=0 && s_capture_tab && !any)s_capture_armed=1;
+        for(i=1;i<=24;i++) {
+            int down=source_value(&raw,i)>16000;
+            if(!taken && foreground && blocked && s_capture>=0 && s_capture_tab && s_capture_armed &&
+               down && !s_joy_was[i]) {
+                if(s_native_capture && i==10) {s_capture=-1;s_native_capture=0;mark_dirty();}
+                else assign_binding(i);
+                taken=1;
+            }
+            s_joy_was[i]=down;
+        }
     }
     if(!foreground || blocked) {
         uint32_t packet=raw.packet;memset(out,0,sizeof *out);out->packet=packet+1;
@@ -608,7 +635,7 @@ void resot_native_activate(int page, int item)
         }
         save_config();
     } else if (item>=0 && item<ACTIONS) {
-        s_capture=item; s_capture_tab=page==RESOT_NATIVE_JOY; s_native_capture=1;
+        s_capture=item; s_capture_tab=page==RESOT_NATIVE_JOY; s_native_capture=1; s_capture_armed=0;
         s_native_since=(int)GetTickCount();
     }
     mark_dirty();

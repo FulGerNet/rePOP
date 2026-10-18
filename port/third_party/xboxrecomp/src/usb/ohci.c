@@ -1278,7 +1278,7 @@ void xbox_OhciInit(void)
     ohci_reset(&s_hc[0], XBOX_OHCI0_BASE, 0);
     ohci_reset(&s_hc[1], XBOX_OHCI1_BASE, 1);
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__ANDROID__)   /* RE-SoT: Android traps too */
     /* The registers have to fault to be answered. The MCPX aperture is mapped
      * as plain committed memory, so both blocks are made inaccessible here and
      * the title's VEH routes the faults back to xbox_OhciHandleMmio.
@@ -1314,7 +1314,7 @@ void xbox_OhciInit(void)
             XBOX_OHCI0_BASE, XBOX_OHCI1_BASE, OHCI_PORTS);
     fflush(stderr);
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__ANDROID__)   /* RE-SoT */
     {
         HANDLE th = CreateThread(NULL, 0, ohci_thread, NULL, 0, NULL);
         if (th)
@@ -1356,6 +1356,22 @@ int xbox_OhciHandleMmio(void *ctx, uint32_t xbox_va)
                         "%02X %02X %02X %02X %02X %02X\n",
                 hc->index, xbox_va - hc->base,
                 ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
+        fflush(stderr);
+    }
+    return ok;
+#elif defined(__ANDROID__)
+    /* RE-SoT: ctx is the SIGSEGV ucontext (port/android/src/mmio_android.c). */
+    OhciController *hc = hc_for(xbox_va);
+    int ok;
+
+    if (!hc)
+        return 0;
+    ok = mmio_emulate(ctx, xbox_va - hc->base, hc, ohci_read, ohci_write);
+    if (!ok && hc->decode_fail++ < 20) {
+        uint32_t insn;
+        memcpy(&insn, (const void *)(uintptr_t)((ucontext_t *)ctx)->uc_mcontext.pc, 4);
+        fprintf(stderr, "  [OHCI%d] undecoded access at +0x%03X: insn %08X\n",
+                hc->index, xbox_va - hc->base, insn);
         fflush(stderr);
     }
     return ok;

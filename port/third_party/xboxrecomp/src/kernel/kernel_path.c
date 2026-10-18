@@ -490,6 +490,50 @@ static char s_game_dir[MAX_PATH];
 static char s_save_dir[MAX_PATH];
 static BOOL s_initialized = FALSE;
 
+#if defined(__ANDROID__)
+#include <dirent.h>
+#include <strings.h>
+/* RE-SoT: Xbox paths are case-insensitive and the title does not ask for its
+ * files in the disc's case (retail ships VIDEO/ and SOUND/). Android's shared
+ * storage is case-insensitive on most devices, not all. When the exact path
+ * does not exist, each component below base that matches an existing entry
+ * case-insensitively takes that entry's spelling; the rest (a file about to
+ * be created) is kept. */
+static void resolve_case(char *path, size_t base_len)
+{
+    char *p;
+    if (access(path, F_OK) == 0 || base_len >= strlen(path))
+        return;
+    p = path + base_len;
+    while (*p == '/') p++;
+    while (*p) {
+        char *end = strchr(p, '/'), saved = 0;
+        DIR *dir;
+        struct dirent *e;
+        int found = 0;
+        if (end) { saved = *end; *end = 0; }
+        if (access(path, F_OK) != 0) {
+            p[-1] = 0;                       /* the parent, which exists */
+            dir = opendir(path[0] ? path : "/");
+            p[-1] = '/';
+            if (dir) {
+                while ((e = readdir(dir)) != NULL)
+                    if (strlen(e->d_name) == strlen(p) && !strcasecmp(e->d_name, p)) {
+                        memcpy(p, e->d_name, strlen(p));
+                        found = 1;
+                        break;
+                    }
+                closedir(dir);
+            }
+            if (!found) { if (end) *end = saved; return; }
+        }
+        if (!end) return;
+        *end = saved;
+        p = end + 1;
+    }
+}
+#endif
+
 /* Strip a single trailing '/' (but never the root '/'). */
 static void strip_trailing_slash(char* s)
 {
@@ -616,6 +660,9 @@ translate:
                 host_path_buf[--n] = '\0';
         }
 
+#if defined(__ANDROID__)
+        resolve_case(host_path_buf, strlen(base_dir));
+#endif
         XBOX_TRACE(XBOX_LOG_PATH, "%s -> %s", xbox_path, host_path_buf);
         return TRUE;
     }

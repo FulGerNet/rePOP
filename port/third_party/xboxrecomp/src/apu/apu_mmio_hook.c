@@ -284,3 +284,39 @@ bool apu_hook_handle_mmio(PCONTEXT ctx, uintptr_t fault_addr,
 }
 
 #endif /* _WIN32 */
+
+#if defined(__ANDROID__) && defined(__aarch64__)
+/* RE-SoT: Android. ctx is the SIGSEGV ucontext; the AArch64 decoder in
+ * platform/mmio_decode.h services the access against the same APU model. */
+#include "../platform/mmio_decode.h"
+
+#define APU_MMIO_BASE  0xFE800000u
+
+static uint64_t apu_a64_read(void *dev, uint32_t off, int size)
+{
+    return mcpx_apu_mmio_read((MCPXAPUState *)dev, off, (unsigned)size);
+}
+
+static void apu_a64_write(void *dev, uint32_t off, uint64_t val, int size)
+{
+    mcpx_apu_mmio_write((MCPXAPUState *)dev, off, val, (unsigned)size);
+}
+
+bool apu_hook_handle_mmio(void *ctx, uintptr_t fault_addr,
+                          uint32_t fault_xbox_va, int is_write)
+{
+    static int fails;
+    uint32_t off = fault_xbox_va - APU_MMIO_BASE;
+    bool ok;
+    (void)fault_addr; (void)is_write;
+    if (!g_apu_state) return false;
+    ok = mmio_emulate(ctx, off, g_apu_state, apu_a64_read, apu_a64_write) != 0;
+    if (!ok && fails++ < 20) {
+        uint32_t insn;
+        memcpy(&insn, (const void *)(uintptr_t)((ucontext_t *)ctx)->uc_mcontext.pc, 4);
+        fprintf(stderr, "[APU] MMIO decode fail at offset=0x%X: insn %08X\n", off, insn);
+        fflush(stderr);
+    }
+    return ok;
+}
+#endif

@@ -86,6 +86,10 @@ VOID  SetLastError(DWORD dwErrCode);
 
 /* ---- Interlocked atomics ---------------------------------------------- */
 LONG InterlockedIncrement(volatile LONG *Addend);
+#ifndef MemoryBarrier
+/* RE-SoT: full fence, as the Win32 macro (retail visibility reports). */
+#define MemoryBarrier() __atomic_thread_fence(__ATOMIC_SEQ_CST)
+#endif
 LONG InterlockedDecrement(volatile LONG *Addend);
 LONG InterlockedExchange(volatile LONG *Target, LONG Value);
 LONG InterlockedExchangeAdd(volatile LONG *Addend, LONG Value);
@@ -162,6 +166,12 @@ DWORD  ResumeThread(HANDLE h);
 DWORD  SuspendThread(HANDLE h);
 BOOL   TerminateThread(HANDLE h, DWORD exitCode);
 DWORD  GetCurrentThreadId(void);
+/* RE-SoT: the bridge's thread-object path (kernel_bridge.c) asks a handle for
+ * its thread ID and compares exit codes against STILL_ACTIVE (Android). */
+DWORD  GetThreadId(HANDLE h);
+#ifndef STILL_ACTIVE
+#define STILL_ACTIVE 259u
+#endif
 HANDLE GetCurrentThread(void);
 HANDLE GetCurrentProcess(void);
 DWORD  GetCurrentProcessId(void);
@@ -204,6 +214,10 @@ SIZE_T HeapSize(HANDLE heap, DWORD flags, LPCVOID mem);
 
 /* ---- Virtual memory --------------------------------------------------- */
 LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD protect);
+/* RE-SoT (Android): the runtime's own reservation of the guest address space.
+ * Fixed-address VirtualAlloc/MapViewOfFileEx inside it replace the reservation
+ * (MAP_FIXED); releases inside it return to PROT_NONE instead of a hole. */
+void  w32_compat_own_range(void *base, SIZE_T size);
 BOOL   VirtualFree(LPVOID address, SIZE_T size, DWORD freeType);
 BOOL   VirtualProtect(LPVOID address, SIZE_T size, DWORD newProtect, PDWORD oldProtect);
 
@@ -315,6 +329,31 @@ int   MessageBoxA(HWND hwnd, LPCSTR text, LPCSTR caption, UINT type);
 #define VK_F4        0x73
 #define VK_F5        0x74
 #define VK_F12       0x7B
+/* RE-SoT: the sided modifiers and keypad keys the reSOT keyboard layout
+ * binds (port/windows/src/options.c, port/android/src/options_android.c). */
+#define VK_XBUTTON1  0x05
+#define VK_XBUTTON2  0x06
+#define VK_CLEAR     0x0C
+#define VK_NUMPAD0   0x60
+#define VK_NUMPAD1   0x61
+#define VK_NUMPAD2   0x62
+#define VK_NUMPAD3   0x63
+#define VK_NUMPAD4   0x64
+#define VK_NUMPAD5   0x65
+#define VK_NUMPAD6   0x66
+#define VK_NUMPAD7   0x67
+#define VK_NUMPAD8   0x68
+#define VK_NUMPAD9   0x69
+#define VK_DECIMAL   0x6E
+#define VK_F6        0x75
+#define VK_F7        0x76
+#define VK_F11       0x7A
+#define VK_LSHIFT    0xA0
+#define VK_RSHIFT    0xA1
+#define VK_LCONTROL  0xA2
+#define VK_RCONTROL  0xA3
+#define VK_LMENU     0xA4
+#define VK_RMENU     0xA5
 #define VK_OEM_PLUS  0xBB
 #define VK_OEM_COMMA 0xBC
 #define VK_OEM_MINUS 0xBD

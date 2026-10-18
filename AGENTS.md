@@ -12,10 +12,11 @@ replaces the console, and the tools. Start with [README.md](README.md).
 | --- | --- |
 | `source/<target>/` | One Xbox executable: `target.h` (its XBE facts, each with its address), `seed_functions.json`, `target_hooks.c` (entry hooks with that XBE's addresses), `gen/` (the lifted C: generated, published) |
 | `port/windows/src/` | The Windows host: entry point, window, crash report, thread dump, profiler (`main.c`); launcher: title screen, demo/retail detection, ISO installation (`launcher.c`); `port/windows/res/`: icon, version resource, launcher face |
+| `port/android/` | The Android app (com.fulger.resot, one APK for both targets): native host (`src/`: SDL_main, AArch64 MMIO traps, input, audio, options, launcher JNI), `CMakeLists.txt` (NDK), Gradle project, Java launcher, game activity, touch controls, ISO installer (`app/`) |
 | `port/game/` | Hand-written code the lifted game calls, shared by the targets: manual overrides and indirect-call diagnostics (`recomp_manual.c`) |
 | `port/third_party/xboxrecomp/` | The vendored recompiler (`tools/`) and Xbox runtime (`src/`: kernel, NV2A on Direct3D 11, APU, USB, input, video), shared by both targets; per-target behaviour under `#if RESOT_RUNTIME_DEMO` / `RESOT_RUNTIME_RETAIL`; local changes marked `RE-SoT` |
 | `port/third_party/extract-xiso/` | extract-xiso 2.7.1, unchanged, built into the executables for the launcher's ISO installation |
-| `tools/` | `recomp.ps1` (lift and build), `run.ps1`, `shortcut.ps1`, `seed-scan.py`, `xbe-dis.py`, `check-hlsl.py` |
+| `tools/` | `recomp.ps1` (lift and build), `build-android.ps1` and `setup-android.ps1` (the APK), `run.ps1`, `shortcut.ps1`, `seed-scan.py`, `xbe-dis.py`, `check-hlsl.py` |
 | `docs/` | `RECOMP.md`, `VALIDATION.md`, `LICENSING.md`, `history/`, `media/` (logo and the README's screenshots) |
 | `Assets/`, `research/` | The user's game files and the analysis that quotes them (ignored) |
 | `bin/`, `build*/`, `logs/` | Outputs (ignored) |
@@ -26,6 +27,7 @@ replaces the console, and the tools. Start with [README.md](README.md).
 - Never commit game files, executables, extracted assets, Ghidra databases, disassembly listings. `Assets/`, `research/`, `bin/`, `build*/` and `logs/` are ignored for that reason. The generated source in `source/<target>/gen/` must be published; this exception does not include game data, executables or extracted assets.
 - `source/<target>/gen` is produced by `tools/recomp.ps1` from the user's XBE. Never edit it by hand. Change behaviour in `port/windows` (host), `port/game` (hand-written overrides), in the target's `target.h`, `target_hooks.c` and `seed_functions.json`, or in the shared runtime, `port/third_party/xboxrecomp` (mark every change there with `RE-SoT` and say why in the comment).
 - Both targets build from one runtime, each in its own tree (`build/<target>`), compiled with `RESOT_RUNTIME_DEMO` or `RESOT_RUNTIME_RETAIL` (`src/kernel/resot_runtime.h`). A runtime fix checked on one target goes under that target's `#if`; it reaches the other only after it is checked against that XBE. Both executables share `port/windows` and `port/game`.
+- There are two hosts, Windows (`port/windows`) and Android (`port/android`). Keep them alike: a change to the launcher (layout, wording, colours, installation), the options, the controls or the boot defaults goes into both, or the other one's README says why not. Android has one app for both targets, renders only with the native Vulkan encoder, reads `default.xbe` from the game folder, and installs games from an ISO into `Android/data/com.fulger.resot/files/xbox-demo` and `xbox-retail`. Runtime code shared by both is guarded by `_WIN32` / `__ANDROID__` (and `RESOT_HW_D3D11` in the GPU backend); a change there is built for both (`recomp.ps1 -BuildOnly`, `build-android.ps1`).
 - Every target-specific constant carries the XBE address it came from. Preserve the SHA-256 checks in `tools/recomp.ps1`; an address is only valid for the hashed file.
 - Rebuild the seed list only with `tools/recomp.ps1 -Seeds` (unseeded baseline) or add observed targets with `-Observed <log>`. A wrong seed splits a function and corrupts callee-saved registers far from the cause; find that with `-AbiCheck` builds (`run.ps1 -Abi`).
 - Check shaders with `python tools/check-hlsl.py` before rebuilding. Runtime-only edits need `recomp.ps1 -BuildOnly`; lifter or seed changes need the full run.
@@ -39,6 +41,7 @@ replaces the console, and the tools. Start with [README.md](README.md).
 | --- | --- |
 | [README.md](README.md) | What the project is, status, game files, layout |
 | [port/windows/README.md](port/windows/README.md) | Building and running on Windows, controls, switches |
+| [port/android/README.md](port/android/README.md) | Building and running on Android, game files, touch controls |
 | [docs/RECOMP.md](docs/RECOMP.md) | The pipeline, addresses, runtime changes, diagnostics |
 | [docs/VALIDATION.md](docs/VALIDATION.md) | What was run and observed |
 | [docs/LICENSING.md](docs/LICENSING.md) | Licences and what is not covered |

@@ -7,6 +7,14 @@
 #include <string.h>
 #include "target.h"
 
+#if !defined(_MSC_VER)
+/* Android (port/android) builds this file too, with no structured exception
+ * handling: every read below is range-checked first (scene_range), which is
+ * the protection there. */
+#define __try if (1)
+#define __except(filter) else
+#endif
+
 extern ptrdiff_t g_xbox_mem_offset;
 extern void *xbox_GetMemoryBase(void);
 extern int guest_vmem_accessible(uint32_t address, uint32_t bytes);

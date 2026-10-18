@@ -1,0 +1,18 @@
+// reSOT for Android: one app (com.fulger.resot) for the demo and the retail
+// game. Built by tools/build-android.ps1; see README.md here.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "reSOT"
+include ":app"

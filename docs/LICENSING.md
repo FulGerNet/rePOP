@@ -31,6 +31,22 @@ under ignored `build/deps/` and `bin/`; no SDL binaries are committed.
 the binary as modified, including its source archive hash and patch location.
 The native renderer uses SDL GPU directly, without D3D11 translation.
 
+**Android (`port/android`).** The APK carries the same altered SDL3 3.4.18,
+built from the checked source archive by `tools/setup-android.ps1` (the same
+`port/third_party/sdl-gpu-query/` additions, and the Vulkan query function
+added to SDL's export list by `tools/patch-sdl-gpu-query.py`), and the
+shared runtime and lifted code of both targets. extract-xiso itself is not
+built for Android: `XisoExtractor.java` reads the disc in Java following
+extract-xiso's format handling, and carries its copyright notice, licence and
+acknowledgement (*This product includes software developed by in
+<in@fishtank.com>.*). The Gradle build copies `LICENSE-SDL3.txt`,
+`LICENSE-extract-xiso.txt`, reSOT's and xboxrecomp's licences and xboxrecomp's
+`NOTICE` into the APK's `assets/licenses/`. The launcher face
+(`AtlantisMF.ttf`, below) is packaged when present, as on Windows. The APK is
+signed with the building computer's debug key; it contains the C lifted from
+the user's own XBEs and is, like the Windows executables, a local build for
+the owner of the discs.
+
 **DirectXShaderCompiler v1.9.2609**
 (https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.9.2609)
 is a build dependency only. Its official checked SDK is installed under

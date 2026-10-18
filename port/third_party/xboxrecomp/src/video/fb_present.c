@@ -16,8 +16,17 @@
  */
 #include <stdint.h>
 
+/* RE-SoT: Android shares everything here except the window itself: the
+ * PVIDEO overlay, the frame limiter and the options/panel callbacks are the
+ * same code; the window, its messages and GDI are Windows-only, and the
+ * Android host (port/android/src) supplies the SDL window, the keys and the
+ * panel's text. */
+#if defined(_WIN32) || defined(__ANDROID__)
 #if defined(_WIN32)
 #include <windows.h>
+#else
+#include "../platform/win32_compat.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -156,6 +165,7 @@ void xbox_FramebufferSetWowProvider(void (*provider)(char *, size_t))
     s_wow_provider = provider;
 }
 
+#if defined(_WIN32)
 int xbox_FramebufferDebugPanelGet(const uint32_t **pixels, uint32_t *width,
                                  uint32_t *height)
 {
@@ -223,6 +233,49 @@ int xbox_FramebufferDebugPanelGet(const uint32_t **pixels, uint32_t *width,
     *pixels = bits; *width = PANEL_W; *height = PANEL_H;
     return 1;
 }
+#else
+/* RE-SoT (Android): the same panel, with text from the host's font
+ * (resot_host_draw_text, port/android/src/font_android.c). Wider than on
+ * Windows: the font is fixed-width. */
+extern void resot_host_draw_text(uint32_t *bits, int w, int h, int x, int y,
+                                 const char *text, uint32_t argb);
+int xbox_FramebufferDebugPanelGet(const uint32_t **pixels, uint32_t *width,
+                                 uint32_t *height)
+{
+    enum { PANEL_W = 440, PANEL_H = 88 };
+    static uint32_t bits[PANEL_W * PANEL_H];
+    static DWORD refreshed, sampled;
+    static LONG last_flips;
+    static double fps;
+    DWORD now;
+    char scene[256] = "Not loaded", line[300];
+
+    if (s_options_panel && s_options_panel(pixels, width, height)) return 1;
+    if (!InterlockedCompareExchange(&s_debug_panel, 0, 0))
+        return 0;
+    now = GetTickCount();
+    if (!sampled) { sampled = now; last_flips = s_flips; }
+    if (now - sampled >= 500) {
+        LONG flips = s_flips;
+        fps = (double)((DWORD)flips - (DWORD)last_flips) * 1000.0 / (now - sampled);
+        sampled = now; last_flips = flips;
+    }
+    if (!refreshed || now - refreshed >= 200) {
+        size_t i;
+        for (i = 0; i < (size_t)PANEL_W * PANEL_H; i++) bits[i] = 0xA0151C29u;
+        if (s_wow_provider) s_wow_provider(scene, sizeof scene);
+        scene[sizeof scene - 1] = 0;
+        resot_host_draw_text(bits, PANEL_W, PANEL_H, 12, 8, "reSOT  |  FPS", 0xFFEBEFF8u);
+        snprintf(line, sizeof line, "FPS: %.1f", fps);
+        resot_host_draw_text(bits, PANEL_W, PANEL_H, 12, 34, line, 0xFFEBEFF8u);
+        snprintf(line, sizeof line, "Current WOW: %s", scene);
+        resot_host_draw_text(bits, PANEL_W, PANEL_H, 12, 60, line, 0xFFEBEFF8u);
+        refreshed = now;
+    }
+    *pixels = bits; *width = PANEL_W; *height = PANEL_H;
+    return 1;
+}
+#endif
 
 /* RE-SoT: software presentation uses the same panel pixels as Direct3D. */
 static void fb_debug_panel_compose(void)
@@ -363,6 +416,7 @@ void xbox_FramebufferTakeMouse(int *dx, int *dy)
     *dy = (int)InterlockedExchange(&s_mouse_dy, 0);
 }
 
+#if defined(_WIN32)
 /* RE-SoT: WM_KEYDOWN says VK_SHIFT/VK_CONTROL/VK_MENU for either side, and
  * with NumLock off the numeric pad arrives as the navigation keys. The
  * keyboard layout binds the left and right keys and the pad separately
@@ -590,6 +644,8 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     }
     return DefWindowProcA(h, m, w, l);
 }
+
+#endif /* _WIN32 */
 
 /* The display formats an Xbox front buffer is actually set to. The pitch says
  * how wide a row is in bytes, so pitch/width gives the pixel size; the exact
@@ -865,6 +921,7 @@ int xbox_FramebufferDumpBmp(const char *path)
     return 0;
 }
 
+#if defined(_WIN32)
 static DWORD WINAPI fb_thread(LPVOID unused)
 {
     HWND hwnd;
@@ -1009,6 +1066,44 @@ static DWORD WINAPI fb_thread(LPVOID unused)
     s_rgb = NULL;
     return 0;
 }
+#else
+/* RE-SoT (Android): the host made the SDL window and pumps its events on
+ * its own thread; this one does what fb_thread does besides the window:
+ * latch the movie overlay and repaint while the title is not flipping. */
+void xbox_FramebufferAndroidSetWindow(void *sdl_window) { s_hwnd = (HWND)sdl_window; }
+
+/* Keys and buttons from the host (gamepad, touch, a hardware keyboard), as
+ * the window procedure records them on Windows. */
+void xbox_FramebufferHostKey(int vk, int down)
+{
+    if ((unsigned)vk < 256)
+        s_key_down[vk] = (unsigned char)(down != 0);
+}
+
+void xbox_FramebufferHostMouse(int dx, int dy)
+{
+    InterlockedExchangeAdd(&s_mouse_dx, dx);
+    InterlockedExchangeAdd(&s_mouse_dy, dy);
+}
+
+void xbox_FramebufferToggleDebugPanel(void)
+{
+    InterlockedExchange(&s_debug_panel, !InterlockedCompareExchange(&s_debug_panel, 0, 0));
+}
+
+static DWORD WINAPI fb_thread(LPVOID unused)
+{
+    (void)unused;
+    fprintf(stderr, "  [FBWIN] Android presentation thread up\n");
+    while (InterlockedCompareExchange(&s_fb_running, 1, 1)) {
+        overlay_tick();
+        if (s_hw_mode)
+            nv2a_hw_idle_present();
+        Sleep(16);
+    }
+    return 0;
+}
+#endif
 
 void xbox_FramebufferWindowStart(void)
 {
@@ -1025,7 +1120,7 @@ void xbox_FramebufferWindowStart(void)
         InterlockedExchange(&s_fb_running, 0);
 }
 
-#else
+#else  /* neither _WIN32 nor __ANDROID__ */
 void xbox_FramebufferWindowSet(uint32_t fb_va, uint32_t pitch) { (void)fb_va; (void)pitch; }
 void xbox_FramebufferWindowPresent(uint32_t fb_va, uint32_t pitch) { (void)fb_va; (void)pitch; }
 void xbox_FramebufferWindowStart(void) {}

@@ -1,0 +1,96 @@
+plugins {
+    id "com.android.application"
+}
+
+// The repository root: the logo, the launcher's face and SDL's Java half
+// come from there, as the native half does (../CMakeLists.txt).
+def root = new File(rootDir, "../..").canonicalFile
+def sdlJava = new File(root, "build/deps/sdl-source/SDL3-3.4.18/android-project/app/src/main/java")
+def python = System.getenv("RESOT_PYTHON") ?: "python"
+def generatedAssets = new File(buildDir, "generated/resot-assets")
+
+android {
+    namespace "com.fulger.resot"
+    compileSdk 36
+    ndkVersion "29.0.14206865"
+
+    defaultConfig {
+        applicationId "com.fulger.resot"
+        minSdk 29
+        targetSdk 36
+        versionCode 1
+        versionName "0.1.0"
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_PLATFORM=android-29", "-DRESOT_PYTHON=" + python
+                targets "SDL3-shared", "resot_launcher", "resot_demo", "resot_retail"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file("../CMakeLists.txt")
+            version "3.30.3"
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs += sdlJava
+            assets.srcDirs += generatedAssets
+        }
+    }
+
+    buildTypes {
+        debug {
+            // The lifted code is far too slow without optimisation; the
+            // native targets set -O2 themselves (../CMakeLists.txt).
+            jniDebuggable true
+        }
+        release {
+            minifyEnabled false
+            // A first build: signed with this computer's debug key so it
+            // installs; a release key replaces it before publishing.
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// The launcher's logo (docs/media/reSOT.png) and, when present, its title
+// face (port/windows/res/AtlantisMF.ttf; see docs/LICENSING.md) -- the same
+// files the Windows launcher embeds.
+tasks.register("resotAssets", Copy) {
+    from(new File(root, "docs/media/reSOT.png"))
+    from(new File(root, "port/windows/res")) { include "AtlantisMF.ttf" }
+    // The notices binary redistributions must carry (docs/LICENSING.md).
+    from(new File(root, "port/third_party/extract-xiso/LICENSE.TXT")) {
+        into "licenses"; rename { "LICENSE-extract-xiso.txt" }
+    }
+    from(new File(root, "build/deps/sdl-source/SDL3-3.4.18/LICENSE.txt")) {
+        into "licenses"; rename { "LICENSE-SDL3.txt" }
+    }
+    from(new File(root, "LICENSE")) { into "licenses"; rename { "LICENSE-reSOT.txt" } }
+    from(new File(root, "port/third_party/xboxrecomp/LICENSE")) {
+        into "licenses"; rename { "LICENSE-xboxrecomp.txt" }
+    }
+    from(new File(root, "port/third_party/xboxrecomp/NOTICE")) {
+        into "licenses"; rename { "NOTICE-xboxrecomp.txt" }
+    }
+    into generatedAssets
+}
+tasks.named("preBuild") { dependsOn "resotAssets" }

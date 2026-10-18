@@ -37,14 +37,45 @@
  * texture modes, point/line primitives, guest-visible framebuffer contents
  * (nothing is copied back to guest memory).
  */
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__ANDROID__)
 
+/* RE-SoT: Windows builds both encoders (Direct3D 11 and the native SDL GPU
+ * one in nv2a_hw_native.inc). Android builds only the native encoder, on
+ * Vulkan: the NV2A state, the surface bookkeeping and the dispatch below are
+ * shared, every Direct3D 11 body is inside RESOT_HW_D3D11. */
+#if defined(_WIN32)
+#define RESOT_HW_D3D11 1
+#else
+#define RESOT_HW_D3D11 0
+#endif
+
+#if RESOT_HW_D3D11
 #define COBJMACROS
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "dxguid.lib")
+#else
+/* The shared state keeps its Direct3D 11 members as opaque pointers, so its
+ * layout and every shared field are the same on both hosts. */
+typedef struct ID3D11Device ID3D11Device;
+typedef struct ID3D11DeviceContext ID3D11DeviceContext;
+typedef struct IDXGISwapChain IDXGISwapChain;
+typedef struct ID3D11Texture2D ID3D11Texture2D;
+typedef struct ID3D11RenderTargetView ID3D11RenderTargetView;
+typedef struct ID3D11ShaderResourceView ID3D11ShaderResourceView;
+typedef struct ID3D11DepthStencilView ID3D11DepthStencilView;
+typedef struct ID3D11VertexShader ID3D11VertexShader;
+typedef struct ID3D11PixelShader ID3D11PixelShader;
+typedef struct ID3D11InputLayout ID3D11InputLayout;
+typedef struct ID3D11Buffer ID3D11Buffer;
+typedef struct ID3D11SamplerState ID3D11SamplerState;
+typedef struct ID3D11BlendState ID3D11BlendState;
+typedef struct ID3D11DepthStencilState ID3D11DepthStencilState;
+typedef struct ID3D11RasterizerState ID3D11RasterizerState;
+typedef struct ID3D10Blob ID3DBlob;
+#endif
 
 /* RE-SoT: native D3D12/Vulkan use a separate explicit command encoder. */
 static int ng_init(const char *backend);
@@ -57,6 +88,7 @@ static void ng_compose(void);
 static void ng_present(int sync);
 static void ng_flip(void);
 static int ng_readback(uint32_t *dst, uint32_t w, uint32_t h);
+static int ng_postprocess_source(uint32_t offset);
 static void hw_diag_sample(void); /* RE-SoT: shared host diagnostics, either GPU encoder. */
 void nv2a_hw_flush_present(void); /* RE-SoT: native encoder shares deferred presentation. */
 static volatile LONG s_hw_backend;
@@ -210,15 +242,32 @@ static struct {
      * pause menu's fog grid): it keeps the full width in a wide picture. */
     int batch_full_width;
     int batch_projected_screen;          /* RE-SoT: screen quad already narrowed by Hor+ */
-    int batch_hud;                       /* RE-SoT: flat upper-left demo HUD */
+    int batch_hud;                       /* RE-SoT: projected HUD: -1 left, +1 right, 0 none */
 } s_hw;
+
+/* RE-SoT: the projection hook already gives the HUD its 4:3 proportions,
+ * centred (raw x = 320 + (x43 - 320) / widen), so it needs no second squeeze.
+ * A side element then moves by 320 * (1 - 1 / widen) towards its edge: its
+ * margin from the wide picture's edge is the 4:3 one, in 4:3 units.
+ * RECOMP_HW_HUD_EDGE=0 leaves it inside the centred 4:3 frame instead. */
+static float hw_hud_shift(void)
+{
+    static int edge = -1;
+    if (edge < 0) {
+        const char *e = getenv("RECOMP_HW_HUD_EDGE");
+        edge = !(e && *e == '0');
+    }
+    return edge ? (float)s_hw.batch_hud * 320.0f * (1.0f - 1.0f / s_hw.widen) : 0.0f;
+}
 
 #if RESOT_RUNTIME_RETAIL
 /* RE-SoT: retail XBE 0x000CE32E/0x000CE366 issue visibility tests.
  * The old hardware path always reported zero because only the software
  * rasterizer updated zpass_count. Queries cover enabled intervals, not batches. */
+#if RESOT_HW_D3D11
 #include "nv2a_hw_visibility.inc"
 static NvHwVisibility s_hw_visibility;
+#endif
 static void hw_visibility_complete(void *opaque, uint32_t at, uint64_t stamp, uint32_t count)
 {
     uint8_t *mem = (uint8_t *)xbox_GetMemoryOffset();
@@ -231,6 +280,7 @@ static void hw_visibility_complete(void *opaque, uint32_t at, uint64_t stamp, ui
 static void hw_visibility_poll(void)
 {
     if (ng_active()) { ng_visibility_poll(); return; } /* RE-SoT: retail native query engine. */
+#if RESOT_HW_D3D11
     HRESULT before = s_hw_visibility.device_error;
     nv_hw_vis_poll(&s_hw_visibility, s_hw.ctx, hw_visibility_complete, NULL);
     if (SUCCEEDED(before) && FAILED(s_hw_visibility.device_error)) {
@@ -238,6 +288,7 @@ static void hw_visibility_poll(void)
                 (unsigned long)s_hw_visibility.device_error);
         abort(); /* RE-SoT: device failure must not leave the guest polling forever. */
     }
+#endif
 }
 static void hw_visibility_method(uint32_t method, uint32_t value, uint64_t stamp)
 {
@@ -245,6 +296,7 @@ static void hw_visibility_method(uint32_t method, uint32_t value, uint64_t stamp
     if (ng_active()) {
         ng_visibility_method(method,value,stamp); LeaveCriticalSection(&s_hw.lock); return;
     } /* RE-SoT: the retail report dispatch never touches a D3D11 context in native modes. */
+#if RESOT_HW_D3D11
     hw_visibility_poll();
     if (method == 0x17C8) nv_hw_vis_clear(&s_hw_visibility, s_hw.ctx);
     else if (method == 0x17CC) nv_hw_vis_enable(&s_hw_visibility, s_hw.ctx, value != 0);
@@ -253,6 +305,7 @@ static void hw_visibility_method(uint32_t method, uint32_t value, uint64_t stamp
         abort(); /* RE-SoT: no fabricated visibility result on host allocation failure. */
     }
     hw_visibility_poll();
+#endif
     LeaveCriticalSection(&s_hw.lock);
 }
 #else
@@ -287,7 +340,8 @@ static const char s_hw_hlsl_vs_common[] =
 "  if (ws.x != 1.0 && flat && x > ws.z && x < ws.y - ws.z)\n"
 "    x = (x - 0.5 * ws.y) * ws.x + 0.5 * ws.y;\n"
 /* RE-SoT: HUD width is already corrected by the projection. Only translate
- * it to retain the existing left anchor; ws.w is zero for other batches. */
+ * it towards its side of the screen (hw_hud_shift); ws.w is zero for other
+ * batches. */
 "  if (flat) x += ws.w;\n"
 "  o.pos = float4((x * vp.x - 1.0) * w, (1.0 - y * vp.y) * w,\n"
 "                 saturate(p.z * vp.z) * w, w);\n"
@@ -460,6 +514,7 @@ static const char s_hw_hlsl[] =
 "    if (!ok) discard; }\n"
 "  return o; }\n";
 
+#if RESOT_HW_D3D11
 /* RE-SoT: compiled shaders are kept on disk (shadercache beside the exe, or
  * RECOMP_HW_SHADER_CACHE=<dir>; "0" turns it off), keyed by a hash of the
  * HLSL, the entry point and the profile. D3DCompile takes tens of
@@ -601,6 +656,8 @@ static ID3DBlob *hw_compile(const char *entry, const char *target)
     return hw_compile_src(src, len, entry, target);
 }
 
+#endif /* RESOT_HW_D3D11 */
+
 /* Host pixels across a guest width, on a surface rendered `sc` times the
  * guest resolution. */
 static uint32_t hw_px(uint32_t guest_x, uint32_t sc)
@@ -620,6 +677,7 @@ static uint32_t hw_surface_scale(uint32_t w)
     return w >= 640 ? (uint32_t)s_hw.scale : (uint32_t)s_hw.fx_scale;
 }
 
+#if RESOT_HW_D3D11
 static void hw_resize_backbuffer(void)
 {
     RECT rc;
@@ -648,8 +706,11 @@ static void hw_resize_backbuffer(void)
     s_hw.bb_h = (uint32_t)rc.bottom;
 }
 
+#endif /* RESOT_HW_D3D11 */
+
 static int hw_init(void)
 {
+#if RESOT_HW_D3D11
     static const D3D11_INPUT_ELEMENT_DESC il[] = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0,   D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 16,  D3D11_INPUT_PER_VERTEX_DATA, 0},
@@ -664,8 +725,10 @@ static int hw_init(void)
     D3D_FEATURE_LEVEL fl;
     ID3DBlob *b;
     HRESULT hr;
-    int i, wait;
+    int i;
     RECT wr;
+#endif
+    int wait;
     const char *e;
 
     extern void xbox_FramebufferWindowStart(void);
@@ -702,6 +765,11 @@ static int hw_init(void)
     s_hw.widen = s_hw.aspect / (4.0f / 3.0f);
     if (s_hw.widen < 1.0f) s_hw.widen = 1.0f;
 
+#if !RESOT_HW_D3D11
+    /* RE-SoT (Android): the host's window already fills the screen, and the
+     * only renderer is the native encoder on Vulkan. */
+    return ng_init("vulkan");
+#else
     e = getenv("RECOMP_HW_FULLSCREEN");          /* RE-SoT: "0" is a window */
     if (e && *e && strcmp(e, "0") != 0) {
         MONITORINFO mi;
@@ -875,6 +943,7 @@ static int hw_init(void)
             s_hw.cpu_vsh ? "CPU" : "GPU");
     fflush(stderr);
     return 1;
+#endif /* RESOT_HW_D3D11 */
 }
 
 /* Is the hardware path in use? Tries to bring it up on the first call that
@@ -895,6 +964,7 @@ static uint32_t hw_zmax_bits(void)
     return ((s_gpu.format >> 4) & 0xF) == 1 ? 0xFFFFu : 0xFFFFFFu;
 }
 
+#if RESOT_HW_D3D11
 /* The colour surface the title is drawing into. */
 static HwSurface *hw_surface(void)
 {
@@ -991,6 +1061,8 @@ static HwDepth *hw_depth(const HwSurface *s)
     return d;
 }
 
+#endif /* RESOT_HW_D3D11 */
+
 /* A cheap fingerprint of a texture's bytes: enough to notice a texture being
  * rewritten in place (streamed mips, a video frame) without reading all of
  * it for every batch. Checked once per frame per texture. */
@@ -1030,6 +1102,7 @@ static int hw_mem_ok(uint32_t va, uint32_t bytes)
     return 0;
 }
 
+#if RESOT_HW_D3D11
 static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
 {
     const Texture *t = &s_gpu.texs[stage];
@@ -1270,11 +1343,14 @@ static ID3D11DepthStencilState *hw_depth_state(int have_depth)
     return s_hw.ds[i].st;
 }
 
+#endif /* RESOT_HW_D3D11 */
+
 static void hw_color4(uint32_t argb, float out[4])
 {
     nv2a_rc_unpack(argb, out);
 }
 
+#if RESOT_HW_D3D11
 /* Bind everything a batch needs and return the surface, or NULL. prog is the
  * translated vertex program to run, or NULL for vertices the interpreter has
  * already transformed. */
@@ -1390,13 +1466,10 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
             hdr[8] = s_hw.widen;
         hdr[9] = (float)s->w; hdr[10] = 1.0f;
         if (main_view && s_hw.batch_hud) {
-            /* RE-SoT: the common HUD origin, observed at x=118.931 in the
-             * demo's 16:9 trace, is x=51.9 before the projection hook.
-             * Keep its old on-screen anchor while undoing the second squeeze.
-             * All HUD batches share this origin so fills and frame stay aligned. */
-            float origin = 320.0f + (51.9f - 320.0f) / s_hw.widen;
+            /* RE-SoT: every piece on one side gets the same shift, so frame,
+             * fill and pips stay aligned (hw_hud_shift). */
             hdr[8] = 1.0f;
-            hdr[11] = (origin - 320.0f) / s_hw.widen + 320.0f - origin;
+            hdr[11] = hw_hud_shift();
         }
     }
     /* RE-SoT: an attribute with no array reads the value last set with
@@ -1595,6 +1668,8 @@ static void hw_trace_end(void)
             s_gpu.fog_param[0], s_gpu.fog_param[1]);
 }
 
+#endif /* RESOT_HW_D3D11 */
+
 /* Reserve `bytes` at the ring's write position (aligned to `align`), wrapping
  * with a discard when it does not fit. The caller writes at *off and then
  * advances it by what it used. */
@@ -1602,6 +1677,7 @@ static void hw_trace_end(void)
  * reuse (hw_reuse_find) only trusts ranges written in the current generation. */
 static uint32_t s_hw_vb_gen = 1, s_hw_ib_gen = 1;
 
+#if RESOT_HW_D3D11
 static int hw_ring_map(ID3D11Buffer *buf, uint32_t *off, uint32_t size,
                        uint32_t bytes, uint32_t align, D3D11_MAPPED_SUBRESOURCE *map)
 {
@@ -1836,13 +1912,16 @@ static const HwVsp *hw_vsp_get(uint32_t mask)
     return seen;
 }
 
+#endif /* RESOT_HW_D3D11 */
+
 /* RE-SoT: the demo's sub_000EF140 projection hook narrows a full-screen
  * flat layer to 640 / widen, centred on x=320 (observed: 80.531..560.531
  * at 16:9). Its fog grids must cover the display, including inner vertices.
  * It is on for xbox-retail too (RESOT_PROJECTED_UI), whose
  * sub_000CD970 hook narrows the projection the same way. Without it the menu
- * backdrop stops short of the sides (2026-10-15). The HUD rule below
- * still has the demo's coordinates; the retail HUD has not been checked. */
+ * backdrop stops short of the sides (2026-10-15). The HUD rule below was
+ * traced on both: retail's health bar is x=107.531..250.892,
+ * y=36.531..68.531 at 16:9 (2026-10-18). */
 static void hw_classify_screen(float left, float right, float top, float bottom)
 {
     static int projected_ui = -1;
@@ -1860,11 +1939,17 @@ static void hw_classify_screen(float left, float right, float top, float bottom)
      * left (x=118.931..280.211, y=38.931..115.731 at 16:9). Use the shared
      * UI region, not texture heap addresses, which change across loads.
      * Include depth_mask=1: the white sand crescents use it with depth
-     * testing disabled, while the health frame/fill and gold pips use 0. */
-    s_hw.batch_hud = projected_ui && s_hw.widen > 1.0f
-        && !s_gpu.depth_test
-        && left >= 320.0f - 320.0f / s_hw.widen && right < 320.0f
-        && top >= 16.0f && bottom < 144.0f;
+     * testing disabled, while the health frame/fill and gold pips use 0.
+     * A HUD piece lies inside the projected 4:3 frame, wholly on one side of
+     * the centre and in the top or bottom band; it is anchored to that side
+     * (hw_hud_shift). Pieces across the centre keep the default rule. */
+    s_hw.batch_hud = 0;
+    if (projected_ui && s_hw.widen > 1.0f && !s_gpu.depth_test
+        && !s_hw.batch_projected_screen
+        && left >= 320.0f - 320.0f / s_hw.widen - 0.5f
+        && right <= 320.0f + 320.0f / s_hw.widen + 0.5f
+        && (bottom <= 192.0f || top >= 288.0f))
+        s_hw.batch_hud = right < 320.0f ? -1 : left > 320.0f ? 1 : 0;
 }
 
 /* RE-SoT: the demo's traced final glow pass (unpaused frame 1917) and
@@ -1884,6 +1969,9 @@ static int hw_postprocess_candidate(uint32_t n)
         || s_gpu.blend_sfactor != 0x302 || s_gpu.blend_dfactor != 0x303
         || !t->valid || t->width != 160 || t->height != 120 || t->color != 0x12)
         return 0;
+    /* RE-SoT: the native D3D12/Vulkan encoder keeps its own surfaces; looking
+     * only at the D3D11 ones left the option without effect there. */
+    if (ng_active()) return ng_postprocess_source(t->offset);
     for (i = 0; i < HW_MAX_SURFACES; i++)
         if (s_hw.surf[i].srv && s_hw.surf[i].offset == t->offset
             && s_hw.surf[i].w == 160 && s_hw.surf[i].h == 120
@@ -2064,6 +2152,7 @@ static int hw_reuse_match(const HwReuse *e, uint64_t key, uint32_t content,
 static int hw_draw_program_batch(void)
 {
     if (ng_active()) return 0; /* RE-SoT: native encoder takes CPU-transformed vertices. */
+#if RESOT_HW_D3D11
     static uint32_t stamp[65536], batch_id;
     static uint16_t remap[65536];
     D3D11_MAPPED_SUBRESOURCE vmap, imap;
@@ -2177,9 +2266,9 @@ static int hw_draw_program_batch(void)
                             o0.tex[2][0], o0.tex[2][1], o0.tex[3][0], o0.tex[3][1]);
             }
             fprintf(stderr, "[FTRACE]     bbox x %g..%g y %g..%g z %g..%g w %g..%g"
-                            " fog %g..%g d0.a %g..%g\n",
+                            " fog %g..%g d0.a %g..%g hud %d\n",
                     lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], lo[3], hi[3],
-                    flo, fhi, alo, ahi);
+                    flo, fhi, alo, ahi, s_hw.batch_hud);
         }
     }
 
@@ -2307,6 +2396,9 @@ static int hw_draw_program_batch(void)
     QueryPerformanceCounter(&t1);
     s_hw_stat_draw_ticks += (uint64_t)(t1.QuadPart - t0.QuadPart);
     return 1;
+#else
+    return 0;
+#endif /* RESOT_HW_D3D11 */
 }
 
 static void hw_put_vertex(HwVertex *o, const Nv2aVshOutput *v)
@@ -2326,7 +2418,9 @@ static void hw_put_vertex(HwVertex *o, const Nv2aVshOutput *v)
 static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
 {
     HwVertex *o = s_hw.verts;
+#if RESOT_HW_D3D11
     D3D11_MAPPED_SUBRESOURCE map;
+#endif
     uint32_t i, count = 0;
 
     if (hw_skip_postprocess(v, n)) return; /* RE-SoT: CPU-transformed batches too. */
@@ -2345,6 +2439,10 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
         }
         if (i == n)
             hw_classify_screen(lo, hi, top, bottom);
+        /* RE-SoT: where the CPU path's flat 2D lands, for the HUD rule. */
+        if (s_ftrace == 2 && i == n && n)
+            fprintf(stderr, "[FTRACE]     cpu bbox x %g..%g y %g..%g w 1..1 z test %u hud %d\n",
+                    lo, hi, top, bottom, (unsigned)s_gpu.depth_test, s_hw.batch_hud);
     }
     if (s_ftrace == 2 && n <= 4)
         for (i = 0; i < n; i++)
@@ -2400,6 +2498,7 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
         s_hw_stat_draw_ticks += (uint64_t)(t1.QuadPart - t0.QuadPart);
         return;
     }
+#if RESOT_HW_D3D11
     HwSurface *bound;
     if ((bound = hw_bind_draw_state(NULL)) != NULL
         && hw_ring_map(s_hw.vb, &s_hw.vb_off, HW_VB_BYTES,
@@ -2417,6 +2516,7 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
         s_gpu.tris_drawn += count / 3;
         s_gpu.xf_drawn += count / 3;
     }
+#endif /* RESOT_HW_D3D11 */
     LeaveCriticalSection(&s_hw.lock);
     QueryPerformanceCounter(&t1);
     s_hw_stat_draw_ticks += (uint64_t)(t1.QuadPart - t0.QuadPart);
@@ -2430,6 +2530,7 @@ static void hw_clear(uint32_t param)
         EnterCriticalSection(&s_hw.lock); ng_clear(param); LeaveCriticalSection(&s_hw.lock);
         return;
     }
+#if RESOT_HW_D3D11
     HwSurface *s;
     HwDepth *d;
     uint32_t x0 = s_gpu.clip_x, y0 = s_gpu.clip_y;
@@ -2522,8 +2623,10 @@ static void hw_clear(uint32_t param)
     }
     s_gpu.clears++;
     LeaveCriticalSection(&s_hw.lock);
+#endif /* RESOT_HW_D3D11 */
 }
 
+#if RESOT_HW_D3D11
 /* Put a surface (and the movie overlay, when one is showing) in the window.
  * Called with the lock held. */
 static void hw_compose_locked(void) /* RE-SoT: snapshot before post-flip fences. */
@@ -2677,6 +2780,8 @@ static void hw_present_locked(int vsync)
     hw_swap_locked(vsync);
 }
 
+#endif /* RESOT_HW_D3D11 */
+
 /* RE-SoT: called after DMA_GET is published for the fully decoded submission.
  * The completed picture was already captured into the swapchain at the flip. */
 void nv2a_hw_flush_present(void)
@@ -2689,6 +2794,7 @@ void nv2a_hw_flush_present(void)
         EnterCriticalSection(&s_hw.lock); ng_present(1); LeaveCriticalSection(&s_hw.lock);
         return;
     }
+#if RESOT_HW_D3D11
 #if RESOT_RUNTIME_RETAIL
     if (!s_hw.ok) return;
     /* RE-SoT: visibility reports also progress in submissions without flips. */
@@ -2707,6 +2813,7 @@ void nv2a_hw_flush_present(void)
         s_hw.last_flip_ms = GetTickCount();
     }
     LeaveCriticalSection(&s_hw.lock);
+#endif /* RESOT_HW_D3D11 */
 }
 
 /* RE-SoT: opt-in clock check separates guest time sources from frame rate.
@@ -2793,6 +2900,7 @@ static void hw_diag_sample(void)
 static void hw_flip(void)
 {
     if (ng_active()) { ng_flip(); return; }
+#if RESOT_HW_D3D11
     /* RE-SoT: preserve the older frame if a submission contains two flips. */
     if (s_hw.pending_present) nv2a_hw_flush_present();
     EnterCriticalSection(&s_hw.lock);
@@ -2858,6 +2966,7 @@ static void hw_flip(void)
         s_hw.pending_present = s_hw.bb_rtv != NULL;
     } else hw_present_locked(1);
     LeaveCriticalSection(&s_hw.lock);
+#endif /* RESOT_HW_D3D11 */
 }
 
 /* Called by the window thread about 60 times a second. A title that is not
@@ -2874,6 +2983,7 @@ void nv2a_hw_idle_present(void)
         LeaveCriticalSection(&s_hw.lock);
         return;
     }
+#if RESOT_HW_D3D11
     if (!s_hw.ok)
         return;
 #if RESOT_RUNTIME_RETAIL
@@ -2890,6 +3000,7 @@ void nv2a_hw_idle_present(void)
     if (!s_hw.pending_present && GetTickCount() - s_hw.last_flip_ms >= 100)
         hw_present_locked(0);
     LeaveCriticalSection(&s_hw.lock);
+#endif /* RESOT_HW_D3D11 */
 }
 
 /* Copy the shown frame into a caller buffer of w x h XRGB pixels (for the
@@ -2901,6 +3012,7 @@ int nv2a_hw_readback(uint32_t *dst, uint32_t w, uint32_t h)
         EnterCriticalSection(&s_hw.lock); result = ng_readback(dst,w,h); LeaveCriticalSection(&s_hw.lock);
         return result;
     }
+#if RESOT_HW_D3D11
     D3D11_TEXTURE2D_DESC td;
     D3D11_MAPPED_SUBRESOURCE map;
     ID3D11Texture2D *stage = NULL;
@@ -2935,6 +3047,9 @@ int nv2a_hw_readback(uint32_t *dst, uint32_t w, uint32_t h)
     }
     LeaveCriticalSection(&s_hw.lock);
     return ok;
+#else
+    return 0;
+#endif /* RESOT_HW_D3D11 */
 }
 
 /* Methods only the hardware path acts on. Returns 1 when it took the method. */
@@ -2950,7 +3065,7 @@ static int hw_method(uint32_t method, uint32_t param)
     }
 }
 
-#else  /* !_WIN32 */
+#else  /* neither _WIN32 nor __ANDROID__ */
 static int  hw_active(void) { return 0; }
 static void hw_visibility_method(uint32_t m, uint32_t v, uint64_t t) { (void)m; (void)v; (void)t; }
 static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n) { (void)v; (void)n; }

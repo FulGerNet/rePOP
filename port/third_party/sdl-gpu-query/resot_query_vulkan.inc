@@ -96,7 +96,14 @@ static bool SDLCALL resot_vk_healthy(SDL_GPUDevice *device)
         return SDL_SetError("RE-SoT Vulkan submission failed: %d",(int)result);
     return true;
 }
-__declspec(dllexport) const ResotGpuQueryAPI *SDLCALL RESOT_GetVulkanQueryAPI(Uint32 version)
+/* RE-SoT: exported from the shared SDL on Windows and on Android, whose
+ * SDL is built with hidden visibility. */
+#if defined(_WIN32)
+__declspec(dllexport)
+#else
+__attribute__((visibility("default")))
+#endif
+const ResotGpuQueryAPI *SDLCALL RESOT_GetVulkanQueryAPI(Uint32 version)
 {
     static const ResotGpuQueryAPI api = {RESOT_GPU_QUERY_ABI,sizeof(ResotGpuQueryAPI),"vulkan",
         resot_vk_create,resot_vk_destroy,resot_vk_reset,resot_vk_begin,resot_vk_end,
