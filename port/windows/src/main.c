@@ -10,7 +10,6 @@
 
 #define COBJMACROS
 #include <windows.h>
-#include <shobjidl.h>
 #include <dbghelp.h>
 #include <bcrypt.h>
 #include <io.h>
@@ -21,6 +20,7 @@
 #include <string.h>
 #include <math.h>
 #include "options.h"
+#include "launcher.h"
 
 /* xboxrecomp runtime headers */
 #include <xbox/xboxrecomp.h>
@@ -66,8 +66,10 @@ extern ptrdiff_t g_xbox_mem_offset;
 #define YOUR_GAME_ENTRY_POINT   RESOT_ENTRY_POINT
 #define YOUR_GAME_DIR           resot_game_dir()
 
-/* Portable installs use the executable's own folder. The folder picker is
- * the player fallback; RESOT_ASSET_DIR is an explicit developer override. */
+/* Portable installs use the executable's own folder. Without game files
+ * there, the launcher (launcher.c) installs them from the game's Xbox ISO;
+ * RESOT_ASSET_DIR is an explicit override (run.ps1, and the launcher when it
+ * hands over to the other target's executable). */
 static char s_game_dir[MAX_PATH];
 static const char *resot_game_dir(void)
 {
@@ -130,46 +132,6 @@ static const char *resot_missing_game_file(void)
             return required[i].name;
     }
     return NULL;
-}
-
-static int resot_choose_game_dir(void)
-{
-    IFileOpenDialog *dialog = NULL;
-    IShellItem *folder = NULL;
-    PWSTR selected = NULL;
-    FILEOPENDIALOGOPTIONS options;
-    HRESULT initialized = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-    HRESULT result = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
-                                     &IID_IFileOpenDialog, (void **)&dialog);
-    int accepted = 0;
-    if (SUCCEEDED(result)) {
-        result = IFileOpenDialog_GetOptions(dialog, &options);
-        if (SUCCEEDED(result)) result = IFileOpenDialog_SetOptions(dialog,
-            options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_DONTADDTORECENT);
-        IFileOpenDialog_SetTitle(dialog, L"reSOT - Select the Xbox game data folder (prince.bf, video, sound)");
-        IFileOpenDialog_SetOkButtonLabel(dialog, L"Use this game folder");
-        if (SUCCEEDED(result)) result = IFileOpenDialog_Show(dialog, NULL);
-        if (SUCCEEDED(result)) result = IFileOpenDialog_GetResult(dialog, &folder);
-        if (SUCCEEDED(result)) result = IShellItem_GetDisplayName(folder, SIGDN_FILESYSPATH, &selected);
-        if (SUCCEEDED(result)) {
-            BOOL substituted = FALSE;
-            accepted = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, selected, -1,
-                s_game_dir, sizeof s_game_dir, NULL, &substituted) != 0 && !substituted;
-            if (!accepted) {
-                s_game_dir[0] = 0;
-                MessageBoxW(NULL, L"This folder path is too long or contains characters the game cannot open.\n"
-                    L"Move the game files to a shorter folder, then try again.", L"reSOT", MB_ICONERROR);
-                result = E_FAIL;
-            }
-        }
-    }
-    if (selected) CoTaskMemFree(selected);
-    if (folder) IShellItem_Release(folder);
-    if (dialog) IFileOpenDialog_Release(dialog);
-    if (SUCCEEDED(initialized)) CoUninitialize();
-    if (FAILED(result) && result != HRESULT_FROM_WIN32(ERROR_CANCELLED) && !accepted)
-        fprintf(stderr, "[BOOT] folder picker failed: 0x%08lX\n", (unsigned long)result);
-    return accepted;
 }
 
 /* The same merged input report the guest receives, including non-XInput
@@ -759,6 +721,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     (void)lpCmdLine;
     (void)nCmdShow;
 
+    /* A child copy of this executable that only runs extract-xiso for the
+     * launcher's ISO installation (launcher.c): no game, no logs. */
+    if (__argc >= 2 && __argv && __argv[1] && strcmp(__argv[1], RESOT_XISO_SWITCH) == 0)
+        return resot_xiso_child(__argc - 1, __argv + 1);
+
     /* Resolve an explicit relative asset path before changing directory.
      * Caches and diagnostics belong to this application, independent of the
      * directory from which Explorer/a shortcut/the terminal launched it. */
@@ -776,6 +743,36 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 resot_redirect_log(stderr, "logs\\" RESOT_TARGET_ID "-err.txt");
                 resot_redirect_log(stdout, "logs\\" RESOT_TARGET_ID "-out.txt");
             }
+        }
+    }
+
+    /* The title screen: what is installed in the game folder, Start Demo /
+     * Start Game, or the game's installation from its Xbox ISO when there
+     * are no game files. Before any runtime default below is put into the
+     * environment, so that handing over to the other target's executable
+     * passes none of this target's settings. run.ps1 (RESOT_LAUNCHER_CONFIGURED)
+     * and that hand-over (RESOT_SKIP_LAUNCHER) go straight to the game. */
+    {
+        int flags = getenv("RESOT_LAUNCHER_CONFIGURED")
+                 || (getenv("RESOT_SKIP_LAUNCHER") && *getenv("RESOT_SKIP_LAUNCHER"))
+                  ? RESOT_LAUNCHER_NO_SCREEN : 0;
+        _putenv_s("RESOT_SKIP_LAUNCHER", "");
+        for (;;) {
+            const char *missing;
+            if (resot_launcher_run(RESOT_TARGET_ID, s_game_dir, sizeof s_game_dir, flags)
+                    != RESOT_LAUNCH_HERE)
+                return 0;
+            /* What this target needs in particular (retail: shaders.bin). */
+            if (!(missing = resot_missing_game_file())) break;
+            {
+                char message[768];
+                snprintf(message, sizeof message,
+                    "This folder does not contain the supported %s game files.\n\n%s\n\nMissing: %s\n\n"
+                    "Choose the game's Xbox ISO to install them.",
+                    RESOT_TARGET_ID, resot_game_dir(), missing);
+                MessageBoxA(NULL, message, "reSOT - Game files", MB_ICONWARNING);
+            }
+            flags = RESOT_LAUNCHER_ASK_ISO;
         }
     }
 
@@ -871,24 +868,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     "reSOT - Invalid executable", MB_ICONERROR);
         return 1;
     }
-    /* Ask for external disc data when it is not beside the EXE. */
-    {
-        int selected = 0;
-        for (;;) {
-            const char *missing = resot_missing_game_file();
-            if (!missing) break;
-            if (selected) {
-                char message[768];
-                snprintf(message, sizeof message,
-                    "This folder does not contain the supported %s game files.\n\n%s\n\n%s%s\n"
-                    "Select the folder containing prince.bf, video and sound.",
-                    RESOT_TARGET_ID, resot_game_dir(), "Missing: ", missing);
-                MessageBoxA(NULL, message, "reSOT - Choose game files", MB_ICONWARNING);
-            }
-            if (!resot_choose_game_dir()) { free(xbe_data); return 0; }
-            selected = 1;
-        }
-    }
+    /* The game folder was checked by the launcher above. */
     printf("Embedded Xbox image loaded: %zu bytes\n", xbe_size);
     fprintf(stderr, "[BOOT] game folder: %s\n", resot_game_dir());
 

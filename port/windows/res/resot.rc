@@ -25,3 +25,10 @@ BEGIN
         VALUE "Translation", 0x409, 1200
     END
 END
+
+// The launcher (src/launcher.c): the logo, and the Atlantis MF face for its
+// title and buttons when the build found res/AtlantisMF.ttf (CMakeLists.txt).
+202 RCDATA "../../../docs/media/reSOT.png"
+#ifdef RESOT_HAVE_LAUNCHER_FONT
+201 RCDATA "AtlantisMF.ttf"
+#endif

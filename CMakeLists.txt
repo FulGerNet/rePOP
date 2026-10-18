@@ -30,18 +30,24 @@ endif()
 # scene at the sides, 2D at its 4:3 size); empty keeps the original 4:3.
 set(RESOT_ASPECT "16:9" CACHE STRING "Default picture shape (w:h), empty for 4:3")
 
-# One target per build tree. Each target has its own copy of the recompiler
+# One target per build tree. Both targets share one copy of the recompiler
 # toolkit and Xbox runtime (kernel, NV2A, APU, USB, input, video) under
-# port/third_party/xboxrecomp-demo and xboxrecomp-retail, so a runtime change
-# made for one executable cannot change the other. tools/recomp.ps1
-# configures build/<target> with -DRESOT_TARGET=<target>.
+# port/third_party/xboxrecomp. Where the two executables need different
+# behaviour, the runtime chooses it at compile time from RESOT_RUNTIME_DEMO or
+# RESOT_RUNTIME_RETAIL (src/kernel/resot_runtime.h), so each build tree still
+# gets exactly its own target's runtime. tools/recomp.ps1 configures
+# build/<target> with -DRESOT_TARGET=<target>.
 set(RESOT_TARGET "" CACHE STRING "Target to build: xbox-demo or xbox-retail")
 set_property(CACHE RESOT_TARGET PROPERTY STRINGS xbox-demo xbox-retail)
 if(NOT RESOT_TARGET MATCHES "^(xbox-demo|xbox-retail)$")
     message(FATAL_ERROR "Set -DRESOT_TARGET=xbox-demo or -DRESOT_TARGET=xbox-retail (tools/recomp.ps1 does)")
 endif()
-string(REPLACE "xbox-" "" resot_runtime "${RESOT_TARGET}")
-set(XBOXRECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/port/third_party/xboxrecomp-${resot_runtime}")
+set(XBOXRECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/port/third_party/xboxrecomp")
+if(RESOT_TARGET STREQUAL "xbox-demo")
+    add_compile_definitions(RESOT_RUNTIME_DEMO=1)
+else()
+    add_compile_definitions(RESOT_RUNTIME_RETAIL=1)
+endif()
 # The runtime is built with symbols for its static functions, so the crash
 # report, the thread dump and the profiler in port/windows/src/main.c can name them.
 # Only the runtime: debug information for the lifted sources would be large.
@@ -88,15 +94,41 @@ function(resot_add_target id exe_name)
     set_source_files_properties("${guest_resource}" PROPERTIES OBJECT_DEPENDS "${guest_xbe}")
     add_executable(${exe_name} WIN32
         port/windows/src/main.c
+        port/windows/src/launcher.c
         port/windows/src/scene.c
         port/windows/src/options.c
         port/windows/src/diag.c
         port/game/recomp_manual.c
+        port/third_party/extract-xiso/extract-xiso.c
         "${guest_resource}"
         ${hooks}
         ${gen})
     target_link_libraries(${exe_name} PRIVATE
-        xboxrecomp d3d11 dxgi dxguid xinput winmm dbghelp bcrypt ole32 shell32 uuid)
+        xboxrecomp d3d11 dxgi dxguid xinput winmm dbghelp bcrypt ole32 shell32 uuid
+        msimg32 windowscodecs)
+    # The launcher tells the demo from the retail game in any folder: it
+    # needs both targets' default.xbe hashes, from their target.h.
+    foreach(other xbox-demo xbox-retail)
+        file(READ "${CMAKE_CURRENT_SOURCE_DIR}/source/${other}/target.h" other_facts)
+        string(REGEX MATCH "#define[ \t]+RESOT_XBE_SHA256[ \t]+\"([A-Fa-f0-9]+)\"" other_match "${other_facts}")
+        string(TOUPPER "${CMAKE_MATCH_1}" other_hash)
+        string(REPLACE "xbox-" "" other_short "${other}")
+        string(TOUPPER "${other_short}" other_short)
+        set_property(SOURCE port/windows/src/launcher.c APPEND PROPERTY COMPILE_DEFINITIONS
+            "RESOT_${other_short}_XBE_SHA256=\"${other_hash}\"")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/source/${other}/target.h")
+    endforeach()
+    # extract-xiso (port/third_party/extract-xiso) is built unchanged into the
+    # executable; the launcher runs it in a child copy (launcher.h), so its
+    # exit() and chdir() never touch the game process.
+    set_source_files_properties(port/third_party/extract-xiso/extract-xiso.c PROPERTIES
+        COMPILE_DEFINITIONS "main=resot_extract_xiso_main;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS"
+        COMPILE_OPTIONS "$<$<C_COMPILER_ID:MSVC>:/w>")
+    # The launcher's title face, when present (see docs/LICENSING.md).
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/port/windows/res/AtlantisMF.ttf")
+        target_compile_definitions(${exe_name} PRIVATE RESOT_HAVE_LAUNCHER_FONT)
+    endif()
     target_include_directories(${exe_name} PRIVATE
         ${dir} ${dir}/gen ${XBOXRECOMP_DIR}/include)
     if(RESOT_ASPECT)

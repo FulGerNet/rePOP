@@ -5,12 +5,11 @@
 #   .\tools\recomp.ps1 -Target xbox-retail -BuildOnly    # rebuild what is lifted
 #   .\tools\recomp.ps1 -Target xbox-demo -Seeds          # rebuild the seed list
 #
-# Each target has its own copy of the toolkit and runtime,
-# port/third_party/xboxrecomp-demo or xboxrecomp-retail, and its own build tree,
-# build/<target>:
-# a change made in one target's copy never reaches the other executable.
+# Both targets share the toolkit and runtime in port/third_party/xboxrecomp.
+# Each has its own build tree, build/<target>, which compiles the runtime for
+# that target only (RESOT_RUNTIME_DEMO or RESOT_RUNTIME_RETAIL, CMakeLists.txt).
 #
-# Pipeline (that copy's tools/): parse Assets/<target>/default.xbe, detect
+# Pipeline (the toolkit's tools/): parse Assets/<target>/default.xbe, detect
 # functions, recover calling conventions, lift every executable section to C
 # under source/<target>/gen. The generated C is derived from the user's own XBE:
 # it is ignored by Git and must never be committed. Analysis databases go to
@@ -28,7 +27,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$toolkit = "$root\port\third_party\xboxrecomp-$($Target -replace '^xbox-', '')"
+$toolkit = "$root\port\third_party\xboxrecomp"
 $hashes = @{
     'xbox-demo'   = '79C1A47828630AB0D4E5DD19B1FD036FFA58EA2C0FE729B0D3456DAC3E79D4F5'
     'xbox-retail' = '753C58B191279BF4D1A8B28A936DF36AA222ED566487AB1FBDFCD090E91EE379'

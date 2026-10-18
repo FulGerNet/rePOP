@@ -1,4 +1,4 @@
-"""Compile/run the production audio resampler's waveform tests for both runtimes.
+"""Compile/run the production audio resampler's waveform tests (shared runtime).
 
     python tools/test-audio-resampler.py
 
@@ -16,7 +16,7 @@ project.mkdir(parents=True, exist_ok=True)
 source = (root/'tools/tests/test-audio-resampler.c').as_posix()
 cmake = ['cmake_minimum_required(VERSION 3.20)', 'project(AudioResamplerTests C)', 'enable_testing()']
 for target in ('demo','retail'):
-    include = (root/f'port/third_party/xboxrecomp-{target}/src/apu').as_posix()
+    include = (root/'port/third_party/xboxrecomp/src/apu').as_posix()
     cmake += [f'add_executable(audio-{target} "{source}")',
               f'target_include_directories(audio-{target} PRIVATE "{include}")',
               f'if(NOT WIN32)\n target_link_libraries(audio-{target} PRIVATE m)\nendif()',

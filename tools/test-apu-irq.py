@@ -10,11 +10,14 @@ root = Path(__file__).resolve().parents[1]
 directory = root / 'build/apu-irq-tests'
 project = directory / 'project'
 project.mkdir(parents=True, exist_ok=True)
-source = (root / 'port/third_party/xboxrecomp-demo/src/apu/apu_core.c').read_text()
-begin = source.index('static void apu_deliver_irq(')
+source = (root / 'port/third_party/xboxrecomp/src/apu/apu_core.c').read_text()
+# The shared runtime keeps the demo's dispatcher under #if RESOT_RUNTIME_DEMO.
+begin = source.index('#if RESOT_RUNTIME_DEMO\n/* RE-SoT: xbox-demo. The ISR')
 end = source.index('/* ============================================================', begin)
 dispatcher = source[begin:end]
 harness = r'''
+#define RESOT_RUNTIME_DEMO 1
+#define RESOT_RUNTIME_RETAIL 0
 #include <stdint.h>
 #include <stdio.h>
 #include <stddef.h>
@@ -28,6 +31,10 @@ static int blocked, deliveries, slots;
 #define APU_VECTOR 5
 #define XBOX_WORKER_STACK_TOP(slot) 1024
 static int xbox_IrqlBlocksInterrupts(void) { return blocked; }
+/* The dispatcher also takes the uniprocessor dispatch lock (kernel_hal.c);
+ * free whenever no guest thread is raised in this harness. */
+static int xbox_DispatchTryEnter(void) { return !blocked; }
+static void xbox_DispatchLeave(void) { }
 static uint32_t xbox_GetConnectedInterrupt(uint32_t v) { return 16; }
 static uint32_t xbox_AllocThreadTib(void) { return 32; }
 static int xbox_worker_stack_alloc(void) { ++slots; return 0; }
@@ -56,7 +63,7 @@ int main(void) {
 }
 '''
 (project/'test.c').write_text(harness+dispatcher+main)
-include = (root/'port/third_party/xboxrecomp-demo/src/apu').as_posix()
+include = (root/'port/third_party/xboxrecomp/src/apu').as_posix()
 gate_test = (root/'tools/tests/test-apu-guest-gate.c').as_posix()
 (project/'CMakeLists.txt').write_text('cmake_minimum_required(VERSION 3.20)\nproject(ApuIrqTest C)\n'
     + f'include_directories("{include}")\nadd_executable(apu-gate "{gate_test}")\n'

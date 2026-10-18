@@ -4,12 +4,26 @@
 `source/*/target_hooks.c`, `tools/`, `docs/`, the build files) are under the
 MIT licence in the repository root.
 
-**`port/third_party/xboxrecomp-demo`** and **`port/third_party/xboxrecomp-retail`**
-are two vendored copies of xboxrecomp 0.13.1, one per target,
-(https://github.com/sp00nznet/xboxrecomp): MIT, with the xemu-derived APU and
-NV2A register files under LGPL-2.1-or-later as listed in its `NOTICE`. Local
-changes are marked `RE-SoT` in the sources and keep the licence of the file
-they are in.
+**`port/third_party/xboxrecomp`** is the vendored xboxrecomp 0.13.1
+(https://github.com/sp00nznet/xboxrecomp), shared by both targets: MIT, with
+the xemu-derived APU and NV2A register files under LGPL-2.1-or-later as listed
+in its `NOTICE`. Local changes are marked `RE-SoT` in the sources and keep the
+licence of the file they are in.
+
+**`port/third_party/extract-xiso`** is extract-xiso 2.7.1
+(https://github.com/XboxDev/extract-xiso), unchanged, built into each
+executable for the launcher's ISO installation: copyright in
+<in@fishtank.com>, under the BSD-style licence in its `LICENSE.TXT`. That
+licence asks binary redistributions to reproduce its notice (`tools/package.ps1`
+copies it beside the executable as `LICENSE-extract-xiso.txt`) and
+advertising that mentions it to say: *This product includes software
+developed by in <in@fishtank.com>.*
+
+**`port/windows/res/AtlantisMF.ttf`**, the launcher's title and button face
+(Atlantis MF, 1993, Richard William Mueller), was supplied by the user; its
+licence has not been checked here. The build embeds it only when the file is
+present and falls back to Palatino Linotype without it. Check its terms before
+publishing it or an executable that embeds it.
 
 **Not covered by any grant here:**
 

@@ -15,7 +15,7 @@ Addresses observed at runtime (`--log`) are added through the same gates, and
 for those an interior address is accepted as an alias entry.
 
 Normally run through `tools/recomp.ps1 -Seeds` (or `-Observed run.log`), which
-prepares the unseeded baseline it needs. By hand, from port/third_party/xboxrecomp-demo (or -retail)
+prepares the unseeded baseline it needs. By hand, from port/third_party/xboxrecomp
 so `tools.disasm` resolves:
 
     python <reSOT>/tools/seed-scan.py default.xbe --analysis-json A.json \

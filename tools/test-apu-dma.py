@@ -9,15 +9,17 @@ import subprocess
 root=Path(__file__).resolve().parents[1]
 if os.name!='nt': raise SystemExit('Requires Windows virtual memory and SRW locks')
 build=root/'build/apu-dma-tests'; project=build/'project'; project.mkdir(parents=True,exist_ok=True)
-apu=(root/'port/third_party/xboxrecomp-retail/src/apu/apu_core.c').read_text(encoding='utf-8')
+apu=(root/'port/third_party/xboxrecomp/src/apu/apu_core.c').read_text(encoding='utf-8')
 start=apu.index('static xbox_apu_dma_table s_apu_dma;')
 end=apu.index('\n/* The interrupt line,',start)
 production=apu[start:end]
-vp=(root/'port/third_party/xboxrecomp-retail/src/apu/apu_vp.c').read_text(encoding='utf-8')
+vp=(root/'port/third_party/xboxrecomp/src/apu/apu_vp.c').read_text(encoding='utf-8')
 start=vp.index('static hwaddr get_data_ptr('); end=vp.index('\n}',start)+2
 sge=vp[start:end]
-header=(root/'port/third_party/xboxrecomp-retail/src/kernel/xbox_apu_dma.h').as_posix()
+header=(root/'port/third_party/xboxrecomp/src/kernel/xbox_apu_dma.h').as_posix()
 prefix=r'''
+#define RESOT_RUNTIME_RETAIL 1 /* the shared runtime's retail build */
+#define RESOT_RUNTIME_DEMO 0
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>

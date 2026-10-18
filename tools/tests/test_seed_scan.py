@@ -6,9 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
-# seed-scan.py imports the lifter's modules; the retail copy is where seeds
-# are being worked on (each target has its own copy).
-sys.path.insert(0, str(ROOT / "port/third_party/xboxrecomp-retail"))
+# seed-scan.py imports the lifter's modules (one toolkit for both targets).
+sys.path.insert(0, str(ROOT / "port/third_party/xboxrecomp"))
 spec = importlib.util.spec_from_file_location("seed_scan", ROOT / "tools/seed-scan.py")
 scan = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(scan)

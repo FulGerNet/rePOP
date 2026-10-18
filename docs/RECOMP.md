@@ -46,9 +46,10 @@ Space and the same merged controller report used by the guest, while focused.
 These wrappers require a relift when first added; subsequent host/runtime
 changes need only `-BuildOnly`.
 
-`tools/recomp.ps1 -Target <id>` runs, from that target's toolkit copy
-(`port/third_party/xboxrecomp-demo` or `xboxrecomp-retail`), and builds in
-`build/<id>` with `-DRESOT_TARGET=<id>`:
+`tools/recomp.ps1 -Target <id>` runs, from the shared toolkit
+(`port/third_party/xboxrecomp`), and builds in `build/<id>` with
+`-DRESOT_TARGET=<id>`, which compiles the runtime with `RESOT_RUNTIME_DEMO` or
+`RESOT_RUNTIME_RETAIL` (`src/kernel/resot_runtime.h`):
 
 1. `tools.xbe_parser`: sections, kernel imports, entry point.
 2. `tools.disasm --seed-functions`: disassembly and function detection.

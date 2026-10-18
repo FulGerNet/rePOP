@@ -13,11 +13,13 @@ root = Path(__file__).resolve().parents[1]
 build = root / 'build' / 'retail-io-apc-tests'
 project = build / 'project'
 project.mkdir(parents=True, exist_ok=True)
-bridge = (root / 'port/third_party/xboxrecomp-retail/src/kernel/kernel_bridge.c').read_text(encoding='utf-8')
+bridge = (root / 'port/third_party/xboxrecomp/src/kernel/kernel_bridge.c').read_text(encoding='utf-8')
 start = bridge.index('static void deliver_one_apc(')
 end = bridge.index('\n/* Per-thread pending-APC ring.', start)
 production = bridge[start:end]
 prefix = r'''
+#define RESOT_RUNTIME_RETAIL 1 /* the shared runtime's retail build */
+#define RESOT_RUNTIME_DEMO 0
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

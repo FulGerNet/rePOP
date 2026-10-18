@@ -11,7 +11,7 @@ root=Path(__file__).resolve().parents[1]
 build=root/'build'/'retail-save-io'
 project=build/'project'
 project.mkdir(parents=True,exist_ok=True)
-runtime=(root/'port/third_party/xboxrecomp-retail').as_posix()
+runtime=(root/'port/third_party/xboxrecomp').as_posix()
 source=(root/'tools/tests/test-retail-save-io.c').as_posix()
 (project/'CMakeLists.txt').write_text(f'''cmake_minimum_required(VERSION 3.20)
 project(RetailSaveIo C)

@@ -7,6 +7,57 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-18: one runtime for both targets; launcher and ISO installation
+
+**Runtime merge.** `port/third_party/xboxrecomp-demo` and `-retail` became
+one tree, `port/third_party/xboxrecomp`, compiled per build tree with
+`RESOT_RUNTIME_DEMO` or `RESOT_RUNTIME_RETAIL`. Check: each changed source
+(`apu_core.c`, `guest_vmem.c`, `kernel_bridge.c`, `kernel_file.c`,
+`kernel_hal.c`, `nv2a_pb_exec.c` with `nv2a_hw_d3d11.inc`,
+`xbox_memory_layout.c`, `fb_present.c`) was preprocessed (`cl /EP`) per
+target and compared token by token with that target's previous copy. Left
+differences: equivalent rewrites (a `{}` case block, parentheses, an empty
+visibility poll in the demo), declarations, the retail DMA-token helpers
+compiled but not called in the demo, and diagnostics that only run with an
+environment variable and are now shared (`RECOMP_TRACE_WRITES`,
+`RESOT_CLOCK_CHECK`, the demo's `RECOMP_FRAME_TRACE`/`RECOMP_HW_GLOW_DUMP`
+output, which retail now writes in the demo's per-flip form).
+`python tools/check-hlsl.py`, `test-apu-dma.py`, `test-apu-irq.py`,
+`test-retail-io-apc.py`, `test-retail-save-io.py`, `test-visibility.py`,
+`test-audio-resampler.py` and `tools/tests/test_seed_scan.py` passed.
+`test-apu-irq.py` did not link before this change (its harness lacked the
+dispatch-lock functions the demo dispatcher already called); stubs added.
+`tools/recomp.ps1 -BuildOnly` built both executables with no errors.
+Not checked: gameplay of either target on the merged runtime beyond the
+launch below.
+
+**Launcher.** `launcher.c` replaces the folder picker. Seen: the screen on
+`Assets/xbox-demo` named the demo from its `default.xbe` hash, with Start
+Demo enabled and Start Game disabled (screenshot). The user, in a folder with
+only the two executables, chose `pop4demounused.xiso.iso` from the retail
+executable; it was extracted (608 MB, `default.xbe`, `prince.bf`, `sound`,
+`video`, `preview.*`), `[Launcher] GameDir=pop4demounused.xiso` was saved,
+and Start Demo handed over to `sot-xbox-demo.exe`, which booted on that
+folder with `ext-vma=0` (no retail default leaked); the user reports it
+works. Also seen: the child `--resot-extract-xiso -l` listing of the retail
+ISO through a pipe (171 files, 2,499,878,784 bytes). Not checked: a retail
+extraction end to end, cancel, insufficient disk space, an ISO path outside
+the code page.
+
+## 2026-10-18: user verification update, both targets
+
+The user reports the following for both `xbox-demo` and `xbox-retail`:
+portable launch, F5 overlay and video skip confirmed; external game folder,
+options and F6 diagnostics verified; movie audio and video verified; menus,
+controller and keyboard verified; frame rate 120+ FPS; audio corrected;
+save crash resolved. The README status table reflects these reports.
+
+**Command:** not supplied; these are user observations, with no new agent
+build or runtime test. Frame rate, audio and save/load remain partial:
+the tested scenes, duration and settings were not specified, and broader
+performance, audio, save/load and memory-unit validation is incomplete.
+Rendering and Hor+ status are unchanged. No console comparison was supplied.
+
 ## 2026-10-17 (night): retail reSOT Options, F6 diagnostics panel
 
 **Retail menu map.** The retail XBE's menu library was matched routine by

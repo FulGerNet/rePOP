@@ -12,9 +12,26 @@ supported Xbox disc files, as listed in the main README. The executable
 embeds its checked Xbox image during compilation, so `default.xbe` is needed
 to build, not to play. Its embedded copy is also verified before starting.
 Demo and retail need separate folders.
-If required files are missing, a folder picker asks for their location. Select
-the folder containing `prince.bf`, `video/` and `sound/`; an invalid selection can
-be corrected, and Cancel exits without starting the game.
+
+The executable opens on the reSOT screen: the logo, a link to the GitHub
+repository, what is installed in the game folder (the demo or the retail
+game, identified from `default.xbe`'s SHA-256 or, without it, from the files
+only one of them has) and two buttons, Start Demo and Start Game. A button
+is enabled when that game is installed there and its executable is
+available: this one, or the other target's beside it
+(`sot-xbox-demo.exe` <-> `sot-xbox-retail.exe`), which is then started on the
+same folder. Enter starts, the arrow keys move between buttons, Esc closes.
+
+Without game files beside the executable (or in the folder remembered from an
+earlier installation), a file dialog asks for the game's Xbox ISO. The
+launcher runs extract-xiso (`port/third_party/extract-xiso`, built into the
+executable and run in a child copy of it) to extract it into a folder named
+after the ISO beside the executable, without the disc's `$SystemUpdate`;
+the screen shows its progress and can cancel it. That folder becomes the game
+folder and is saved in `resot-options.ini` (`[Launcher] GameDir`, relative to
+the executable when inside its folder). `Install from ISO...` on the screen
+installs another disc. `run.ps1` (`RESOT_LAUNCHER_CONFIGURED`) and
+`RESOT_ASSET_DIR` with `RESOT_SKIP_LAUNCHER=1` go straight to the game.
 
 The app starts full screen with graphics, audio, keyboard and controller
 enabled. Space or controller A skips a Bink video, including videos whose
@@ -67,9 +84,10 @@ in the [README](../../README.md#supply-your-game-files).
 .\tools\recomp.ps1 -Target xbox-retail -BuildOnly   # after editing port/ (host, overrides, runtime)
 ```
 
-Each target has its own runtime copy (`port/third_party/xboxrecomp-demo`,
-`-retail`) and its own build tree, `build/<target>`; `-BuildOnly` rebuilds
-only the target named. The lifted C goes to `source/<target>/gen` (ignored by
+Both targets share the runtime in `port/third_party/xboxrecomp`; each has
+its own build tree, `build/<target>`, which compiles it for that target
+(`RESOT_RUNTIME_DEMO` or `RESOT_RUNTIME_RETAIL`). `-BuildOnly` rebuilds only
+the target named. The lifted C goes to `source/<target>/gen` (ignored by
 Git). The executables
 land in `bin/` as `sot-xbox-demo.exe` and `sot-xbox-retail.exe`, with the
 reSOT icon (`port/windows/res`).

@@ -17,6 +17,10 @@ foreach ($file in $files) {
 }
 New-Item -ItemType Directory -Force -Path $destination | Out-Null
 Copy-Item -LiteralPath $exe -Destination $destination -Force
+# extract-xiso is built into the executable (launcher ISO installation); its
+# licence asks binary redistributions to carry its notice.
+Copy-Item -LiteralPath (Join-Path $root 'port/third_party/extract-xiso/LICENSE.TXT') `
+    -Destination (Join-Path $destination 'LICENSE-extract-xiso.txt') -Force
 foreach ($file in $files) {
     Copy-Item -LiteralPath (Join-Path $assets $file) -Destination $destination -Recurse -Force
 }
@@ -31,7 +35,10 @@ if ($Target -eq 'xbox-demo') {
 @"
 reSOT - $Target
 
-Double-click sot-$Target.exe to play. Keep the game files in this folder.
+Double-click sot-$Target.exe: the reSOT screen shows what is installed in
+this folder; Start Demo / Start Game plays it. Keep the game files here.
+Without game files it asks for the game's Xbox ISO and extracts it beside the
+executable (extract-xiso, see LICENSE-extract-xiso.txt).
 default.xbe is needed to build, not to run this compiled executable.
 Space / controller A: skip a video. F5: FPS and Current WOW overlay.
 F6: graphics and controls options (saved beside the executable).

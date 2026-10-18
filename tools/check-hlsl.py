@@ -1,7 +1,7 @@
 """Compile the HLSL embedded in the NV2A Direct3D 11 backend without a build.
 
-The shaders live as C strings in port/third_party/xboxrecomp-demo or -retail/src/kernel/
-nv2a_hw_d3d11.inc (one copy per target) and are compiled by the game at start-up, so a typo costs a
+The shaders live as C strings in port/third_party/xboxrecomp/src/kernel/
+nv2a_hw_d3d11.inc (shared by both targets) and are compiled by the game at start-up, so a typo costs a
 full rebuild and a run to discover. This extracts the strings and feeds each
 entry point to d3dcompiler_47.dll, the way the backend assembles them:
 
@@ -11,8 +11,7 @@ entry point to d3dcompiler_47.dll, the way the backend assembles them:
 The body of vs_prog comes from the title's own vertex programs at run time;
 here a stand-in exercises every helper the translator can emit.
 
-    python tools/check-hlsl.py                # both targets' copies
-    python tools/check-hlsl.py xbox-retail    # one
+    python tools/check-hlsl.py                # the shared runtime's shaders
 """
 import ctypes
 import re
@@ -20,12 +19,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGETS = ("xbox-demo", "xbox-retail")
+TARGETS = ("xbox-demo + xbox-retail",)  # one runtime; no #if inside the HLSL
 
 
 def source(target):
-    return ROOT / ("port/third_party/xboxrecomp-%s/src/kernel/nv2a_hw_d3d11.inc"
-                   % target.replace("xbox-", ""))
+    return ROOT / "port/third_party/xboxrecomp/src/kernel/nv2a_hw_d3d11.inc"
 ENTRIES = [("vs_main", "vs_4_0"), ("vs_blit", "vs_4_0"), ("ps_main", "ps_4_0"),
            ("ps_blit", "ps_4_0"), ("ps_debug", "ps_4_0"), ("ps_solid", "ps_4_0")]
 SAMPLE_BODY = """  v[0] = i.a0; v[3] = i.a1; v[9] = i.a2;
