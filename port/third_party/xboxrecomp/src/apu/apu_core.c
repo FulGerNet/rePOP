@@ -459,6 +459,20 @@ typedef struct {
 
 static WaveOutState g_waveout = { 0 };
 
+/* RE-SoT: why the frame thread falls behind real time, for the ten-second
+ * [APU] line. On xbox-demo in the bath fight (06_GP24_Bath_Fight) it made
+ * 1866 of 1875 frames in ten seconds and the XAudio2 queue ran dry: these
+ * say whether the time went into processing a block of eight sub-frames,
+ * into waiting for d->lock after letting the guest in, or into the wait
+ * itself oversleeping. Reset when printed. */
+static int     s_apu_late;          /* throttle gave up on lost time */
+static int64_t s_apu_late_max_us;   /* the largest lateness it gave up */
+static int64_t s_apu_block_max_us;  /* longest block, wait excluded */
+static int64_t s_apu_lock_max_us;   /* longest wait for d->lock per sub-frame */
+static int64_t s_apu_block_start_us;
+static int64_t s_apu_held_us;       /* waited for a held front end (demo) */
+static int64_t s_apu_paced_div = -1;
+
 void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
 {
     (void)errp;
@@ -611,8 +625,16 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
                 int queued = 0, dropped = 0, starved = 0;
                 xa2_get_stats(&queued, &dropped, &starved);
                 fprintf(stderr, "[APU] output over %.0f s: %d frames, %d not silent, peak %d/32767;"
-                                " XAudio2 queue %d, %d dropped, %d starved\n",
-                        (now - last) / 1000.0, frames, loud, top, queued, dropped, starved);
+                                " XAudio2 queue %d, %d dropped, %d starved;"
+                                " late %d (max %.1f ms), block max %.1f ms, lock max %.1f ms,"
+                                " front end held %.1f ms\n",
+                        (now - last) / 1000.0, frames, loud, top, queued, dropped, starved,
+                        s_apu_late, s_apu_late_max_us / 1000.0,
+                        s_apu_block_max_us / 1000.0, s_apu_lock_max_us / 1000.0,
+                        s_apu_held_us / 1000.0);
+                s_apu_late = 0;
+                s_apu_late_max_us = s_apu_block_max_us = s_apu_lock_max_us = 0;
+                s_apu_held_us = 0;
                 frames = loud = top = 0;
                 last = now;
             }
@@ -678,6 +700,18 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
  * Throttle (timing control for frame pacing)
  * ============================================================ */
 
+/* RE-SoT: how far behind real time the frame thread may fall and still make
+ * the lost frames up, back to back, instead of forgetting them. On xbox-demo
+ * the front end is held (below) for one to four frames at a time; with the
+ * old limit of one frame the time held was never produced, the XAudio2
+ * queue lost those frames for good and ran dry. Sixteen frames is the queue's
+ * own maximum (XA2_QUEUE_MAX); a longer stall starts the clock again. */
+#if RESOT_RUNTIME_DEMO
+#define APU_CATCH_UP_US (16 * EP_FRAME_US)
+#else
+#define APU_CATCH_UP_US EP_FRAME_US
+#endif
+
 static void throttle(MCPXAPUState *d)
 {
     if (d->ep_frame_div % 8) {
@@ -686,8 +720,15 @@ static void throttle(MCPXAPUState *d)
 
     int64_t now_us = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
 
+    if (s_apu_block_start_us && now_us - s_apu_block_start_us > s_apu_block_max_us)
+        s_apu_block_max_us = now_us - s_apu_block_start_us;
     if (d->next_frame_time_us == 0 ||
-        now_us - d->next_frame_time_us > EP_FRAME_US) {
+        now_us - d->next_frame_time_us > APU_CATCH_UP_US) {
+        if (d->next_frame_time_us) {
+            s_apu_late++;
+            if (now_us - d->next_frame_time_us > s_apu_late_max_us)
+                s_apu_late_max_us = now_us - d->next_frame_time_us;
+        }
         d->next_frame_time_us = now_us;
     }
 
@@ -702,7 +743,8 @@ static void throttle(MCPXAPUState *d)
     }
     d->next_frame_time_us += EP_FRAME_US;
 
-    d->sleep_acc_us += (int)(qemu_clock_get_us(QEMU_CLOCK_REALTIME) - now_us);
+    s_apu_block_start_us = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
+    d->sleep_acc_us += (int)(s_apu_block_start_us - now_us);
 }
 
 /* ============================================================
@@ -752,16 +794,54 @@ static void *mcpx_apu_frame_thread(void *arg)
     while (!qatomic_read(&d->exiting)) {
         if (d->pause_requested && !g_test_tone.active && !g_mixer_active_count) {
             d->is_idle = true;
+            s_apu_block_start_us = 0;
             qemu_cond_signal(&d->idle_cond);
             qemu_cond_wait(&d->cond, &d->lock);
             d->is_idle = false;
             continue;
         }
 
+#if RESOT_RUNTIME_DEMO
+        /* RE-SoT: DirectSound halts or traps the front end while it edits
+         * the voice lists, and releases it within a few milliseconds. This
+         * thread used to keep the clock running meanwhile and send the
+         * frame out as silence: the bath fight in xbox-demo
+         * (06_GP24_Bath_Fight) came out with about five gaps a second, each
+         * one to four whole frames of digital zero starting on a frame
+         * boundary (logs/apu-out.wav), heard as stutter. Like xemu's frame
+         * thread, wait for the front end instead, still answering the
+         * doorbell and the interrupt it needs to be released, and let
+         * throttle() make the frames up afterwards (APU_CATCH_UP_US). */
+        {
+            int xcnt = GET_MASK(qatomic_read(&d->regs[NV_PAPU_SECTL]),
+                                NV_PAPU_SECTL_XCNTMODE);
+            uint32_t fe = qatomic_read(&d->regs[NV_PAPU_FECTL]);
+            if (xcnt != NV_PAPU_SECTL_XCNTMODE_OFF && !g_test_tone.active
+                && (fe & (NV_PAPU_FECTL_FEMETHMODE_TRAPPED
+                          | NV_PAPU_FECTL_FEMETHMODE_HALTED))) {
+                int64_t t0 = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
+                mcpx_apu_dsp_ack_poll(d);
+                if (d->set_irq) {
+                    update_irq(d);
+                    d->set_irq = false;
+                }
+                apu_deliver_irq(d);
+                qemu_cond_timedwait(&d->cond, &d->lock, 1);
+                s_apu_held_us += qemu_clock_get_us(QEMU_CLOCK_REALTIME) - t0;
+                continue;
+            }
+        }
+        /* Pace each block once, however often the front end held it. */
+        if (d->ep_frame_div != s_apu_paced_div) {
+            s_apu_paced_div = d->ep_frame_div;
+            throttle(d);
+        }
+#else
         /* Always run the audio output loop — the software mixer and test tone
          * need continuous frame delivery regardless of APU register state.
          * The VP/DSP pipeline (se_frame) only runs when registers allow it. */
         throttle(d);
+#endif
 
         /* The doorbell ack stands in for the GP DSP, which on hardware runs
          * whatever the front end is doing. Tying it to se_frame stopped it
@@ -812,7 +892,13 @@ static void *mcpx_apu_frame_thread(void *arg)
          * off every USB interrupt. */
         qemu_mutex_unlock(&d->lock);
         SwitchToThread();
-        qemu_mutex_lock(&d->lock);
+        {
+            int64_t t0 = qemu_clock_get_us(QEMU_CLOCK_REALTIME), waited;
+            qemu_mutex_lock(&d->lock);
+            waited = qemu_clock_get_us(QEMU_CLOCK_REALTIME) - t0;
+            if (waited > s_apu_lock_max_us)
+                s_apu_lock_max_us = waited;
+        }
     }
 
     qemu_mutex_unlock(&d->lock);

@@ -7,6 +7,91 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-18 (evening): xbox-demo, audio stutter in the bath fight
+
+The user reported stuttering audio and 120 -> 85-90 FPS in the bath area
+(`06_GP24_Bath_Fight`, `2401_LowerBath`/`UpperBath`).
+
+**Run:** `tools/run.ps1 -Windowed -Set @{RECOMP_APU_WAV='logs/apu-out.wav';
+RESOT_PROFILE_MS='2'}`, played by the user to the bath fight. **Seen:** the
+recorded output had about five gaps a second of exact digital zero, each one
+to four 256-sample frames long plus 32 samples, all starting on a frame
+boundary; the APU frame thread was not late (`late 0`). The frame thread
+emitted silence while DirectSound held the front end (FECTL trapped or
+halted). **Change** (`apu_core.c`, `RESOT_RUNTIME_DEMO`): wait for the front
+end, as xemu does, and make the frames up afterwards (up to 16). The `[APU]`
+line now also reports lateness, the longest block, the longest wait for the
+APU lock and the time the front end was held. Hot `getenv` calls were made
+one-time (APU MMIO fault handler, ack-thread fence tick, `recomp_unimpl`).
+**Seen after:** the user heard no stutter; 76 s of recording had one gap of a
+frame or more against hundreds before; front end held up to 348 ms per ten
+seconds with no new XAudio2 starvation. The XAudio2 queue now sits at 10-11
+frames (about 55 ms) instead of 6. **Not checked:** xbox-retail (unchanged),
+other levels, a full play-through.
+
+The frame drop is not fixed. In the same scene the title thread spent 33-62%
+of its samples in `xbox_Nv2aWaitClear` (KickOff waiting for the executor).
+A ten-second `[KICK]` line now counts KickOff waits and the executor's time.
+**Run:** `run.ps1 -Windowed -Seconds 80 -Set @{RECOMP_PAD_SCRIPT=
+'30000:start:800,36000:a:800,42000:a:800'; RESOT_PROFILE_MS='2'}`.
+**Seen:** about 20 KickOffs per frame (22261 in 10 s at 112 fps), nearly all
+of them waiting for the executor to come back from the segment before: the
+title and the executor run in lockstep. Three experiments, none kept:
+
+- KickOff never waiting: the main menu hung. The title filled the ring;
+  D3D's space wait `sub_0029D010` (argument 1) polls NV register 0x400B10
+  against the fence dword, which nothing emulates (fence 0x3F, register 0).
+  Mirroring the fence into that register got past it, and the title then
+  blocked in `sub_0029D290` on an event only a GPU interrupt would set
+  (`logs/kick-nowait-menu-test4.txt`).
+- The title up to 3 segments ahead (cleared while DMA_GET matched one of the
+  last three PUTs): menus and the scripted level ran, but the user's run
+  crashed entering the hourglass room (`0103_Hourglass`) with the executor
+  following a JUMP to 0x8E7EF754, outside contiguous memory
+  (`pb_scan_to`, `logs/hourglass-crash-kick-ahead3.txt`).
+- The same with fences reported reached only when GET == PUT: the executor
+  ran 2000-2400 draws and 500 000 triangles a frame instead of about 400 and
+  40 000, at 50 fps, and the user saw many graphical defects.
+
+Overlapping the title with the executor needs the executor to keep its own
+copy of what it has not yet consumed, or real fence/interrupt emulation; it
+is not a change to the KickOff wait alone.
+
+**Hourglass room crash (pre-existing).** The committed build (`ce2de3a`,
+changes stashed, `recomp.ps1 -BuildOnly`), hourglass room loaded with the
+hidden "Load Map" menu: the picture showed, then the ack thread faulted in
+`pb_scan_to` reading 0x8DA53F24 (`logs/hourglass-head-run.txt`). The walk
+had followed a CALL or a JUMP past the 64 MB of physical memory; `pb_walk`,
+which runs CALLs, had no bound. It now stops at the end of the contiguous
+window like `pb_scan_to` and logs `[PB] walk left physical memory` with the
+word that sent it there. **Seen after:** no crash and no `[PB] walk` line;
+the room showed at about 90 fps (1273-1294 draws, executor 7 ms a frame),
+then the picture blurred and went black with "Work in progress" in the
+corner while the title kept drawing the same 1112 draws a frame. **Not
+checked:** whether that fade is the demo's own end of an unfinished map
+(the committed build crashed before reaching that moment); what produced
+the out-of-range CALL.
+
+**Shader compile stalls (xbox-demo).** In the hourglass room the user saw
+7 fps, later 1 fps (the 1 fps run was a test with `RECOMP_HW_SHADER_CACHE=0`).
+The log had `cold shader vs_prog compiled in 157.16 ms`, KickOff waits up to
+158 ms, a 160 ms APU stall and `[IRQL] ... held by tid ... for >100 ms`: each
+vertex program met for the first time was compiled on the executor, under the
+dispatch lock. 37 programs dumped from the first level (`RECOMP_HW_VSH_DUMP=
+all`) compiled offline in 24-158 ms (mean 69) at the current flags,
+`SKIP_OPTIMIZATION` mean 44, `LEVEL0` mean 71: the flags are not the answer.
+**Change** (`nv2a_hw_d3d11.inc`, `RESOT_RUNTIME_DEMO`, `RESOT_ASYNC_VSH=0`
+restores the old path): a program missing from the disk cache is compiled
+on a background thread and its batches use the vertex interpreter until it
+is ready. **Seen:** scripted run with an empty cache: KickOff wait max 23.5 ms
+against 245 ms before, no new APU starvation, no IRQL warning, interpreted
+draws up to 17 a frame while compiling. The user then played the hourglass
+room: lowest 80 fps, no crash. Restarted from the beginning and played to
+the point that used to crash (`05_GP14_Jardin`, `1401_Cour`): no crash; drops
+to 67-78 fps where draws reach 850-1090 a frame with the executor at
+7.3-7.5 ms (no shader compiled then). **Not checked:** xbox-retail; whether
+the interpreter frames differ visibly from the GPU ones.
+
 ## 2026-10-18 (later): launcher finds both games; blue restyle
 
 The launcher now keeps one folder per game (`[Launcher] DemoDir`,

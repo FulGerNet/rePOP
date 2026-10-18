@@ -172,15 +172,46 @@ void xbox_Nv2aKick(void)
         SetEvent(g_nv2a_kick_ev);
 }
 
+/* RE-SoT: where a frame's time goes between the title and the executor, for
+ * a ten-second [KICK] line: how often the title waited in KickOff and for how
+ * long, and how long the ack thread spent executing segments and presenting.
+ * The title thread writes the wait figures, the ack thread the rest and the
+ * line; a sum torn by a race is off by one sample. */
+static LONGLONG s_kick_freq;
+static volatile LONG s_kick_waits, s_kick_calls;
+static volatile LONGLONG s_kick_wait_ticks, s_kick_wait_max;
+static LONGLONG s_exec_scan_ticks, s_exec_present_ticks, s_exec_segments;
+
+static LONGLONG kick_now(void)
+{
+    LARGE_INTEGER t;
+    if (!s_kick_freq) {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        s_kick_freq = f.QuadPart;
+    }
+    QueryPerformanceCounter(&t);
+    return t.QuadPart;
+}
+
 void xbox_Nv2aWaitClear(uint32_t va, uint32_t mask)
 {
     volatile uint32_t *r = (volatile uint32_t *)((uintptr_t)va + g_memory_offset);
+    LONGLONG t0 = 0, waited;
+    InterlockedIncrement(&s_kick_calls);
     while (*r & mask) {
+        if (!t0) t0 = kick_now();
         xbox_Nv2aKick();
         if (g_nv2a_ack_ev)
             WaitForSingleObject(g_nv2a_ack_ev, 1);
         else
             Sleep(0);
+    }
+    if (t0) {
+        waited = kick_now() - t0;
+        InterlockedIncrement(&s_kick_waits);
+        s_kick_wait_ticks += waited;
+        if (waited > s_kick_wait_max) s_kick_wait_max = waited;
     }
 }
 
@@ -864,8 +895,12 @@ void xbox_Nv2aFenceRelease(uint32_t value)
 
 static void fence_mirrors_tick(void)
 {
-    /* RE-SoT: offset-zero GPU-time is released by decoded methods. */
-    if (getenv("RECOMP_PB_EXEC") && resot_ordered_fences()) return;
+    /* RE-SoT: offset-zero GPU-time is released by decoded methods. The
+     * variable is read once: this runs on every ack-thread tick, and getenv
+     * there was 15% of that thread's samples (xbox-demo, bath fight). */
+    static int pb_exec = -1;
+    if (pb_exec < 0) pb_exec = getenv("RECOMP_PB_EXEC") != NULL;
+    if (pb_exec && resot_ordered_fences()) return;
     for (int i = 0; i < g_fence_mirror_count; i++) {
         uint32_t dev, get_ptr;
 
@@ -950,6 +985,24 @@ static void framebuffer_probe_tick(void)
             sum != last_sum ? "CHANGED" : "same");
     last_sum = sum;
     fflush(stderr);
+}
+
+static void kick_report(void)
+{
+    static LONGLONG last;
+    LONGLONG now = kick_now();
+    double ms = 1000.0 / (double)s_kick_freq;
+    if (!last) { last = now; return; }
+    if ((now - last) * ms < 10000.0) return;
+    fprintf(stderr, "[KICK] over %.0f s: %ld KickOffs, %ld waited %.0f ms (max %.1f ms);"
+                    " executor %lld segments, %.0f ms executing, %.0f ms presenting\n",
+            (now - last) * ms / 1000.0, (long)s_kick_calls, (long)s_kick_waits,
+            s_kick_wait_ticks * ms, s_kick_wait_max * ms, (long long)s_exec_segments,
+            s_exec_scan_ticks * ms, s_exec_present_ticks * ms);
+    s_kick_calls = s_kick_waits = 0;
+    s_kick_wait_ticks = s_kick_wait_max = 0;
+    s_exec_segments = s_exec_scan_ticks = s_exec_present_ticks = 0;
+    last = now;
 }
 
 static DWORD WINAPI nv2a_ack_thread(LPVOID param)
@@ -1077,8 +1130,11 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
                          * so some draws went to a surface described by half of
                          * one SetRenderTarget and half of the next. */
                         extern void nv2a_pb_scan_to(uint32_t, uint32_t);
+                        LONGLONG t0 = kick_now();
                         nv2a_pb_scan_to(XBOX_CONTIG_BASE | (last_put & 0x0FFFFFFFu),
                                         XBOX_CONTIG_BASE | (put      & 0x0FFFFFFFu));
+                        s_exec_scan_ticks += kick_now() - t0;
+                        s_exec_segments++;
                         if (put < last_put && getenv("RECOMP_PB_WRAP_TRACE")) {
                             static unsigned wraps;
                             if (wraps++ < 8)
@@ -1116,7 +1172,10 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
                  * submission's fences and GET are visible to the title. */
                 {
                     extern void nv2a_hw_flush_present(void);
+                    LONGLONG t0 = kick_now();
                     nv2a_hw_flush_present();
+                    s_exec_present_ticks += kick_now() - t0;
+                    kick_report();
                 }
                 /* GET as well as PUT. A title that stops submitting has either
                  * finished or is spinning on the GPU catching up, and only GET

@@ -172,6 +172,20 @@ void nv2a_pb_scan_report(void)
  * The NV2A has one level of subroutine, so a CALL inside a call is not
  * followed. Addresses are physical, like PUT's, and reach guest memory the
  * same way: through the contiguous window. */
+/* RE-SoT: where a walk left physical memory, and the command word that sent
+ * it there, the first few times: a stream that leads off the end of RAM has
+ * been misread or overwritten, and this is where to start looking. */
+static uint32_t s_last_word, s_last_word_va;
+
+static void pb_left_memory(uint32_t va, int in_call)
+{
+    static unsigned shown;
+    if (shown++ < 12)
+        fprintf(stderr, "  [PB] walk left physical memory at 0x%08X (%s), after word"
+                        " %08X at 0x%08X\n", va, in_call ? "in a CALL" : "ring",
+                s_last_word, s_last_word_va);
+}
+
 static uint32_t pb_walk(uint32_t va, uint32_t end_va, int in_call,
                         uint32_t *jumps, uint32_t *unknown)
 {
@@ -179,7 +193,17 @@ static uint32_t pb_walk(uint32_t va, uint32_t end_va, int in_call,
     uint32_t words = 0;
 
     while (va < end_va && words < 0x100000u) {
-        uint32_t w = *(const uint32_t *)(mem + va);
+        uint32_t w;
+        /* RE-SoT: the same bound as pb_scan_to. A CALL or a JUMP inside one
+         * can name a physical address past the 64 MB the contiguous window
+         * maps; reading it faulted the ack thread (xbox-demo, hourglass room
+         * 0103_Hourglass, at 0x8DA53F24 and 0x8E7EF754, also in the
+         * committed build). The GPU would have fetched nothing there. */
+        if (va < XBOX_CONTIG_BASE || va >= XBOX_CONTIG_BASE + 0x04000000u - 4) {
+            pb_left_memory(va, in_call);
+            break;
+        }
+        w = *(const uint32_t *)(mem + va);
         va += 4;
         words++;
 
@@ -187,6 +211,7 @@ static uint32_t pb_walk(uint32_t va, uint32_t end_va, int in_call,
             uint32_t target = (w & 3u) == 1u ? (w & 0xFFFFFFFCu)
                                              : (w & 0x1FFFFFFCu);
             (*jumps)++;
+            s_last_word = w; s_last_word_va = va - 4;
             if (!in_call)
                 break;                        /* the ring: a jump ends it */
             va = XBOX_CONTIG_BASE | (target & 0x0FFFFFFFu);
@@ -201,6 +226,7 @@ static uint32_t pb_walk(uint32_t va, uint32_t end_va, int in_call,
         if ((w & 3u) == 2u) {                    /* CALL */
             if (!in_call) {
                 uint32_t sub = XBOX_CONTIG_BASE | ((w & 0xFFFFFFFCu) & 0x0FFFFFFFu);
+                s_last_word = w; s_last_word_va = va - 4;
                 s_tot_calls++;
                 words += pb_walk(sub, sub + 0x400000u, 1, jumps, unknown);
             }
@@ -212,7 +238,8 @@ static uint32_t pb_walk(uint32_t va, uint32_t end_va, int in_call,
             uint32_t method =  w & 0x1FFCu;
             int noninc = (w & 0xE0000000u) == 0x40000000u;
 
-            for (uint32_t i = 0; i < count && va < end_va; i++) {
+            for (uint32_t i = 0; i < count && va < end_va
+                     && va < XBOX_CONTIG_BASE + 0x04000000u - 4; i++) {
                 uint32_t m = noninc ? method : method + i * 4;
                 note(subch, m);
                 /* Same walk, two consumers: the survey counts, the executor
@@ -269,14 +296,17 @@ static void pb_scan_to(uint32_t start_va, uint32_t put_va)
     while (va != put_va && words < 0x100000u) {
         uint32_t w;
 
-        if (va < XBOX_CONTIG_BASE || va >= XBOX_CONTIG_BASE + 0x04000000u - 4)
+        if (va < XBOX_CONTIG_BASE || va >= XBOX_CONTIG_BASE + 0x04000000u - 4) {
+            pb_left_memory(va, 0);
             break;                               /* left physical memory */
+        }
         w = *(const uint32_t *)(mem + va);
         va += 4;
         words++;
         if ((w & 3u) == 1u || (w & 0xE0000003u) == 0x20000000u) {    /* JUMP */
             uint32_t target = (w & 3u) == 1u ? (w & 0xFFFFFFFCu)
                                              : (w & 0x1FFFFFFCu);
+            s_last_word = w; s_last_word_va = va - 4;
             va = XBOX_CONTIG_BASE | (target & 0x0FFFFFFFu);
             jumps++;
             continue;
@@ -285,6 +315,7 @@ static void pb_scan_to(uint32_t start_va, uint32_t put_va)
             continue;
         if ((w & 3u) == 2u) {                                        /* CALL */
             uint32_t sub = XBOX_CONTIG_BASE | ((w & 0xFFFFFFFCu) & 0x0FFFFFFFu);
+            s_last_word = w; s_last_word_va = va - 4;
             s_tot_calls++;
             words += pb_walk(sub, sub + 0x400000u, 1, &jumps, &unknown);
             continue;
@@ -296,7 +327,8 @@ static void pb_scan_to(uint32_t start_va, uint32_t put_va)
             int noninc = (w & 0xE0000000u) == 0x40000000u;
             uint32_t i;
 
-            for (i = 0; i < count && va != put_va; i++) {
+            for (i = 0; i < count && va != put_va
+                        && va < XBOX_CONTIG_BASE + 0x04000000u - 4; i++) {
                 uint32_t m = noninc ? method : method + i * 4;
                 note(subch, m);
                 if (s_exec_enabled)

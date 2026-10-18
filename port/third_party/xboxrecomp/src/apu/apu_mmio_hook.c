@@ -263,8 +263,11 @@ bool apu_hook_handle_mmio(PCONTEXT ctx, uintptr_t fault_addr,
     /* What the title actually asks the APU for. The DSPs are stubbed here, so
      * a title that waits on one waits forever, and the only way to work out
      * what it is waiting for is to see the register traffic that precedes the
-     * wait. */
-    if (getenv("RECOMP_APU_TRACE")) {
+     * wait. RE-SoT: read once; every APU register access the title makes
+     * comes through this fault handler. */
+    static int trace = -1;
+    if (trace < 0) trace = getenv("RECOMP_APU_TRACE") != NULL;
+    if (trace) {
         static unsigned n;
         if (n++ < 400) {
             /* The value as well as the offset: finding which register carries

@@ -285,9 +285,11 @@ void recomp_cpuid(uint32_t leaf, uint32_t subleaf, uint32_t out[4])
 
 void recomp_unimpl(const char *text, uint32_t va)
 {
-    static int printed;
-    const char *trap = getenv("RECOMP_UNIMPL_TRAP");
-    int stop = trap && *trap && *trap != '0';
+    static int printed, stop = -1;
+    if (stop < 0) {   /* read once: a reached instruction may be in a loop */
+        const char *trap = getenv("RECOMP_UNIMPL_TRAP");
+        stop = trap && *trap && *trap != '0';
+    }
 
     if (printed < 50 || stop) {
         printed++;

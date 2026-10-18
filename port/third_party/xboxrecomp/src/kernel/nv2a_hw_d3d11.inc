@@ -110,6 +110,8 @@ typedef struct {
 typedef struct {
     uint32_t key, mask;
     ID3D11VertexShader *vs;             /* NULL: translation failed */
+    volatile LONG pending;              /* RE-SoT: compiling in the background */
+    ID3DBlob *volatile ready;           /* the background compile's result */
 } HwVsp;
 
 /* Pixel-shader constants; layout mirrors cbuffer PSC below. */
@@ -470,6 +472,34 @@ static void hw_shader_cache_path(char *path, size_t cap, const char *src, size_t
     for (i = 0; target[i]; i++)
         h = (h ^ (uint8_t)target[i]) * 1099511628211ull;
     snprintf(path, cap, "%s\\%016llx.cso", hw_shader_cache_dir(), (unsigned long long)h);
+}
+
+/* RE-SoT: the disk cache alone, without compiling on a miss. */
+static ID3DBlob *hw_shader_cache_load(const char *src, size_t len, const char *entry,
+                                      const char *target)
+{
+    ID3DBlob *code = NULL;
+    char path[MAX_PATH];
+    FILE *f;
+    long n;
+
+    if (!hw_shader_cache_dir())
+        return NULL;
+    hw_shader_cache_path(path, sizeof path, src, len, entry, target);
+    f = fopen(path, "rb");
+    if (!f)
+        return NULL;
+    fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n > 0 && SUCCEEDED(D3DCreateBlob((SIZE_T)n, &code))
+        && fread(ID3D10Blob_GetBufferPointer(code), 1, (size_t)n, f) == (size_t)n) {
+        fclose(f);
+        return code;
+    }
+    if (code) ID3D10Blob_Release(code);
+    fclose(f);
+    return NULL;
 }
 
 static ID3DBlob *hw_compile_src(const char *src, size_t len, const char *entry,
@@ -1551,10 +1581,141 @@ static int hw_ring_map(ID3D11Buffer *buf, uint32_t *off, uint32_t size,
                                              how, 0, map));
 }
 
+/* RE-SoT: create the shader (and, the first time, the input layout every
+ * program shares) from a compiled blob; releases the blob. */
+static void hw_vsp_finish(HwVsp *e, ID3DBlob *b)
+{
+    int i;
+    if (!b)
+        return;
+    ID3D11Device_CreateVertexShader(s_hw.dev, ID3D10Blob_GetBufferPointer(b),
+                                    ID3D10Blob_GetBufferSize(b), NULL, &e->vs);
+    if (!s_hw.layout_prog) {
+        D3D11_INPUT_ELEMENT_DESC il[HW_VSP_SLOTS];
+        for (i = 0; i < HW_VSP_SLOTS; i++) {
+            memset(&il[i], 0, sizeof il[i]);
+            il[i].SemanticName = "ATTR";
+            il[i].SemanticIndex = (UINT)i;
+            il[i].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+            il[i].AlignedByteOffset = (UINT)i * 16;
+            il[i].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA;
+        }
+        ID3D11Device_CreateInputLayout(s_hw.dev, il, HW_VSP_SLOTS,
+                                       ID3D10Blob_GetBufferPointer(b),
+                                       ID3D10Blob_GetBufferSize(b),
+                                       &s_hw.layout_prog);
+    }
+    ID3D10Blob_Release(b);
+    if (!s_hw.layout_prog && e->vs) {
+        ID3D11VertexShader_Release(e->vs);
+        e->vs = NULL;
+    }
+}
+
+/* RE-SoT: background compilation of vertex programs (xbox-demo).
+ *
+ * D3DCompile takes 24-158 ms for one translated program (37 programs of the
+ * first level: mean 69 ms; skipping optimisation still 44 ms, so the flags
+ * are not the answer). It ran on the executor, which also holds the dispatch
+ * lock, so every program met for the first time froze the picture and the
+ * sound together: in the hourglass room (0103_Hourglass) the user saw 7 fps,
+ * then 1 fps, with "cold shader vs_prog compiled in 157.16 ms" and a 160 ms
+ * stall of the APU thread in the log. A program missing from the disk cache
+ * is now compiled by this thread, and its batches go through the vertex
+ * interpreter -- the path every untranslatable program already takes --
+ * until the shader is ready, usually a few frames. RESOT_ASYNC_VSH=0
+ * compiles in place as before. */
+#if RESOT_RUNTIME_DEMO
+typedef struct { HwVsp *e; char *src; size_t len; } HwVspJob;
+static HwVspJob s_vsp_jobs[HW_VSP_MAX];
+static LONG s_vsp_job_head, s_vsp_job_tail;   /* under s_vsp_job_cs */
+static HANDLE s_vsp_job_ev;
+static CRITICAL_SECTION s_vsp_job_cs;
+
+static DWORD WINAPI hw_vsp_worker(LPVOID unused)
+{
+    (void)unused;
+    for (;;) {
+        HwVspJob job = { NULL, NULL, 0 };
+        int have = 0;
+        EnterCriticalSection(&s_vsp_job_cs);
+        if (s_vsp_job_tail != s_vsp_job_head) {
+            job = s_vsp_jobs[s_vsp_job_tail % HW_VSP_MAX];
+            s_vsp_job_tail++;
+            have = 1;
+        }
+        LeaveCriticalSection(&s_vsp_job_cs);
+        if (!have) {
+            WaitForSingleObject(s_vsp_job_ev, INFINITE);
+            continue;
+        }
+        {
+            ID3DBlob *b = hw_compile_src(job.src, job.len, "vs_prog", "vs_4_0");
+            free(job.src);
+            InterlockedExchangePointer((PVOID volatile *)&job.e->ready, b);
+            InterlockedExchange(&job.e->pending, 0);
+        }
+    }
+}
+
+static int hw_vsp_async(void)
+{
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("RESOT_ASYNC_VSH");
+        on = !v || atoi(v) != 0;
+        if (on) {
+            InitializeCriticalSection(&s_vsp_job_cs);
+            s_vsp_job_ev = CreateEventA(NULL, FALSE, FALSE, NULL);
+            if (!s_vsp_job_ev) {
+                on = 0;
+            } else {
+                HANDLE th = CreateThread(NULL, 0, hw_vsp_worker, NULL, 0, NULL);
+                if (th) {
+                    SetThreadPriority(th, THREAD_PRIORITY_BELOW_NORMAL);
+                    CloseHandle(th);
+                } else {
+                    on = 0;
+                }
+            }
+        }
+        fprintf(stderr, "  [HW] vertex programs compile %s\n",
+                on ? "in the background" : "in place (RESOT_ASYNC_VSH=0)");
+    }
+    return on;
+}
+
+/* Hands src (malloc'd) to the worker; 0 when the queue is full. */
+static int hw_vsp_queue(HwVsp *e, char *src, size_t len)
+{
+    int ok = 0;
+    EnterCriticalSection(&s_vsp_job_cs);
+    if (s_vsp_job_head - s_vsp_job_tail < HW_VSP_MAX) {
+        HwVspJob *j = &s_vsp_jobs[s_vsp_job_head % HW_VSP_MAX];
+        j->e = e; j->src = src; j->len = len;
+        e->pending = 1;
+        s_vsp_job_head++;
+        ok = 1;
+    }
+    LeaveCriticalSection(&s_vsp_job_cs);
+    if (ok)
+        SetEvent(s_vsp_job_ev);
+    return ok;
+}
+#else
+static int hw_vsp_async(void) { return 0; }
+static int hw_vsp_queue(HwVsp *e, char *src, size_t len)
+{
+    (void)e; (void)src; (void)len;
+    return 0;
+}
+#endif
+
 /* The translated form of the vertex program that would run now, for a batch
  * whose enabled attributes are `mask` (bit per attribute, assigned to input
- * slots in ascending order). NULL when it cannot run on the GPU; the caller
- * then uses the interpreter. */
+ * slots in ascending order). NULL when it cannot run on the GPU (RE-SoT: or
+ * is still compiling in the background); the caller then uses the
+ * interpreter. */
 static const HwVsp *hw_vsp_get(uint32_t mask)
 {
     static uint32_t seen_gen, seen_mask;
@@ -1564,7 +1725,7 @@ static const HwVsp *hw_vsp_get(uint32_t mask)
     HwVsp *e;
     char *src;
     size_t cap = 1u << 17, len, body;
-    ID3DBlob *b;
+    ID3DBlob *b = NULL;
     int ok, i, slot;
 
     if (seen_valid && seen_gen == gen && seen_mask == mask)
@@ -1576,13 +1737,23 @@ static const HwVsp *hw_vsp_get(uint32_t mask)
         return NULL;
     for (i = 0; i < s_hw.nvsp; i++)
         if (s_hw.vsp[i].key == key && s_hw.vsp[i].mask == mask) {
-            seen = s_hw.vsp[i].vs ? &s_hw.vsp[i] : NULL;
+            e = &s_hw.vsp[i];
+            if (e->ready) {             /* RE-SoT: a background compile landed */
+                hw_vsp_finish(e, (ID3DBlob *)InterlockedExchangePointer(
+                                     (PVOID volatile *)&e->ready, NULL));
+                fprintf(stderr, "  [HW] vertex program %08X (attributes %04X): %s"
+                                " (compiled in the background)\n",
+                        key, mask, e->vs ? "on the GPU" : "NOT translated, interpreter");
+            }
+            if (e->pending)
+                seen_valid = 0;         /* ask again on the next batch */
+            seen = e->vs ? e : NULL;
             return seen;
         }
     if (s_hw.nvsp == HW_VSP_MAX)
         return NULL;                        /* table full: interpreter */
     e = &s_hw.vsp[s_hw.nvsp++];
-    e->key = key; e->mask = mask; e->vs = NULL;
+    e->key = key; e->mask = mask; e->vs = NULL; e->pending = 0; e->ready = NULL;
 
     src = (char *)malloc(cap);
     if (!src)
@@ -1593,43 +1764,33 @@ static const HwVsp *hw_vsp_get(uint32_t mask)
             len += (size_t)snprintf(src + len, cap - len, "  v[%d] = i.a%d;\n", i, slot++);
     body = nv2a_vsh_emit_hlsl(src + len, cap - len - sizeof s_hw_hlsl_vsp_tail);
     if (body) {
+        const char *dump = getenv("RECOMP_HW_VSH_DUMP");
         len += body;
         memcpy(src + len, s_hw_hlsl_vsp_tail, sizeof s_hw_hlsl_vsp_tail);
         len += sizeof s_hw_hlsl_vsp_tail - 1;
-        b = hw_compile_src(src, len, "vs_prog", "vs_4_0");
-        if (b) {
-            ID3D11Device_CreateVertexShader(s_hw.dev, ID3D10Blob_GetBufferPointer(b),
-                                            ID3D10Blob_GetBufferSize(b), NULL, &e->vs);
-            if (!s_hw.layout_prog) {
-                D3D11_INPUT_ELEMENT_DESC il[HW_VSP_SLOTS];
-                for (i = 0; i < HW_VSP_SLOTS; i++) {
-                    memset(&il[i], 0, sizeof il[i]);
-                    il[i].SemanticName = "ATTR";
-                    il[i].SemanticIndex = (UINT)i;
-                    il[i].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-                    il[i].AlignedByteOffset = (UINT)i * 16;
-                    il[i].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA;
-                }
-                ID3D11Device_CreateInputLayout(s_hw.dev, il, HW_VSP_SLOTS,
-                                               ID3D10Blob_GetBufferPointer(b),
-                                               ID3D10Blob_GetBufferSize(b),
-                                               &s_hw.layout_prog);
-            }
-            ID3D10Blob_Release(b);
-        }
         /* RE-SoT: RECOMP_HW_VSH_DUMP=all prints every translation, not only
          * the ones that fail to compile. */
-        {
-            const char *dump = getenv("RECOMP_HW_VSH_DUMP");
-            if (dump && (!e->vs || strcmp(dump, "all") == 0))
-                fprintf(stderr, "[VSH %08X]\n%s\n", key, src);
+        if (dump && strcmp(dump, "all") == 0)
+            fprintf(stderr, "[VSH %08X]\n%s\n", key, src);
+        if (hw_vsp_async()) {
+            b = hw_shader_cache_load(src, len, "vs_prog", "vs_4_0");
+            if (b) {
+                fprintf(stderr, "  [HW] shader cache hit: vs_prog\n");
+            } else if (hw_vsp_queue(e, src, len)) {
+                fprintf(stderr, "  [HW] vertex program %08X (attributes %04X): compiling in"
+                                " the background, interpreter meanwhile (%d translated)\n",
+                        key, mask, s_hw.nvsp);
+                seen_valid = 0;
+                return NULL;                /* src now belongs to the worker */
+            }
         }
+        if (!b)
+            b = hw_compile_src(src, len, "vs_prog", "vs_4_0");
+        hw_vsp_finish(e, b);
+        if (dump && strcmp(dump, "all") != 0 && !e->vs)
+            fprintf(stderr, "[VSH %08X]\n%s\n", key, src);
     }
     free(src);
-    if (!s_hw.layout_prog && e->vs) {
-        ID3D11VertexShader_Release(e->vs);
-        e->vs = NULL;
-    }
     fprintf(stderr, "  [HW] vertex program %08X (attributes %04X): %s (%d translated)\n",
             key, mask, e->vs ? "on the GPU" : "NOT translated, interpreter", s_hw.nvsp);
     seen = e->vs ? e : NULL;
