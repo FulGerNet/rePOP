@@ -7,6 +7,28 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-18 (later): launcher finds both games; blue restyle
+
+The launcher now keeps one folder per game (`[Launcher] DemoDir`,
+`RetailDir`) and scans the folders beside the executable, so with the demo
+and the retail game both installed both buttons start their own folder; the
+first version started the last extracted folder whatever was chosen. The
+desert, dunes and arch were removed; the screen is night blue with luminous
+blue edges and white-blue lettering on a blue glow, with the golden sand kept.
+
+**Run:** a folder with `sot-xbox-retail.exe` (rebuilt with
+`tools/recomp.ps1 -Target xbox-retail -BuildOnly`), the earlier
+`sot-xbox-demo.exe`, the extracted demo ISO and a junction `retail` to
+`Assets/xbox-retail`, no `resot-options.ini`. **Seen:** both buttons enabled,
+"E3 2003 demo" and "NTSC retail" under them with their folders (screenshot).
+Enter from the retail executable: `[LAUNCHER] start`, retail booted on
+`retail` with `ext-vma=1`. Left, Enter: `[LAUNCHER] handed off`, the demo
+booted on `pop4demounused.xiso` with `ext-vma=0`. The ini then held both
+`DemoDir` and `RetailDir`. Each game was stopped after it booted; nothing was
+played. From the rebuilt demo executable, same folder: Enter started the
+demo on `pop4demounused.xiso`; Right, Enter handed off and retail booted on
+`retail` with `ext-vma=1`. **Not checked:** gameplay after either start.
+
 ## 2026-10-18: one runtime for both targets; launcher and ISO installation
 
 **Runtime merge.** `port/third_party/xboxrecomp-demo` and `-retail` became

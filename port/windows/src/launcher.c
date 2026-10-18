@@ -1,20 +1,23 @@
 /**
  * reSOT - title screen and game installer, shown before the game starts.
  *
- * With extracted game files in the game folder the screen names what is
- * installed there, the demo or the retail game, from default.xbe's SHA-256
- * (the same hashes tools/recomp.ps1 checks) or, without default.xbe, from the
- * files only one of them has; Start Demo and Start Game run this executable or
- * hand over to the other target's executable beside it. Without game files
- * the player chooses the game's Xbox ISO, which extract-xiso
- * (port/third_party/extract-xiso, run in a child copy of this executable)
- * extracts into a folder beside the executable; that folder becomes the game
- * folder and is remembered in resot-options.ini ([Launcher] GameDir).
+ * The screen looks for installed games: the game folder this executable was
+ * given (beside it, or RESOT_ASSET_DIR), the folders remembered in
+ * resot-options.ini ([Launcher] DemoDir / RetailDir) and every folder beside
+ * the executable, where ISO installations go. Each folder with game files is
+ * identified as the demo or the retail game from default.xbe's SHA-256 (the
+ * hashes tools/recomp.ps1 checks) or, without default.xbe, from the files
+ * only one of them has. Start Demo and Start Game each use their own folder,
+ * in this executable or by handing over to the other target's executable
+ * beside it. Without game files the player chooses the game's Xbox ISO,
+ * which extract-xiso (port/third_party/extract-xiso, run in a child copy of
+ * this executable) extracts into a folder beside the executable.
  *
- * Everything is drawn into one 32-bit back buffer: a night-to-sand gradient
- * with dunes and a Persian arch, drifting sand, the reSOT logo, and the
- * Atlantis MF face for the title and buttons when the build embedded it
- * (port/windows/res/AtlantisMF.ttf), Palatino Linotype otherwise.
+ * Everything is drawn into one 32-bit back buffer in the style of the reSOT
+ * logo: night blue, luminous blue edges, white-blue lettering on a blue glow,
+ * and drifting golden sand. The title and buttons use the Atlantis MF face
+ * when the build embedded it (port/windows/res/AtlantisMF.ttf), Palatino
+ * Linotype otherwise.
  */
 
 #define COBJMACROS
@@ -42,13 +45,18 @@
 #define WIN_H 640
 #define RES_FONT 201          /* port/windows/res/resot.rc */
 #define RES_LOGO 202
-#define LOGO_SIZE 188
-#define TITLE_H 84
-#define N_SAND 260
+#define LOGO_Y 30
+#define LOGO_SIZE 178
+#define TITLE_Y 206
+#define TITLE_H 96
+#define BTN_W 310
+#define BTN_H 64
+#define BTN_Y 382
+#define N_SAND 240
 #define WM_APP_ASK_ISO   (WM_APP + 1)
 #define WM_APP_EXTRACTED (WM_APP + 2)
 
-enum { GAME_NONE, GAME_DEMO, GAME_RETAIL };
+enum { GAME_NONE, GAME_DEMO, GAME_RETAIL, GAME_KINDS };
 enum { BTN_DEMO, BTN_GAME, BTN_ISO, BTN_GITHUB, BTN_CLOSE, BTN_CANCEL, BTN_COUNT };
 
 typedef struct {
@@ -59,8 +67,11 @@ typedef struct {
     wchar_t note[200];       /* a warning, or empty */
 } GameInfo;
 
+typedef struct { GameInfo info; char dir[MAX_PATH]; } Install;
 typedef struct { RECT r; int enabled, visible; } Button;
 typedef struct { float x, y, vx, vy, size, alpha, phase; int glint; } Grain;
+/* Lettering drawn with a glow: its coverage and a blurred copy of it. */
+typedef struct { uint8_t *mask; float *glow; int w, h; } GlowText;
 
 static struct {
     HWND hwnd;
@@ -70,10 +81,10 @@ static struct {
     HDC logo_dc;
     HBITMAP logo_bmp;
     int logo_w, logo_h;
-    uint8_t *title_mask;              /* WIN_W x TITLE_H coverage of the title */
+    GlowText title, label_demo, label_game;
     HANDLE font_mem;
     int atlantis;
-    HFONT f_title, f_button, f_sub, f_text, f_small, f_label;
+    HFONT f_sub, f_text, f_small, f_label;
     Button btn[BTN_COUNT];
     int hover, pressed, focus, tracking;
     Grain sand[N_SAND];
@@ -85,8 +96,10 @@ static struct {
     int this_kind, flags, running, result;
     wchar_t exe_dir[MAX_PATH], exe_path[MAX_PATH], sibling[MAX_PATH];
     int sibling_exists;
-    char game_dir[MAX_PATH];
-    GameInfo info;
+    char start_dir[MAX_PATH];         /* the folder this executable was given */
+    Install inst[GAME_KINDS];         /* [GAME_DEMO], [GAME_RETAIL] */
+    wchar_t note[200];                /* a folder that could not be used */
+    char chosen[MAX_PATH];
 
     /* extraction (worker thread) */
     int extracting;
@@ -127,6 +140,11 @@ static int game_files_present(const char *dir)
 {
     return dir && dir[0] && path_kind(dir, "prince.bf") == 1
         && path_kind(dir, "video") == 2 && path_kind(dir, "sound") == 2;
+}
+
+static const wchar_t *kind_exe(int kind)
+{
+    return kind == GAME_RETAIL ? L"sot-xbox-retail.exe" : L"sot-xbox-demo.exe";
 }
 
 static int sha256_file(const char *path, char hex[65])
@@ -183,51 +201,45 @@ static void detect_game(const char *dir, GameInfo *g)
     char xbe[MAX_PATH], hex[65];
     memset(g, 0, sizeof *g);
     g->present = game_files_present(dir);
-    if (!g->present) {
-        wcscpy_s(g->line, 160, L"No game files in this folder");
-        wcscpy_s(g->note, 200, L"Install from your Xbox disc image (ISO) to play.");
-        return;
-    }
+    if (!g->present) return;
     snprintf(xbe, sizeof xbe, "%s\\default.xbe", dir);
     if (path_kind(dir, "default.xbe") == 1 && sha256_file(xbe, hex)) {
         uint32_t title_id = 0;
         wchar_t name[41] = {0};
         if (!strcmp(hex, RESOT_DEMO_XBE_SHA256)) {
             g->kind = GAME_DEMO; g->exact = 1;
-            wcscpy_s(g->line, 160, L"Xbox demo  \x2022  E3 2003  \x2022  default.xbe of 2003-07-18");
+            wcscpy_s(g->line, 160, L"E3 2003 demo  \x2022  2003-07-18");
             return;
         }
         if (!strcmp(hex, RESOT_RETAIL_XBE_SHA256)) {
             g->kind = GAME_RETAIL; g->exact = 1;
-            wcscpy_s(g->line, 160, L"Xbox retail  \x2022  NTSC  \x2022  default.xbe of 2003-10-20");
+            wcscpy_s(g->line, 160, L"NTSC retail  \x2022  2003-10-20");
             return;
         }
         if (xbe_title(xbe, &title_id, name) && wcsstr(name, L"Prince of Persia")) {
             g->kind = title_id == 0x5553001Du ? GAME_RETAIL : GAME_DEMO;
-            swprintf(g->line, 160, L"Xbox %ls  \x2022  another revision (title %08X)",
-                     g->kind == GAME_RETAIL ? L"retail" : L"demo", title_id);
-            wcscpy_s(g->note, 200, L"This default.xbe is not the build reSOT supports; the game may not run.");
+            swprintf(g->line, 160, L"%ls  \x2022  other revision", g->kind == GAME_RETAIL ? L"Retail" : L"Demo");
+            wcscpy_s(g->note, 200, L"A default.xbe here is not the build reSOT supports; the game may not run.");
             return;
         }
-        wcscpy_s(g->line, 160, L"Unknown game in this folder");
-        wcscpy_s(g->note, 200, L"default.xbe is not Prince of Persia: The Sands of Time.");
+        wcscpy_s(g->note, 200, L"A folder holds a default.xbe that is not Prince of Persia: The Sands of Time.");
         return;
     }
     /* No default.xbe (a portable package): what only one of them ships. */
     if (path_kind(dir, "shaders.bin") == 1 || path_kind(dir, "POP1") == 2) {
         g->kind = GAME_RETAIL;
-        wcscpy_s(g->line, 160, L"Xbox retail  \x2022  recognised by its files");
+        wcscpy_s(g->line, 160, L"Retail  \x2022  recognised by its files");
     } else if (path_kind(dir, "preview.bik") == 1) {
         g->kind = GAME_DEMO;
-        wcscpy_s(g->line, 160, L"Xbox demo  \x2022  recognised by its files");
+        wcscpy_s(g->line, 160, L"Demo  \x2022  recognised by its files");
     } else {
-        wcscpy_s(g->line, 160, L"Game files found, build not identified");
-        wcscpy_s(g->note, 200, L"Add the disc's default.xbe to this folder to identify it.");
+        wcscpy_s(g->note, 200, L"Game files found but not identified: add the disc's default.xbe to that folder.");
     }
 }
 
-/* resot-options.ini beside the executable, [Launcher] GameDir: relative to
- * the executable's folder when the game is inside it, so the folder can move. */
+/* resot-options.ini beside the executable, [Launcher] DemoDir / RetailDir:
+ * relative to the executable's folder when inside it, so the folder can move.
+ * GameDir is what the first launcher wrote; it is still read. */
 static void ini_path(char *out, size_t size)
 {
     char dir[MAX_PATH];
@@ -235,11 +247,11 @@ static void ini_path(char *out, size_t size)
     snprintf(out, size, "%s\\resot-options.ini", dir);
 }
 
-static int remembered_dir(char *out, size_t size)
+static int remembered_dir(const char *key, char *out, size_t size)
 {
     char ini[MAX_PATH], value[MAX_PATH], dir[MAX_PATH];
     ini_path(ini, sizeof ini);
-    if (!ini[0] || !GetPrivateProfileStringA("Launcher", "GameDir", "", value, sizeof value, ini))
+    if (!ini[0] || !GetPrivateProfileStringA("Launcher", key, "", value, sizeof value, ini))
         return 0;
     if ((value[0] && value[1] == ':') || (value[0] == '\\' && value[1] == '\\')) {
         strncpy_s(out, size, value, _TRUNCATE);
@@ -247,14 +259,15 @@ static int remembered_dir(char *out, size_t size)
         if (!to_ansi(L.exe_dir, dir, sizeof dir)) return 0;
         snprintf(out, size, "%s\\%s", dir, value);
     }
-    return game_files_present(out);
+    return 1;
 }
 
-static void remember_dir(const char *game_dir)
+static void remember_dir(int kind, const char *game_dir)
 {
     char ini[MAX_PATH], dir[MAX_PATH];
     const char *value = game_dir;
     size_t n;
+    if (kind != GAME_DEMO && kind != GAME_RETAIL) return;
     ini_path(ini, sizeof ini);
     if (!ini[0]) return;
     if (to_ansi(L.exe_dir, dir, sizeof dir)) {
@@ -262,7 +275,53 @@ static void remember_dir(const char *game_dir)
         if (!_strnicmp(game_dir, dir, n) && game_dir[n] == '\\' && game_dir[n + 1])
             value = game_dir + n + 1;
     }
-    WritePrivateProfileStringA("Launcher", "GameDir", value, ini);
+    WritePrivateProfileStringA("Launcher", kind == GAME_DEMO ? "DemoDir" : "RetailDir", value, ini);
+}
+
+static void consider(const char *dir)
+{
+    GameInfo g;
+    Install *slot;
+    int k;
+    if (!game_files_present(dir)) return;
+    for (k = GAME_DEMO; k < GAME_KINDS; ++k)
+        if (!_stricmp(L.inst[k].dir, dir)) return;
+    detect_game(dir, &g);
+    if (g.kind == GAME_NONE) {
+        if (!L.note[0]) wcscpy_s(L.note, 200, g.note);
+        return;
+    }
+    slot = &L.inst[g.kind];
+    if (!slot->dir[0] || (!slot->info.exact && g.exact)) {
+        slot->info = g;
+        strncpy_s(slot->dir, sizeof slot->dir, dir, _TRUNCATE);
+    }
+}
+
+/* Every place a game may be: the folder given, beside the executable, the
+ * remembered folders, then each folder beside the executable. */
+static void scan_installs(void)
+{
+    char dir[MAX_PATH], path[MAX_PATH];
+    WIN32_FIND_DATAA found;
+    HANDLE search;
+    memset(L.inst, 0, sizeof L.inst);
+    L.note[0] = 0;
+    consider(L.start_dir);
+    if (!to_ansi(L.exe_dir, dir, sizeof dir)) return;
+    consider(dir);
+    if (remembered_dir("DemoDir", path, sizeof path)) consider(path);
+    if (remembered_dir("RetailDir", path, sizeof path)) consider(path);
+    if (remembered_dir("GameDir", path, sizeof path)) consider(path);
+    snprintf(path, sizeof path, "%s\\*", dir);
+    search = FindFirstFileA(path, &found);
+    if (search == INVALID_HANDLE_VALUE) return;
+    do {
+        if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.cFileName[0] == '.') continue;
+        if (snprintf(path, sizeof path, "%s\\%s", dir, found.cFileName) < (int)sizeof path)
+            consider(path);
+    } while (FindNextFileA(search, &found));
+    FindClose(search);
 }
 
 /* ── drawing into the back buffer ──────────────────────────── */
@@ -288,11 +347,11 @@ static void blend(int x, int y, int r, int g, int b, float a)
     *p = 0xFF000000u | (uint32_t)clampi(pr) << 16 | (uint32_t)clampi(pg) << 8 | (uint32_t)clampi(pb);
 }
 
-static void add(uint32_t *buffer, int x, int y, float r, float g, float b)
+static void add(int x, int y, float r, float g, float b)
 {
     uint32_t *p, c;
     if ((unsigned)x >= WIN_W || (unsigned)y >= WIN_H) return;
-    p = &buffer[y * WIN_W + x];
+    p = &L.px[y * WIN_W + x];
     c = *p;
     *p = 0xFF000000u
         | (uint32_t)clampi(((c >> 16) & 255) + (int)r) << 16
@@ -315,6 +374,35 @@ static void frame(int x, int y, int w, int h, int t, int r, int g, int b, float 
     fill(x + w - t, y + t, t, h - 2 * t, r, g, b, a);
 }
 
+/* A luminous line: a bright core and a soft halo above and below. */
+static void glow_hline(int x, int y, int w, int r, int g, int b, float a)
+{
+    int i, d;
+    for (i = 0; i < w; ++i) {
+        float edge = fminf(1.0f, fminf((float)i, (float)(w - 1 - i)) / 24.0f);
+        blend(x + i, y, r, g, b, a * edge);
+        for (d = 1; d <= 4; ++d) {
+            float k = a * edge * 0.22f * (5 - d) / 4.0f;
+            add(x + i, y - d, r * k, g * k, b * k);
+            add(x + i, y + d, r * k, g * k, b * k);
+        }
+    }
+}
+
+static void glow_vline(int x, int y, int h, int r, int g, int b, float a)
+{
+    int j, d;
+    for (j = 0; j < h; ++j) {
+        float edge = fminf(1.0f, fminf((float)j, (float)(h - 1 - j)) / 24.0f);
+        blend(x, y + j, r, g, b, a * edge);
+        for (d = 1; d <= 4; ++d) {
+            float k = a * edge * 0.22f * (5 - d) / 4.0f;
+            add(x - d, y + j, r * k, g * k, b * k);
+            add(x + d, y + j, r * k, g * k, b * k);
+        }
+    }
+}
+
 static void diamond(int cx, int cy, int s, int r, int g, int b, float a)
 {
     int i, j;
@@ -323,8 +411,8 @@ static void diamond(int cx, int cy, int s, int r, int g, int b, float a)
             if (abs(i) + abs(j) <= s) blend(cx + i, cy + j, r, g, b, a);
 }
 
-/* A soft dot, added (light), for sand grains and the arch's strokes. */
-static void glow(uint32_t *buffer, float x, float y, float radius, float r, float g, float b, float a)
+/* A soft dot, added (light): sand grains and highlights. */
+static void glow(float x, float y, float radius, float r, float g, float b, float a)
 {
     int x0 = (int)floorf(x - radius - 1), x1 = (int)ceilf(x + radius + 1);
     int y0 = (int)floorf(y - radius - 1), y1 = (int)ceilf(y + radius + 1), i, j;
@@ -334,117 +422,75 @@ static void glow(uint32_t *buffer, float x, float y, float radius, float r, floa
             float d = sqrtf(dx * dx + dy * dy) / (radius + 0.5f), k;
             if (d >= 1.0f) continue;
             k = (1.0f - d) * (1.0f - d) * a;
-            add(buffer, i, j, r * k, g * k, b * k);
+            add(i, j, r * k, g * k, b * k);
         }
 }
 
-/* A horizontal rule that fades out at both ends, with a diamond at its centre. */
-static void divider(int cx, int y, int half)
+/* A blue jewel: the ornament of the frame and the dividers. */
+static void jewel(int cx, int cy, int s)
 {
-    int i;
-    for (i = -half; i <= half; ++i) {
-        float a = 1.0f - fabsf((float)i) / half;
-        blend(cx + i, y, 214, 170, 90, a * 0.9f);
-        blend(cx + i, y + 3, 214, 170, 90, a * 0.35f);
-    }
-    diamond(cx, y + 1, 6, 236, 196, 110, 1.0f);
-    diamond(cx, y + 1, 3, 40, 24, 10, 1.0f);
-    diamond(cx - half / 2, y + 1, 3, 214, 170, 90, 0.8f);
-    diamond(cx + half / 2, y + 1, 3, 214, 170, 90, 0.8f);
+    diamond(cx, cy, s + 2, 4, 10, 24, 1.0f);
+    diamond(cx, cy, s, 90, 170, 255, 1.0f);
+    diamond(cx, cy, s / 2, 230, 245, 255, 1.0f);
+    glow((float)cx, (float)cy, s * 2.6f, 60, 140, 255, 0.55f);
 }
 
-static float dune(float x, float base, float a1, float f1, float p1, float a2, float f2)
-{
-    return base + a1 * sinf(x * f1 + p1) + a2 * sinf(x * f2 + p1 * 1.7f);
-}
-
-/* The static picture: the sky from night to a sand-coloured horizon, a glow
- * behind the logo, two dune ridges, a pointed arch around the logo, the
- * double gold border and its corners. */
+/* The static picture: night blue, a blue light behind the logo and the
+ * title, faint scan lines, a vignette and the luminous double frame. */
 static void build_background(void)
 {
-    int x, y, i;
+    int x, y;
     float cx = WIN_W / 2.0f;
+    uint32_t *save = L.px;
     for (y = 0; y < WIN_H; ++y) {
         float t = (float)y / (WIN_H - 1);
         for (x = 0; x < WIN_W; ++x) {
-            float r, g, b, dx, dy, d, k, v, n;
-            float d1 = dune((float)x, WIN_H - 112.0f, 16, 0.0062f, 0.6f, 9, 0.019f);
-            float d2 = dune((float)x, WIN_H - 66.0f, 13, 0.0094f, 2.1f, 7, 0.026f);
-            if (t < 0.62f) {
-                float s = t / 0.62f;
-                r = 9 + 34 * s; g = 8 + 18 * s; b = 20 + 4 * s;
-            } else {
-                float s = (t - 0.62f) / 0.38f;
-                r = 43 + 52 * s; g = 26 + 30 * s; b = 24 - 8 * s;
-            }
-            /* warm light behind the logo and the title */
-            dx = (x - cx) / 420.0f; dy = (y - 170.0f) / 300.0f;
+            float r = 3 + 5 * (1 - fabsf(t - 0.45f)), g = 7 + 10 * (1 - fabsf(t - 0.45f)),
+                  b = 18 + 22 * (1 - fabsf(t - 0.45f)), dx, dy, d, k, v, n;
+            /* blue light behind the logo */
+            dx = (x - cx) / 330.0f; dy = (y - 125.0f) / 210.0f;
             d = sqrtf(dx * dx + dy * dy);
             k = d < 1.0f ? (1.0f - d) * (1.0f - d) : 0.0f;
-            r += 150 * k; g += 88 * k; b += 30 * k;
-            /* the horizon line catches the last light */
-            k = expf(-fabsf(y - (d1 - 6.0f)) / 26.0f) * 0.55f;
-            r += 70 * k; g += 40 * k; b += 10 * k;
-            if (y > d1) { float s = (y - d1) / 120.0f; r = 74 - 20 * s; g = 46 - 14 * s; b = 20 - 6 * s; }
-            if (y > d2) { float s = (y - d2) / 70.0f; r = 46 - 14 * s; g = 28 - 9 * s; b = 13 - 4 * s; }
-            /* vignette */
+            r += 20 * k; g += 70 * k; b += 150 * k;
+            /* a wide band of light behind the title */
+            dx = (x - cx) / 520.0f; dy = (y - 255.0f) / 60.0f;
+            d = dx * dx + dy * dy;
+            k = d < 1.0f ? (1.0f - d) * 0.5f : 0.0f;
+            r += 8 * k; g += 30 * k; b += 70 * k;
+            /* scan lines, vignette, fine grain */
+            if (y % 3 == 0) { r *= 0.9f; g *= 0.9f; b *= 0.9f; }
             dx = (x - cx) / cx; dy = (y - WIN_H / 2.0f) / (WIN_H / 2.0f);
-            v = 1.0f - 0.42f * fminf(1.0f, (dx * dx + dy * dy) * 0.55f);
-            /* sand grain */
-            n = (float)(((x * 73856093u) ^ (y * 19349663u)) % 9u) - 4.0f;
+            v = 1.0f - 0.5f * fminf(1.0f, (dx * dx + dy * dy) * 0.6f);
+            n = (float)(((x * 73856093u) ^ (y * 19349663u)) % 5u) - 2.0f;
             L.bg[y * WIN_W + x] = 0xFF000000u
-                | (uint32_t)clampi((int)(r * v + n)) << 16
-                | (uint32_t)clampi((int)(g * v + n * 0.8f)) << 8
-                | (uint32_t)clampi((int)(b * v + n * 0.5f));
+                | (uint32_t)clampi((int)(r * v + n * 0.5f)) << 16
+                | (uint32_t)clampi((int)(g * v + n * 0.7f)) << 8
+                | (uint32_t)clampi((int)(b * v + n));
         }
     }
-    /* A pointed (Persian) arch around the logo: two arcs of radius R meeting
-     * at the apex, with short jambs. */
-    {
-        uint32_t *save = L.px;
-        float aw = 136.0f, R = aw * 1.28f, spring = 196.0f, jamb = 252.0f, angle;
-        float top = sqrtf(R * R - (R - aw) * (R - aw));
-        L.px = L.bg;
-        for (angle = 0.0f; angle <= 1.0f; angle += 0.0015f) {
-            float a0 = asinf(top / R) * angle;
-            float lx = cx - aw + R - R * cosf(a0), ly = spring - R * sinf(a0);
-            glow(L.bg, lx, ly, 1.3f, 120, 84, 34, 0.9f);
-            glow(L.bg, 2 * cx - lx, ly, 1.3f, 120, 84, 34, 0.9f);
-            glow(L.bg, lx + 9, ly + 6 * angle + 4, 0.9f, 80, 52, 20, 0.6f);
-            glow(L.bg, 2 * cx - lx - 9, ly + 6 * angle + 4, 0.9f, 80, 52, 20, 0.6f);
-        }
-        for (angle = spring; angle <= jamb; angle += 0.6f) {
-            glow(L.bg, cx - aw, angle, 1.3f, 120, 84, 34, 0.9f * (jamb - angle) / (jamb - spring));
-            glow(L.bg, cx + aw, angle, 1.3f, 120, 84, 34, 0.9f * (jamb - angle) / (jamb - spring));
-        }
-        diamond((int)cx, (int)(spring - top) - 9, 4, 214, 170, 90, 0.9f);
-        /* border */
-        frame(8, 8, WIN_W - 16, WIN_H - 16, 1, 150, 112, 50, 0.65f);
-        frame(14, 14, WIN_W - 28, WIN_H - 28, 2, 200, 156, 76, 0.85f);
-        frame(20, 20, WIN_W - 40, WIN_H - 40, 1, 120, 86, 36, 0.55f);
-        for (i = 0; i < 4; ++i) {
-            int x0 = i & 1 ? WIN_W - 15 : 15, y0 = i & 2 ? WIN_H - 15 : 15;
-            diamond(x0, y0, 9, 22, 14, 8, 1.0f);
-            diamond(x0, y0, 7, 214, 170, 90, 1.0f);
-            diamond(x0, y0, 3, 60, 36, 14, 1.0f);
-        }
-        diamond(WIN_W / 2, 15, 6, 214, 170, 90, 1.0f);
-        diamond(WIN_W / 2, WIN_H - 15, 6, 214, 170, 90, 1.0f);
-        L.px = save;
-    }
+    L.px = L.bg;
+    frame(9, 9, WIN_W - 18, WIN_H - 18, 1, 40, 80, 150, 0.7f);
+    glow_hline(16, 16, WIN_W - 32, 80, 160, 255, 0.9f);
+    glow_hline(16, WIN_H - 17, WIN_W - 32, 80, 160, 255, 0.9f);
+    glow_vline(16, 16, WIN_H - 32, 80, 160, 255, 0.9f);
+    glow_vline(WIN_W - 17, 16, WIN_H - 32, 80, 160, 255, 0.9f);
+    frame(22, 22, WIN_W - 44, WIN_H - 44, 1, 30, 70, 140, 0.6f);
+    jewel(16, 16, 7); jewel(WIN_W - 17, 16, 7);
+    jewel(16, WIN_H - 17, 7); jewel(WIN_W - 17, WIN_H - 17, 7);
+    jewel(WIN_W / 2, 16, 5); jewel(WIN_W / 2, WIN_H - 17, 5);
+    L.px = save;
 }
 
 static void spawn_grain(Grain *s, int anywhere)
 {
-    s->glint = (rnd() % 7) == 0;
+    s->glint = (rnd() % 6) == 0;
     s->x = frand(-40.0f, (float)WIN_W);
     s->y = anywhere ? frand(0.0f, (float)WIN_H) : frand(-30.0f, -2.0f);
-    s->vx = frand(8.0f, 26.0f);
-    s->vy = s->glint ? frand(-14.0f, -4.0f) : frand(14.0f, 46.0f);
-    if (s->glint && !anywhere) s->y = frand((float)WIN_H * 0.55f, (float)WIN_H);
-    s->size = s->glint ? frand(1.2f, 2.2f) : frand(0.5f, 1.6f);
-    s->alpha = s->glint ? frand(0.5f, 1.0f) : frand(0.25f, 0.85f);
+    s->vx = frand(6.0f, 22.0f);
+    s->vy = s->glint ? frand(-14.0f, -4.0f) : frand(14.0f, 42.0f);
+    if (s->glint && !anywhere) s->y = frand((float)WIN_H * 0.5f, (float)WIN_H);
+    s->size = s->glint ? frand(1.4f, 2.6f) : frand(0.7f, 1.8f);
+    s->alpha = s->glint ? frand(0.6f, 1.0f) : frand(0.45f, 1.0f);
     s->phase = frand(0.0f, 6.283f);
 }
 
@@ -466,104 +512,140 @@ static void draw_sand(void)
         const Grain *s = &L.sand[i];
         float twinkle = 0.65f + 0.35f * sinf(L.time * (s->glint ? 5.0f : 2.0f) + s->phase);
         float a = s->alpha * twinkle;
-        if (s->glint) glow(L.px, s->x, s->y, s->size * 2.2f, 255, 214, 140, a * 0.9f);
-        else glow(L.px, s->x, s->y, s->size, 230, 170, 90, a);
+        if (s->glint) glow(s->x, s->y, s->size * 2.2f, 255, 214, 130, a * 0.9f);
+        else glow(s->x, s->y, s->size, 240, 180, 80, a);
     }
 }
 
-/* Coverage of a text drawn in white on black, from the red channel. */
-static uint8_t *text_mask(HFONT font, const wchar_t *text, int w, int h)
+/* Coverage of a text drawn in white on black (red channel), and its glow:
+ * three box blurs of radius `blur`, close to a Gaussian. */
+static GlowText glow_text(HFONT font, const wchar_t *text, int w, int h, int blur)
 {
+    GlowText t = {0};
     BITMAPINFO bi = {0};
     void *bits = NULL;
     HDC dc = CreateCompatibleDC(NULL);
     HBITMAP bmp;
-    uint8_t *mask = (uint8_t *)calloc((size_t)w * h, 1);
     RECT r = {0, 0, w, h};
-    int i;
+    float *tmp;
+    int i, x, y, pass;
     bi.bmiHeader.biSize = sizeof bi.bmiHeader;
     bi.bmiHeader.biWidth = w; bi.bmiHeader.biHeight = -h;
     bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
-    bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
-    if (!dc || !bmp || !mask) { if (bmp) DeleteObject(bmp); if (dc) DeleteDC(dc); free(mask); return NULL; }
+    bmp = dc ? CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0) : NULL;
+    t.mask = (uint8_t *)calloc((size_t)w * h, 1);
+    t.glow = (float *)calloc((size_t)w * h, sizeof(float));
+    tmp = (float *)calloc((size_t)w * h, sizeof(float));
+    if (!bmp || !t.mask || !t.glow || !tmp) {
+        if (bmp) DeleteObject(bmp);
+        if (dc) DeleteDC(dc);
+        free(t.mask); free(t.glow); free(tmp);
+        memset(&t, 0, sizeof t);
+        return t;
+    }
+    t.w = w; t.h = h;
     SelectObject(dc, bmp);
     SelectObject(dc, font);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(255, 255, 255));
     DrawTextW(dc, text, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     GdiFlush();
-    for (i = 0; i < w * h; ++i) mask[i] = (uint8_t)((((uint32_t *)bits)[i] >> 16) & 255);
+    for (i = 0; i < w * h; ++i) {
+        t.mask[i] = (uint8_t)((((uint32_t *)bits)[i] >> 16) & 255);
+        t.glow[i] = t.mask[i] / 255.0f;
+    }
+    for (pass = 0; pass < 3; ++pass) {
+        for (y = 0; y < h; ++y) {          /* horizontal */
+            float sum = 0;
+            for (x = -blur; x < w + blur; ++x) {
+                if (x + blur < w) sum += t.glow[y * w + x + blur];
+                if (x - blur - 1 >= 0) sum -= t.glow[y * w + x - blur - 1];
+                if (x >= 0 && x < w) tmp[y * w + x] = sum / (2 * blur + 1);
+            }
+        }
+        for (x = 0; x < w; ++x) {          /* vertical */
+            float sum = 0;
+            for (y = -blur; y < h + blur; ++y) {
+                if (y + blur < h) sum += tmp[(y + blur) * w + x];
+                if (y - blur - 1 >= 0) sum -= tmp[(y - blur - 1) * w + x];
+                if (y >= 0 && y < h) t.glow[y * w + x] = sum / (2 * blur + 1);
+            }
+        }
+    }
+    free(tmp);
     DeleteObject(bmp);
     DeleteDC(dc);
-    return mask;
+    return t;
 }
 
-/* The title in gold: a dark drop shadow, then a vertical gradient from pale
- * gold to bronze, with a slow light passing across it. */
-static void draw_title(int y0)
+/* White-blue lettering, top to bottom from `top` to `bottom`, over a blue
+ * glow of strength `halo` (0: none). `shine` adds a light passing across. */
+static void draw_glow_text(const GlowText *t, int x0, int y0, float halo,
+                           const int top[3], const int bottom[3], int shine)
 {
     int x, y;
-    float sweep = fmodf(L.time * 120.0f, WIN_W * 2.2f) - WIN_W * 0.6f;
-    if (!L.title_mask) return;
-    for (y = 0; y < TITLE_H; ++y)
-        for (x = 0; x < WIN_W; ++x) {
-            uint8_t m = L.title_mask[y * WIN_W + x];
-            if (m) blend(x + 3, y0 + y + 4, 12, 6, 2, m / 255.0f * 0.85f);
-        }
-    for (y = 0; y < TITLE_H; ++y) {
-        float t = (float)y / TITLE_H;
-        int r = (int)(255 - 70 * t), g = (int)(232 - 112 * t), b = (int)(170 - 130 * t);
-        for (x = 0; x < WIN_W; ++x) {
-            uint8_t m = L.title_mask[y * WIN_W + x];
-            float shine;
+    float sweep = fmodf(L.time * 140.0f, t->w * 2.4f) - t->w * 0.7f;
+    if (!t->mask) return;
+    if (halo > 0)
+        for (y = 0; y < t->h; ++y)
+            for (x = 0; x < t->w; ++x) {
+                float k = t->glow[y * t->w + x] * halo;
+                if (k > 0.004f) add(x0 + x, y0 + y, 40 * k, 120 * k, 255 * k);
+            }
+    for (y = 0; y < t->h; ++y) {
+        float f = (float)y / t->h;
+        int r = (int)(top[0] + (bottom[0] - top[0]) * f);
+        int g = (int)(top[1] + (bottom[1] - top[1]) * f);
+        int b = (int)(top[2] + (bottom[2] - top[2]) * f);
+        for (x = 0; x < t->w; ++x) {
+            uint8_t m = t->mask[y * t->w + x];
             if (!m) continue;
-            shine = 1.0f - fabsf(x - sweep - y * 0.6f) / 70.0f;
-            if (shine > 0) blend(x, y0 + y, clampi(r + 60), clampi(g + 60), clampi(b + 60), m / 255.0f);
-            else blend(x, y0 + y, r, g, b, m / 255.0f);
+            if (shine && fabsf(x - sweep - y * 0.6f) < 60.0f)
+                blend(x0 + x, y0 + y, 255, 255, 255, m / 255.0f);
+            else
+                blend(x0 + x, y0 + y, r, g, b, m / 255.0f);
         }
     }
 }
 
-static void draw_button(int id, const wchar_t *label)
+static void divider(int cx, int y, int half)
 {
+    glow_hline(cx - half, y, 2 * half, 90, 170, 255, 0.9f);
+    jewel(cx, y, 5);
+    jewel(cx - half / 2, y, 3);
+    jewel(cx + half / 2, y, 3);
+}
+
+static void draw_button(int id)
+{
+    static const int text_top[3] = {255, 255, 255}, text_bottom[3] = {170, 210, 255};
+    static const int off_top[3] = {96, 110, 138}, off_bottom[3] = {70, 82, 108};
     Button *b = &L.btn[id];
     RECT r = b->r;
-    int w = r.right - r.left, h = r.bottom - r.top;
-    int hot = b->enabled && L.hover == id, down = hot && L.pressed == id, focus = b->enabled && L.focus == id;
-    int y;
+    int w = r.right - r.left, h = r.bottom - r.top, y;
+    int hot = b->enabled && L.hover == id, focus = b->enabled && L.focus == id;
+    const GlowText *label = id == BTN_DEMO ? &L.label_demo : &L.label_game;
     if (!b->visible) return;
     for (y = 0; y < h; ++y) {
         float t = (float)y / h;
-        if (!b->enabled) fill(r.left, r.top + y, w, 1, 24, 18, 14, 0.72f);
-        else if (hot) fill(r.left, r.top + y, w, 1, (int)(120 - 60 * t), (int)(74 - 40 * t), (int)(26 - 14 * t), down ? 0.95f : 0.88f);
-        else fill(r.left, r.top + y, w, 1, (int)(52 - 24 * t), (int)(34 - 16 * t), (int)(16 - 8 * t), 0.86f);
+        if (!b->enabled) fill(r.left, r.top + y, w, 1, 8, 12, 22, 0.8f);
+        else if (hot) fill(r.left, r.top + y, w, 1, (int)(20 - 10 * t), (int)(56 - 26 * t), (int)(120 - 50 * t), 0.92f);
+        else fill(r.left, r.top + y, w, 1, (int)(10 - 4 * t), (int)(26 - 12 * t), (int)(60 - 26 * t), 0.88f);
     }
     if (b->enabled) {
-        frame(r.left, r.top, w, h, 2, hot || focus ? 255 : 212, hot || focus ? 214 : 170, hot || focus ? 130 : 90, 1.0f);
-        frame(r.left + 5, r.top + 5, w - 10, h - 10, 1, 150, 110, 50, 0.8f);
-        diamond(r.left, r.top + h / 2, 7, 22, 14, 8, 1.0f);
-        diamond(r.right - 1, r.top + h / 2, 7, 22, 14, 8, 1.0f);
-        diamond(r.left, r.top + h / 2, 5, 236, 196, 110, 1.0f);
-        diamond(r.right - 1, r.top + h / 2, 5, 236, 196, 110, 1.0f);
-        if (hot) glow(L.px, (float)(r.left + w / 2), (float)r.bottom, w * 0.45f, 120, 70, 20, 0.25f);
+        int c = hot || focus;
+        glow_hline(r.left, r.top, w, c ? 170 : 80, c ? 215 : 160, 255, 1.0f);
+        glow_hline(r.left, r.bottom - 1, w, c ? 170 : 80, c ? 215 : 160, 255, 1.0f);
+        frame(r.left, r.top, w, h, 1, c ? 150 : 60, c ? 205 : 130, 255, 0.9f);
+        frame(r.left + 5, r.top + 5, w - 10, h - 10, 1, 40, 90, 180, 0.7f);
+        jewel(r.left, r.top + h / 2, 6);
+        jewel(r.right - 1, r.top + h / 2, 6);
+        if (hot) glow((float)(r.left + w / 2), (float)(r.top + h / 2), w * 0.5f, 30, 80, 200, 0.35f);
+        draw_glow_text(label, r.left, r.top, hot ? 2.2f : 1.3f, text_top, text_bottom, 0);
     } else {
-        frame(r.left, r.top, w, h, 1, 110, 92, 70, 0.6f);
+        frame(r.left, r.top, w, h, 1, 50, 64, 92, 0.7f);
+        draw_glow_text(label, r.left, r.top, 0.0f, off_top, off_bottom, 0);
     }
-    (void)label;
-}
-
-static void button_text(int id, const wchar_t *label, HFONT font)
-{
-    Button *b = &L.btn[id];
-    RECT r = b->r, s;
-    int hot = b->enabled && L.hover == id;
-    if (!b->visible) return;
-    SelectObject(L.dc, font);
-    s = r; OffsetRect(&s, 2, 3);
-    SetTextColor(L.dc, RGB(10, 5, 2));
-    if (b->enabled) DrawTextW(L.dc, label, -1, &s, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    SetTextColor(L.dc, !b->enabled ? RGB(112, 98, 80) : hot ? RGB(255, 238, 190) : RGB(240, 204, 128));
-    DrawTextW(L.dc, label, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 
 static void text_at(HFONT font, COLORREF color, const wchar_t *text, int x, int y, int w, int h, UINT format)
@@ -574,125 +656,146 @@ static void text_at(HFONT font, COLORREF color, const wchar_t *text, int x, int 
     DrawTextW(L.dc, text, -1, &r, format | DT_NOPREFIX);
 }
 
-static const wchar_t *kind_exe(int kind)
+/* What one button would start, under it. */
+static void install_text(int kind, const RECT *button)
 {
-    return kind == GAME_RETAIL ? L"sot-xbox-retail.exe" : L"sot-xbox-demo.exe";
+    const Install *in = &L.inst[kind];
+    wchar_t dir[MAX_PATH];
+    int x = button->left - 20, w = button->right - button->left + 40;
+    if (!in->dir[0]) {
+        text_at(L.f_text, RGB(96, 112, 140), L"Not installed", x, button->bottom + 12, w, 24,
+                DT_CENTER | DT_SINGLELINE);
+        return;
+    }
+    text_at(L.f_text, in->info.exact ? RGB(214, 232, 255) : RGB(255, 200, 120), in->info.line,
+            x, button->bottom + 12, w, 24, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    to_wide(in->dir, dir, MAX_PATH);
+    text_at(L.f_small, RGB(110, 140, 184), dir, x, button->bottom + 38, w, 18,
+            DT_CENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
 }
 
 static void layout(void)
 {
-    int i, gw = 310, gh = 64, gap = 40, x0 = (WIN_W - 2 * gw - gap) / 2, y0 = 470;
-    int has = L.info.present && L.info.kind != GAME_NONE;
+    int i, x0 = (WIN_W - 2 * BTN_W - 50) / 2;
     for (i = 0; i < BTN_COUNT; ++i) L.btn[i].visible = !L.extracting;
-    SetRect(&L.btn[BTN_DEMO].r, x0, y0, x0 + gw, y0 + gh);
-    SetRect(&L.btn[BTN_GAME].r, x0 + gw + gap, y0, x0 + 2 * gw + gap, y0 + gh);
+    SetRect(&L.btn[BTN_DEMO].r, x0, BTN_Y, x0 + BTN_W, BTN_Y + BTN_H);
+    SetRect(&L.btn[BTN_GAME].r, x0 + BTN_W + 50, BTN_Y, x0 + 2 * BTN_W + 50, BTN_Y + BTN_H);
     SetRect(&L.btn[BTN_ISO].r, WIN_W - 250, WIN_H - 62, WIN_W - 40, WIN_H - 34);
     SetRect(&L.btn[BTN_GITHUB].r, 40, WIN_H - 62, 330, WIN_H - 34);
-    SetRect(&L.btn[BTN_CLOSE].r, WIN_W - 64, 30, WIN_W - 30, 64);
-    SetRect(&L.btn[BTN_CANCEL].r, (WIN_W - 220) / 2, 520, (WIN_W + 220) / 2, 572);
+    SetRect(&L.btn[BTN_CLOSE].r, WIN_W - 66, 32, WIN_W - 32, 66);
+    SetRect(&L.btn[BTN_CANCEL].r, (WIN_W - BTN_W) / 2, 512, (WIN_W + BTN_W) / 2, 512 + BTN_H);
     L.btn[BTN_CANCEL].visible = L.extracting;
     L.btn[BTN_CLOSE].visible = 1;
-    /* A button starts a target installed here whose executable exists. */
-    L.btn[BTN_DEMO].enabled = has && L.info.kind == GAME_DEMO
+    /* A button starts its game from its own folder, in this executable or
+     * the other target's beside it. */
+    L.btn[BTN_DEMO].enabled = L.inst[GAME_DEMO].dir[0]
         && (L.this_kind == GAME_DEMO || L.sibling_exists);
-    L.btn[BTN_GAME].enabled = has && L.info.kind == GAME_RETAIL
+    L.btn[BTN_GAME].enabled = L.inst[GAME_RETAIL].dir[0]
         && (L.this_kind == GAME_RETAIL || L.sibling_exists);
     L.btn[BTN_ISO].enabled = L.btn[BTN_GITHUB].enabled = 1;
     L.btn[BTN_CLOSE].enabled = L.btn[BTN_CANCEL].enabled = 1;
-    if (!L.btn[L.focus].enabled || !L.btn[L.focus].visible)
-        L.focus = L.btn[BTN_DEMO].enabled ? BTN_DEMO : L.btn[BTN_GAME].enabled ? BTN_GAME : BTN_ISO;
+    if (!L.btn[L.focus].enabled || !L.btn[L.focus].visible) {
+        int mine = L.this_kind == GAME_DEMO ? BTN_DEMO : BTN_GAME;
+        L.focus = L.btn[mine].enabled ? mine : L.btn[BTN_DEMO].enabled ? BTN_DEMO
+                : L.btn[BTN_GAME].enabled ? BTN_GAME : BTN_ISO;
+    }
+}
+
+static void refresh(void)
+{
+    scan_installs();
+    layout();
 }
 
 static void render(void)
 {
-    wchar_t text[400], dir_w[MAX_PATH];
+    static const int title_top[3] = {255, 255, 255}, title_bottom[3] = {150, 200, 255};
+    wchar_t text[400];
     int i;
     GdiFlush();
     memcpy(L.px, L.bg, (size_t)WIN_W * WIN_H * 4);
     draw_sand();
-    draw_title(252);
-    divider(WIN_W / 2, 378, 250);
-    for (i = 0; i < BTN_COUNT; ++i) {
-        if (i == BTN_DEMO || i == BTN_GAME || i == BTN_CANCEL) draw_button(i, NULL);
-    }
+    draw_glow_text(&L.title, 0, TITLE_Y, 1.9f + 0.25f * sinf(L.time * 1.6f), title_top, title_bottom, 1);
+    divider(WIN_W / 2, 344, 240);
     if (L.extracting) {
         LONG64 done = L.done_bytes, total = L.total_bytes;
         float f = total > 0 ? (float)((double)done / (double)total) : 0.0f;
-        int bx = 200, by = 452, bw = WIN_W - 400, bh = 20, fillw;
+        int bx = 200, by = 432, bw = WIN_W - 400, bh = 18, fillw;
         if (f > 1.0f) f = 1.0f;
         fillw = (int)(bw * f);
-        fill(bx, by, bw, bh, 14, 10, 6, 0.85f);
+        fill(bx, by, bw, bh, 4, 10, 24, 0.9f);
         for (i = 0; i < bh; ++i) {
             float t = (float)i / bh;
-            fill(bx, by + i, fillw, 1, (int)(250 - 70 * t), (int)(196 - 90 * t), (int)(104 - 70 * t), 1.0f);
+            fill(bx, by + i, fillw, 1, (int)(255 - 40 * t), (int)(214 - 80 * t), (int)(130 - 90 * t), 1.0f);
         }
         for (i = 0; fillw > 8 && i < 18; ++i)   /* sand running in the bar */
-            glow(L.px, bx + fmodf(L.time * 90.0f + i * 53.0f, (float)(fillw > 4 ? fillw : 4)),
-                 by + 4.0f + (i * 7) % (bh - 8), 1.2f, 255, 230, 160, 0.7f);
-        frame(bx - 3, by - 3, bw + 6, bh + 6, 1, 214, 170, 90, 1.0f);
-        diamond(bx - 3, by + bh / 2, 5, 236, 196, 110, 1.0f);
-        diamond(bx + bw + 2, by + bh / 2, 5, 236, 196, 110, 1.0f);
+            glow(bx + fmodf(L.time * 90.0f + i * 53.0f, (float)fillw),
+                 by + 4.0f + (i * 7) % (bh - 8), 1.2f, 255, 240, 190, 0.7f);
+        glow_hline(bx - 3, by - 3, bw + 6, 80, 160, 255, 1.0f);
+        glow_hline(bx - 3, by + bh + 2, bw + 6, 80, 160, 255, 1.0f);
+        jewel(bx - 3, by + bh / 2, 5);
+        jewel(bx + bw + 2, by + bh / 2, 5);
+        draw_button(BTN_CANCEL);
+    } else {
+        draw_button(BTN_DEMO);
+        draw_button(BTN_GAME);
+        if (L.hover == BTN_GITHUB || L.focus == BTN_GITHUB)
+            glow_hline(L.btn[BTN_GITHUB].r.left + 20, L.btn[BTN_GITHUB].r.bottom - 3, 200, 120, 190, 255, 0.8f);
+        if (L.hover == BTN_ISO || L.focus == BTN_ISO)
+            glow_hline(L.btn[BTN_ISO].r.left + 60, L.btn[BTN_ISO].r.bottom - 3, 150, 120, 190, 255, 0.8f);
     }
-    if (L.hover == BTN_GITHUB || L.focus == BTN_GITHUB)
-        fill(L.btn[BTN_GITHUB].r.left + 20, L.btn[BTN_GITHUB].r.bottom - 3, 250, 1, 240, 204, 128, 0.8f);
-    if (L.hover == BTN_ISO || L.focus == BTN_ISO)
-        fill(L.btn[BTN_ISO].r.left, L.btn[BTN_ISO].r.bottom - 3, 210, 1, 240, 204, 128, 0.8f);
 
     SetBkMode(L.dc, TRANSPARENT);
-    text_at(L.f_sub, RGB(226, 190, 128), L"The Sands of Time  \x2022  Xbox, recompiled for Windows",
-            0, 336, WIN_W, 32, DT_CENTER | DT_SINGLELINE);
+    text_at(L.f_sub, RGB(176, 206, 245), L"The Sands of Time  \x2022  Xbox, recompiled for Windows",
+            0, 302, WIN_W, 30, DT_CENTER | DT_SINGLELINE);
     if (L.extracting) {
         LONG64 done = L.done_bytes, total = L.total_bytes;
-        swprintf(text, 400, L"Extracting the disc image  \x2022  %ls", wcsrchr(L.iso_w, L'\\') ? wcsrchr(L.iso_w, L'\\') + 1 : L.iso_w);
-        text_at(L.f_text, RGB(244, 226, 190), text, 60, 398, WIN_W - 120, 30, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        const wchar_t *name = wcsrchr(L.iso_w, L'\\');
+        swprintf(text, 400, L"Installing  \x2022  %ls", name ? name + 1 : L.iso_w);
+        text_at(L.f_text, RGB(225, 238, 255), text, 60, 384, WIN_W - 120, 30, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         if (total > 0)
             swprintf(text, 400, L"%.0f%%  \x2022  %.1f of %.1f MB", 100.0 * (double)done / (double)total,
                      done / 1048576.0, total / 1048576.0);
         else
             wcscpy_s(text, 400, L"Reading the disc's file table\x2026");
-        text_at(L.f_small, RGB(214, 186, 140), text, 0, 480, WIN_W, 20, DT_CENTER | DT_SINGLELINE);
+        text_at(L.f_small, RGB(180, 205, 240), text, 0, 458, WIN_W, 20, DT_CENTER | DT_SINGLELINE);
         EnterCriticalSection(&L.lock);
-        text_at(L.f_small, RGB(150, 132, 108), L.status, 120, 500, WIN_W - 240, 18, DT_CENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
+        text_at(L.f_small, RGB(110, 140, 184), L.status, 120, 478, WIN_W - 240, 18, DT_CENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
         LeaveCriticalSection(&L.lock);
-        button_text(BTN_CANCEL, L"Cancel", L.f_text);
-    } else {
-        COLORREF dot = L.info.kind != GAME_NONE && L.info.exact ? RGB(150, 210, 120)
-                     : L.info.present ? RGB(236, 170, 70) : RGB(150, 130, 110);
-        text_at(L.f_label, RGB(196, 156, 86), L"INSTALLED IN THIS FOLDER", 0, 392, WIN_W, 18, DT_CENTER | DT_SINGLELINE);
-        text_at(L.f_text, RGB(244, 226, 190), L.info.line, 60, 412, WIN_W - 120, 30, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        to_wide(L.game_dir, dir_w, MAX_PATH);
-        text_at(L.f_small, RGB(150, 132, 108), dir_w, 160, 442, WIN_W - 320, 18, DT_CENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
         {
-            /* the status mark before the line */
-            SIZE size;
-            int width;
-            SelectObject(L.dc, L.f_text);
-            GetTextExtentPoint32W(L.dc, L.info.line, (int)wcslen(L.info.line), &size);
-            width = size.cx < WIN_W - 120 ? size.cx : WIN_W - 120;
-            text_at(L.f_small, dot, L"\x25C6", (WIN_W - width) / 2 - 24, 418, 16, 20, DT_SINGLELINE);
+            RECT r = L.btn[BTN_CANCEL].r;
+            text_at(L.f_text, L.hover == BTN_CANCEL ? RGB(255, 255, 255) : RGB(200, 225, 255), L"Cancel",
+                    r.left, r.top, r.right - r.left, r.bottom - r.top, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
-        button_text(BTN_DEMO, L"Start Demo", L.f_button);
-        button_text(BTN_GAME, L"Start Game", L.f_button);
+    } else {
+        text_at(L.f_label, RGB(110, 165, 240), L"INSTALLED GAMES", 0, 356, WIN_W, 18, DT_CENTER | DT_SINGLELINE);
+        install_text(GAME_DEMO, &L.btn[BTN_DEMO].r);
+        install_text(GAME_RETAIL, &L.btn[BTN_GAME].r);
         text[0] = 0;
         if (L.error[0]) wcscpy_s(text, 400, L.error);
-        else if (L.info.note[0]) wcscpy_s(text, 400, L.info.note);
-        else if (L.info.kind != GAME_NONE && L.info.kind != L.this_kind && !L.sibling_exists)
-            swprintf(text, 400, L"%ls is not beside this program: copy it here to start this game.",
-                     kind_exe(L.info.kind));
+        else if (!L.inst[GAME_DEMO].dir[0] && !L.inst[GAME_RETAIL].dir[0])
+            wcscpy_s(text, 400, L.note[0] ? L.note : L"No game files found: install from your Xbox disc image (ISO).");
+        else {
+            int k;
+            for (k = GAME_DEMO; k < GAME_KINDS && !text[0]; ++k)
+                if (L.inst[k].dir[0] && k != L.this_kind && !L.sibling_exists)
+                    swprintf(text, 400, L"%ls is not beside this program: copy it here to start that game.", kind_exe(k));
+            for (k = GAME_DEMO; k < GAME_KINDS && !text[0]; ++k)
+                if (L.inst[k].info.note[0]) wcscpy_s(text, 400, L.inst[k].info.note);
+        }
         if (text[0])
-            text_at(L.f_small, L.error[0] ? RGB(240, 120, 90) : RGB(236, 176, 96), text, 60, 546, WIN_W - 120, 20,
+            text_at(L.f_small, L.error[0] ? RGB(255, 130, 110) : RGB(255, 200, 120), text, 60, 528, WIN_W - 120, 20,
                     DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        text_at(L.f_small, L.hover == BTN_GITHUB ? RGB(255, 232, 170) : RGB(214, 178, 112), L"\x2605  " GITHUB_TEXT,
+        text_at(L.f_small, L.hover == BTN_GITHUB ? RGB(235, 245, 255) : RGB(140, 185, 245), L"\x2605  " GITHUB_TEXT,
                 L.btn[BTN_GITHUB].r.left, L.btn[BTN_GITHUB].r.top, 290, 28, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        text_at(L.f_small, L.hover == BTN_ISO ? RGB(255, 232, 170) : RGB(214, 178, 112), L"Install from ISO\x2026  \x25B8",
+        text_at(L.f_small, L.hover == BTN_ISO ? RGB(235, 245, 255) : RGB(140, 185, 245), L"Install from ISO\x2026  \x25B8",
                 L.btn[BTN_ISO].r.left, L.btn[BTN_ISO].r.top, 210, 28, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
-    text_at(L.f_text, L.hover == BTN_CLOSE ? RGB(255, 232, 170) : RGB(196, 156, 86), L"\x2715",
+    text_at(L.f_text, L.hover == BTN_CLOSE ? RGB(235, 245, 255) : RGB(110, 165, 240), L"\x2715",
             L.btn[BTN_CLOSE].r.left, L.btn[BTN_CLOSE].r.top, 34, 34, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    text_at(L.f_label, RGB(120, 96, 64), L"reSOT", 34, 30, 120, 18, DT_LEFT | DT_SINGLELINE);
     if (L.logo_dc) {
         BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-        AlphaBlend(L.dc, (WIN_W - L.logo_w) / 2, 46, L.logo_w, L.logo_h, L.logo_dc, 0, 0, L.logo_w, L.logo_h, bf);
+        AlphaBlend(L.dc, (WIN_W - L.logo_w) / 2, LOGO_Y, L.logo_w, L.logo_h, L.logo_dc, 0, 0, L.logo_w, L.logo_h, bf);
     }
 }
 
@@ -774,18 +877,21 @@ static void load_fonts(void)
     DWORD size, count = 0;
     const void *ttf = resource(RES_FONT, &size);
     const wchar_t *display, *serif = L"Palatino Linotype";
-    HFONT mask_font;
+    HFONT title, button;
     if (ttf) L.font_mem = AddFontMemResourceEx((void *)ttf, size, NULL, &count);
     L.atlantis = L.font_mem && count;
     display = L.atlantis ? L"Atlantis MF" : serif;
-    L.f_button = make_font(display, L.atlantis ? 32 : 28, L.atlantis ? FW_NORMAL : FW_SEMIBOLD, 0, CLEARTYPE_QUALITY);
     L.f_sub = make_font(serif, 21, FW_NORMAL, 1, CLEARTYPE_QUALITY);
-    L.f_text = make_font(serif, 22, FW_NORMAL, 0, CLEARTYPE_QUALITY);
-    L.f_small = make_font(L"Segoe UI", 15, FW_NORMAL, 0, CLEARTYPE_QUALITY);
+    L.f_text = make_font(serif, 20, FW_NORMAL, 0, CLEARTYPE_QUALITY);
+    L.f_small = make_font(L"Segoe UI", 14, FW_NORMAL, 0, CLEARTYPE_QUALITY);
     L.f_label = make_font(L"Segoe UI", 13, FW_SEMIBOLD, 0, CLEARTYPE_QUALITY);
-    mask_font = make_font(display, L.atlantis ? 70 : 58, L.atlantis ? FW_NORMAL : FW_BOLD, 0, ANTIALIASED_QUALITY);
-    L.title_mask = text_mask(mask_font, L"Prince of Persia", WIN_W, TITLE_H);
-    DeleteObject(mask_font);
+    title = make_font(display, L.atlantis ? 72 : 60, L.atlantis ? FW_NORMAL : FW_BOLD, 0, ANTIALIASED_QUALITY);
+    button = make_font(display, L.atlantis ? 32 : 28, L.atlantis ? FW_NORMAL : FW_SEMIBOLD, 0, ANTIALIASED_QUALITY);
+    L.title = glow_text(title, L"Prince of Persia", WIN_W, TITLE_H, 7);
+    L.label_demo = glow_text(button, L"Start Demo", BTN_W, BTN_H, 4);
+    L.label_game = glow_text(button, L"Start Game", BTN_W, BTN_H, 4);
+    DeleteObject(title);
+    DeleteObject(button);
 }
 
 /* ── extraction ────────────────────────────────────────────── */
@@ -972,12 +1078,15 @@ static int pick_iso(wchar_t *out)
     return ok;
 }
 
-static void set_game_dir(const char *dir)
+/* A folder that now holds a game: remembered under its kind, then a rescan. */
+static int adopt(const char *dir)
 {
-    strncpy_s(L.game_dir, sizeof L.game_dir, dir, _TRUNCATE);
-    detect_game(L.game_dir, &L.info);
+    GameInfo g;
+    detect_game(dir, &g);
+    remember_dir(g.kind, dir);
     L.error[0] = 0;
-    layout();
+    refresh();
+    return g.kind;
 }
 
 static void begin_install(void)
@@ -1013,8 +1122,7 @@ static void begin_install(void)
                  L"Use them as they are? Choose No to extract the ISO again over them.", out);
         switch (MessageBoxW(L.hwnd, message, L"reSOT", MB_YESNOCANCEL | MB_ICONQUESTION)) {
         case IDYES:
-            set_game_dir(L.out_a);
-            remember_dir(L.game_dir);
+            adopt(L.out_a);
             return;
         case IDCANCEL:
             return;
@@ -1037,7 +1145,7 @@ static void begin_install(void)
 static void cancel_install(void)
 {
     if (!L.extracting) return;
-    if (MessageBoxW(L.hwnd, L"Stop extracting? The files written so far stay in the folder.",
+    if (MessageBoxW(L.hwnd, L"Stop installing? The files written so far stay in the folder.",
                     L"reSOT", MB_YESNO | MB_ICONQUESTION) != IDYES)
         return;
     InterlockedExchange(&L.cancel, 1);
@@ -1052,21 +1160,21 @@ static void install_finished(WPARAM result)
     if (L.worker) { WaitForSingleObject(L.worker, INFINITE); CloseHandle(L.worker); L.worker = NULL; }
     L.extracting = 0;
     if (result == 2) {
-        set_game_dir(L.game_dir);
-        wcscpy_s(L.error, 400, L"Extraction cancelled.");
+        refresh();
+        wcscpy_s(L.error, 400, L"Installation cancelled.");
         return;
     }
     if (result == 1 && game_files_present(L.out_a)) {
-        set_game_dir(L.out_a);
-        remember_dir(L.game_dir);
+        if (adopt(L.out_a) == GAME_NONE)
+            wcscpy_s(L.error, 400, L"The ISO was extracted, but it is not a supported Prince of Persia disc.");
         return;
     }
     to_wide(s_last_error, error, 400);
-    set_game_dir(L.game_dir);
+    refresh();
     if (result == 1)
         wcscpy_s(L.error, 400, L"The ISO was extracted, but it holds no Prince of Persia game files.");
     else
-        swprintf(L.error, 400, L"Extraction failed: %ls", error[0] ? error : L"extract-xiso stopped with an error");
+        swprintf(L.error, 400, L"Installation failed: %ls", error[0] ? error : L"extract-xiso stopped with an error");
 }
 
 /* ── starting a game ───────────────────────────────────────── */
@@ -1076,21 +1184,24 @@ static void start(int kind)
     STARTUPINFOW si = {sizeof si};
     PROCESS_INFORMATION pi;
     wchar_t command[MAX_PATH + 4];
+    const char *dir = L.inst[kind].dir;
+    if (!dir[0]) return;
+    remember_dir(kind, dir);
     if (kind == L.this_kind) {
+        strncpy_s(L.chosen, sizeof L.chosen, dir, _TRUNCATE);
         L.result = RESOT_LAUNCH_HERE;
-        remember_dir(L.game_dir);
         DestroyWindow(L.hwnd);
         return;
     }
     /* The other target: its executable reads the folder from RESOT_ASSET_DIR
      * and skips this screen. Nothing of this process's runtime is set yet. */
-    _putenv_s("RESOT_ASSET_DIR", L.game_dir);
+    _putenv_s("RESOT_ASSET_DIR", dir);
     _putenv_s("RESOT_SKIP_LAUNCHER", "1");
     swprintf(command, MAX_PATH + 4, L"\"%ls\"", L.sibling);
     if (CreateProcessW(L.sibling, command, NULL, NULL, FALSE, 0, NULL, L.exe_dir, &si, &pi)) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
-        remember_dir(L.game_dir);
+        strncpy_s(L.chosen, sizeof L.chosen, dir, _TRUNCATE);
         L.result = RESOT_LAUNCH_HANDED_OFF;
         DestroyWindow(L.hwnd);
         return;
@@ -1148,16 +1259,14 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wp, LPARAM l
     case WM_SETCURSOR:
         if (LOWORD(lp) == HTCLIENT) { SetCursor(LoadCursor(NULL, IDC_HAND)); return TRUE; }
         break;
-    case WM_MOUSEMOVE: {
-        int now = hit(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+    case WM_MOUSEMOVE:
         if (!L.tracking) {
             TRACKMOUSEEVENT t = {sizeof t, TME_LEAVE, hwnd, 0};
             TrackMouseEvent(&t);
             L.tracking = 1;
         }
-        L.hover = now;
+        L.hover = hit(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
         return 0;
-    }
     case WM_MOUSELEAVE:
         L.tracking = 0;
         L.hover = -1;
@@ -1261,6 +1370,8 @@ static int create_window(void)
     return 1;
 }
 
+static void free_glow(GlowText *t) { free(t->mask); free(t->glow); memset(t, 0, sizeof *t); }
+
 static void destroy_window(void)
 {
     if (L.hwnd && IsWindow(L.hwnd)) DestroyWindow(L.hwnd);
@@ -1269,12 +1380,13 @@ static void destroy_window(void)
     if (L.logo_dc) DeleteDC(L.logo_dc);
     if (L.bmp) DeleteObject(L.bmp);
     if (L.dc) DeleteDC(L.dc);
-    if (L.f_title) DeleteObject(L.f_title);
-    DeleteObject(L.f_button); DeleteObject(L.f_sub); DeleteObject(L.f_text);
-    DeleteObject(L.f_small); DeleteObject(L.f_label);
+    if (L.f_sub) DeleteObject(L.f_sub);
+    if (L.f_text) DeleteObject(L.f_text);
+    if (L.f_small) DeleteObject(L.f_small);
+    if (L.f_label) DeleteObject(L.f_label);
     if (L.font_mem) RemoveFontMemResourceEx(L.font_mem);
+    free_glow(&L.title); free_glow(&L.label_demo); free_glow(&L.label_game);
     free(L.bg);
-    free(L.title_mask);
 }
 
 int resot_launcher_run(const char *target_id, char *game_dir, size_t game_dir_size, int flags)
@@ -1282,7 +1394,6 @@ int resot_launcher_run(const char *target_id, char *game_dir, size_t game_dir_si
     HRESULT com;
     MSG message;
     wchar_t *slash;
-    char remembered[MAX_PATH];
     int result;
 
     memset(&L, 0, sizeof L);
@@ -1290,6 +1401,7 @@ int resot_launcher_run(const char *target_id, char *game_dir, size_t game_dir_si
     L.this_kind = strcmp(target_id, "xbox-retail") ? GAME_DEMO : GAME_RETAIL;
     L.flags = flags;
     L.hover = L.pressed = -1;
+    L.focus = L.this_kind == GAME_DEMO ? BTN_DEMO : BTN_GAME;   /* Enter starts this executable's game */
     L.result = RESOT_LAUNCH_QUIT;
     if (!GetModuleFileNameW(NULL, L.exe_path, MAX_PATH) || !(slash = wcsrchr(L.exe_path, L'\\')))
         return RESOT_LAUNCH_HERE;   /* nothing to show this from: keep the old path */
@@ -1313,15 +1425,10 @@ int resot_launcher_run(const char *target_id, char *game_dir, size_t game_dir_si
         L.sibling_exists = GetFileAttributesW(L.sibling) != INVALID_FILE_ATTRIBUTES;
     }
 
-    strncpy_s(L.game_dir, sizeof L.game_dir, game_dir, _TRUNCATE);
-    if (!L.game_dir[0]) to_ansi(L.exe_dir, L.game_dir, sizeof L.game_dir);
-    if (!game_files_present(L.game_dir) && remembered_dir(remembered, sizeof remembered))
-        strncpy_s(L.game_dir, sizeof L.game_dir, remembered, _TRUNCATE);
+    strncpy_s(L.start_dir, sizeof L.start_dir, game_dir, _TRUNCATE);
     if ((flags & RESOT_LAUNCHER_NO_SCREEN) && !(flags & RESOT_LAUNCHER_ASK_ISO)
-        && game_files_present(L.game_dir)) {
-        strncpy_s(game_dir, game_dir_size, L.game_dir, _TRUNCATE);
+        && game_files_present(L.start_dir))
         return RESOT_LAUNCH_HERE;
-    }
 
     com = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     InitializeCriticalSection(&L.lock);
@@ -1330,13 +1437,12 @@ int resot_launcher_run(const char *target_id, char *game_dir, size_t game_dir_si
         destroy_window();
         DeleteCriticalSection(&L.lock);
         if (SUCCEEDED(com)) CoUninitialize();
-        strncpy_s(game_dir, game_dir_size, L.game_dir, _TRUNCATE);
         return RESOT_LAUNCH_HERE;
     }
-    set_game_dir(L.game_dir);
+    refresh();
     ShowWindow(L.hwnd, SW_SHOW);
     SetForegroundWindow(L.hwnd);
-    if (!L.info.present || (flags & RESOT_LAUNCHER_ASK_ISO))
+    if ((!L.inst[GAME_DEMO].dir[0] && !L.inst[GAME_RETAIL].dir[0]) || (flags & RESOT_LAUNCHER_ASK_ISO))
         PostMessageW(L.hwnd, WM_APP_ASK_ISO, 0, 0);
     L.running = 1;
     while (L.running && GetMessageW(&message, NULL, 0, 0) > 0) {
@@ -1349,13 +1455,13 @@ int resot_launcher_run(const char *target_id, char *game_dir, size_t game_dir_si
     }
     result = L.result;
     if (result == RESOT_LAUNCH_HERE)
-        strncpy_s(game_dir, game_dir_size, L.game_dir, _TRUNCATE);
+        strncpy_s(game_dir, game_dir_size, L.chosen, _TRUNCATE);
     L.hwnd = NULL;
     destroy_window();
     DeleteCriticalSection(&L.lock);
     if (SUCCEEDED(com)) CoUninitialize();
     fprintf(stderr, "[LAUNCHER] %s, game folder %s\n",
             result == RESOT_LAUNCH_HERE ? "start" : result == RESOT_LAUNCH_HANDED_OFF ? "handed off" : "quit",
-            L.game_dir);
+            result == RESOT_LAUNCH_QUIT ? "-" : L.chosen);
     return result;
 }

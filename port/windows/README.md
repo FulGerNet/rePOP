@@ -14,24 +14,28 @@ to build, not to play. Its embedded copy is also verified before starting.
 Demo and retail need separate folders.
 
 The executable opens on the reSOT screen: the logo, a link to the GitHub
-repository, what is installed in the game folder (the demo or the retail
-game, identified from `default.xbe`'s SHA-256 or, without it, from the files
-only one of them has) and two buttons, Start Demo and Start Game. A button
-is enabled when that game is installed there and its executable is
-available: this one, or the other target's beside it
-(`sot-xbox-demo.exe` <-> `sot-xbox-retail.exe`), which is then started on the
-same folder. Enter starts, the arrow keys move between buttons, Esc closes.
+repository, the installed games and two buttons, Start Demo and Start Game.
+It looks for games beside the executable, in the folders remembered in
+`resot-options.ini` (`[Launcher] DemoDir`, `RetailDir`, relative to the
+executable when inside its folder) and in every folder beside the
+executable, and tells the demo from the retail game by `default.xbe`'s
+SHA-256 or, without it, by the files only one of them has. Each button is
+enabled when its game is installed somewhere and its executable is available
+(this one, or the other target's beside it, `sot-xbox-demo.exe` <->
+`sot-xbox-retail.exe`, which is then started on that folder); under it are
+the build found and its folder. With the demo and the retail game both
+installed, both buttons work from either executable. Enter starts the
+focused button (at first, this executable's game), the arrow keys move
+between buttons, Esc closes.
 
-Without game files beside the executable (or in the folder remembered from an
-earlier installation), a file dialog asks for the game's Xbox ISO. The
-launcher runs extract-xiso (`port/third_party/extract-xiso`, built into the
+Without any game, a file dialog asks for the game's Xbox ISO. The launcher
+runs extract-xiso (`port/third_party/extract-xiso`, built into the
 executable and run in a child copy of it) to extract it into a folder named
 after the ISO beside the executable, without the disc's `$SystemUpdate`;
-the screen shows its progress and can cancel it. That folder becomes the game
-folder and is saved in `resot-options.ini` (`[Launcher] GameDir`, relative to
-the executable when inside its folder). `Install from ISO...` on the screen
-installs another disc. `run.ps1` (`RESOT_LAUNCHER_CONFIGURED`) and
-`RESOT_ASSET_DIR` with `RESOT_SKIP_LAUNCHER=1` go straight to the game.
+the screen shows its progress and can cancel it. `Install from ISO...`
+installs another disc, for example the other game. `run.ps1`
+(`RESOT_LAUNCHER_CONFIGURED`) and `RESOT_ASSET_DIR` with
+`RESOT_SKIP_LAUNCHER=1` go straight to the game.
 
 The app starts full screen with graphics, audio, keyboard and controller
 enabled. Space or controller A skips a Bink video, including videos whose
