@@ -7,6 +7,413 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-18: native D3D12/Vulkan retail bring-up and hardware visibility queries
+
+Both native renderer selections now initialize on retail, without D3D11On12,
+DXVK or a D3D11 device in the native path. The first retail level was reached
+and its GPU readback visually inspected with each API. These are experimental
+bring-up results, not a claim of complete gameplay correctness or parity with
+D3D11 performance. The prior entry's unconditional retail fallback is superseded.
+
+**Native query implementation.** Added published extension sources under
+`port/third_party/sdl-gpu-query/` and `tools/patch-sdl-gpu-query.py`. They compile
+inside pinned SDL 3.4.18 driver translation units and expose query ABI 1;
+private SDL structures do not cross the DLL boundary. D3D12 allocates native
+occlusion query heaps and resolves counters into readback resources. Vulkan
+uses precise occlusion query pools; its device feature is enabled when
+supported. Query objects are retained through SDL GPU submission fences.
+Unsupported capability, missing ABI or a mismatched ABI causes an explicit
+D3D11 fallback during retail initialization, before guest draws.
+
+Retail's `0x000CE32E`/`0x000CE366` visibility requests route through
+`nv2a_hw_native_visibility.inc`. Reset/resolve happen outside render passes,
+begin/end inside one pass. The controller normalizes host samples to guest
+pixels, keeps immutable FIFO report snapshots across CLEAR and repeated
+GET_REPORT, and polls without waits or forced submissions. Only report issuance
+submits pending query work; normal rendering submissions also assign fences.
+Clears and host overlays are excluded. Query allocation/device failures abort
+with a diagnostic rather than fabricating a completed report.
+Demo does not enable retail's query semantics.
+
+**Reproducible dependency build.** Ran `tools/setup-native-gpu.ps1` successfully
+using cached, hash-checked official archives. In addition to the SDK/DXC hashes
+already recorded below, SDL's official source ZIP is checked against SHA-256
+`9CD42377704398796071B8597CD7E21DA254A43BAD98C4199739647ADC13FA6F`.
+The installer extracts sources, applies the published additions and compiles an
+altered SDL3.dll. Its licence and `SDL3-RESOT.txt` accompany portable builds.
+`dumpbin /exports bin/SDL3.dll` showed both versioned query API getters;
+`dumpbin /dependents` listed only Windows system DLLs. No separate Visual C++
+runtime DLL or SDK is required by the player. A full portable asset-copy run
+was not performed; packaging's dependency list and PowerShell syntax were checked.
+
+**Builds/tests.** `python tools/check-hlsl.py` passed all seven checks.
+`tools/recomp.ps1 -Target xbox-retail -BuildOnly` and the demo equivalent built.
+No generated C, seed lists or XBE hash checks were changed.
+
+```powershell
+cmake -S port/third_party/xboxrecomp/tests/nv2a_native_gpu -B build/tests/native-gpu -A x64
+cmake --build build/tests/native-gpu --config Release
+ctest --test-dir build/tests/native-gpu -C Release --output-on-failure
+```
+
+All three tests passed. On both actual native GPUs, a 64x64 scissored draw
+returned 4096 samples, while the identical draw rejected by LESS depth testing
+returned zero. Report normalization produced 2048 and 1024 guest pixels;
+a cumulative mixed-scale report produced 5120. Tests also checked repeated
+snapshots, CLEAR before submission, reports staying pending before submission,
+a cleared counter without GET_REPORT retiring after its fence, an empty report,
+disabled counting and rejection of an incompatible ABI. Existing color/scissor
+readbacks and actual 128x128 -> 192x160 swapchain resize checks still pass.
+The third test exercises the metadata-read fix described below with readable,
+read-only, guard, uncommitted, crossing-region and overflow inputs, without
+consuming a guard page or raising an exception. These tests contain no game data.
+
+**Retail Vulkan run:**
+
+```powershell
+./tools/run.ps1 -Target xbox-retail -Seconds 150 -Windowed -DumpFrames -SnapshotEvery 5 -Set @{
+  RESOT_RENDERER='vulkan'; RESOT_GPU_DEBUG='1'
+  RECOMP_PAD_SCRIPT='15000:start:400,25000:start:400,35000:a:400,45000:start:400,60000:a:400,75000:a:400,90000:start:400,100000:a:400,110000:a:400'
+  RECOMP_PAD_LIVE='logs/native-retail-live.txt'
+}
+```
+
+A live `lup:6000` input was appended during the run. The process was stopped
+at the requested 150 seconds; no crash or SDL GPU error was logged. Native
+Vulkan/query ABI initialization was logged. Readbacks showed the Prince in
+the first courtyard with the movement tutorial and later on the ramparts with
+the sword tutorial (`logs/native-retail-vulkan-150s.txt` / `.bmp`). The final
+five-second sample logged 1,620,901 native draws cumulatively and 15.9 FPS;
+other in-level samples were roughly 18–40 FPS. These are diagnostic samples,
+not controlled benchmarks. Vertex programs still run on the CPU.
+
+**Retail D3D12 and menu crash.** A first 30-second native D3D12 run rendered the
+menu/garden. A longer attempt reached first-level platforms, but exited around
+the 90-second Start input with an access violation reading guest `0xA7F52955`.
+The stack passed through retail `0x00417F85` (the hand-written XInput state
+hook). Its optional native-label refresh was walking stale main-menu choice
+handles through `TEXT_MANAGER=0x007584F0`, object table +0x44 and text pointer
++0x9C. The failure was in this host-added label refresh, not a reported GPU
+validation error. No lifted code or function boundaries were edited.
+
+`source/xbox-retail/target_hooks.c` now probes each optional metadata word
+before dereferencing it, performs address arithmetic without 32-bit wrapping,
+rejects stale vector bounds and still requires the existing text-action vtable
+and reSOT text-group reference before refreshing a label. The shared probe is
+`port/game/guest_probe.h`; it checks committed readable host regions and
+rejects guards without triggering the crash handler. It does not swallow
+exceptions from lifted game execution.
+
+Repeated the same pad timeline through 110 seconds, using native D3D12,
+`RESOT_GPU_DEBUG=1`, `-Seconds 115 -SnapshotEvery 5` (no live movement file).
+The process survived to the requested 115-second limit. Its log explicitly
+skipped unreadable `0xA7F52955` and three other stale words, with no crash or
+SDL GPU error. The final GPU readback showed the Prince in the first courtyard
+with the movement tutorial (`logs/native-retail-d3d12-fixed115s.txt` / `.bmp`).
+The final sampled cumulative draw count was 1,123,840; in-level five-second
+samples included 21–43 FPS. The final header extraction of the same probe and
+latest UI strings were rebuilt successfully.
+
+**Important scope of visibility validation:** both real game runs logged zero
+visibility queries/reports in these particular scenes. Hardware query counts,
+snapshot lifetime and normalization are proven by the GPU tests above; the
+retail game's own nonzero GET_REPORT traffic was not observed in these runs.
+Do not describe this as game-level validation of every visibility-test user.
+
+**Fallback/regressions.** A copied retail executable with the unmodified SDK
+SDL3.dll logged the missing retail query extension, then initialized native
+D3D11 and rendered a surface in a 12-second run
+(`logs/native-retail-old-sdl-err.txt`). The versioned getters also reject an
+unsupported ABI in both synthetic tests. Existing saves were copied to ignored
+`build/retail-native-UDATA-backup/` before the long runs; comparison found no
+changes to pre-existing save files at that point.
+
+The final retail D3D11 build and demo native D3D12/Vulkan builds each ran
+for 12 seconds after the extension changes, reported the requested active API,
+and were stopped at the requested limit without a crash or SDL GPU error
+(`logs/native-retail-d3d11-regression.txt` and
+`logs/native-retail-demo-*-regression.txt`). A final comparison after all runs
+found no changes to pre-existing files in the backed-up retail UDATA tree.
+
+**Remaining limits:** native GPU vertex-program translation and performance
+parity, border-address sampling, full stencil, full-level progression, long
+sessions, save/load on native renderers, manual F7 renderer switching/restart,
+full native-menu lifecycle validation, and comparison to a console. D3D11
+remains the default. The native retail options are enabled and usable for
+further testing, with the preceding limits explicit.
+
+## 2026-10-18: native D3D12/Vulkan demo encoder; retail migration incomplete
+
+**Scope:** replaced D3D11On12 and DXVK in the active renderer with
+`nv2a_hw_native.inc`, an explicit SDL GPU encoder selecting `direct3d12` or
+`vulkan`. It uses native resources, pipelines, GPU draws, uploads, submission
+and fenced readback with embedded DXIL/SPIR-V combiner shaders. It does not
+create a D3D11 device on either native path. NV2A vertex programs still use
+the existing CPU interpreter; GPU vertex-program translation is unfinished.
+No guest addresses, seeds, generated C or XBE checks were changed.
+
+**Retail is not migrated:** native initialization explicitly logs a D3D11
+fallback, because retail XBE `0x000CE32E`/`0x000CE366` needs real occlusion
+reports and SDL GPU 3.4 exposes no query API. F7 names the native choices,
+shows the actual active API separately and reports the retail query limit.
+No fabricated visibility results are used. Both targets still default to D3D11.
+The old interop sources/tests were preserved locally under ignored
+`build/native-migration-backup/` before retiring them from the active tree.
+Earlier entries below describe the superseded translation paths.
+
+**Build/dependencies:** `tools/setup-native-gpu.ps1` was run against the
+checked official SDL3 3.4.18 and DXC v1.9.2609 archives, using their SHA-256
+values recorded in that script. `tools/setup-vulkan.ps1` now forwards to it.
+`python tools/check-hlsl.py` passed all seven D3D11/shared-HLSL checks.
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly` and the corresponding retail
+command both built. The CMake step compiles six host shader entry points to
+both DXIL and SPIR-V and embeds them; player folders need only SDL3.dll,
+not DXC. Packaging copies SDL3.dll and its licence, never the old DXVK DLLs.
+A complete portable asset-copy/package run was not performed for this change.
+
+**Synthetic GPU tests:**
+
+```powershell
+cmake -S port/third_party/xboxrecomp/tests/nv2a_native_gpu -B build/tests/native-gpu -A x64
+cmake --build build/tests/native-gpu --config Release
+ctest --test-dir build/tests/native-gpu -C Release --output-on-failure
+```
+
+Both tests passed. Each selects its requested native driver, draws alternating
+red/green scissored triangles with the embedded NV2A host shader, fences and
+checks exact GPU readback pixels inside/outside the scissor. Each acquires
+real presentable images and verifies swapchain dimensions change from
+128x128 to 192x160. No D3D11 headers/libraries or game bytes are used by these
+tests. The first hidden-window Vulkan test did not acquire a swapchain image;
+the final test was corrected to show its window and require non-null images
+and exact dimensions, then both tests were rerun successfully.
+
+**Demo observations:** a 20-second D3D12 run and a 30-second Vulkan run,
+using `tools/run.ps1 -Target xbox-demo -Windowed -DumpFrames -Set
+@{RESOT_RENDERER='d3d12'}` / `'vulkan'` with scripted A/Start inputs, selected
+the requested native SDL GPU driver. GPU readbacks were visually inspected:
+D3D12 showed the demo menu, Vulkan the animated palace/garden sequence after
+Start. These captures are local ignored diagnostics, not new README media.
+This proves native draws/readback for those frames, not gameplay correctness.
+
+**Problems found and addressed:** DXC retains unused pixel-input semantics;
+`ps_solid` now declares no interpolants in the native shader build, allowing
+it to link to the fullscreen vertex shader. Initial per-draw transfers and
+copy/render passes ran at roughly 16–21 FPS in sampled menu/transition windows.
+Immutable draw snapshots now share uploads and compatible render passes.
+Longer D3D12 runs then exposed `CopyDescriptorsSimple` destination-heap error
+646. Inspection of SDL 3.4.18's official D3D12 source showed its table writer
+checks the current descriptor index but not index plus the table size against
+its 2048-sampler heap. Mixing one-slot host blits and eight-slot guest draws
+can cross the boundary. The frontend now limits each submission to 192 draws
+(at most 1536 sampler descriptors), and submits offscreen composition before
+acquiring the swapchain image. The upstream SDL DLL is unchanged.
+
+**Final bounded D3D12 run:**
+
+```powershell
+./tools/run.ps1 -Target xbox-demo -Seconds 55 -Windowed -DumpFrames -Set @{
+  RESOT_RENDERER='d3d12'; RESOT_GPU_DEBUG='1'
+  RECOMP_PAD_SCRIPT='2000:a:200,6000:a:200,12000:a:200,22000:start:600,28000:a:600,45000:start:600'
+}
+```
+
+Stopped at the requested 55 seconds, with no SDL/D3D12 validation error in
+`logs/native-d3d12-bounded.txt`; the earlier descriptor error was not repeated.
+The log reached the demo's `0101_Entree`/`0101_Porte` load and 595,229 total
+native draws. Five-second samples ranged from 25.4 to 63.0 FPS after the
+initial 34.0 sample. The dump was inspected but was an earlier palace/garden
+frame; the run did not continuously capture every later scene. This is not a
+claim that Entree gameplay renders correctly or that native performance is
+comparable to the existing D3D11/GPU-vertex path.
+
+**Final bounded Vulkan run:** the same scripted A/Start inputs (without the
+last 45-second Start), with `RESOT_RENDERER='vulkan'`, `RESOT_GPU_DEBUG='1'`
+and `-Seconds 45`, stopped at the requested limit. It selected `SDL GPU
+vulkan`, loaded `0101_Entree`/`0101_Porte` and recorded 350,887 native draws;
+no SDL GPU error was logged (`logs/native-vulkan-bounded.txt`). Five-second
+samples ranged from 10.2 FPS around a transition to 63.4 FPS. Its readback
+was inspected and likewise showed an earlier palace/garden frame, so later
+level appearance remains unverified. Native performance is not yet at parity
+with D3D11. `dumpbin /dependents bin/SDL3.dll` listed only Windows system
+DLLs, without a separately required Visual C++ runtime DLL.
+
+**Fallback regressions:** demo D3D11 ran for 10 seconds and reported
+`active renderer: Direct3D 11`. Retail native selections each ran for 12
+seconds and explicitly reported the missing native visibility queries,
+then `active renderer: Direct3D 11` (`logs/native-retail-*-fallback.txt`).
+A copied demo EXE under `build/native-no-sdl/`, without SDL3.dll, ran for
+10 seconds: its explicit missing-DLL log and D3D11 initialization confirmed
+delayed loading keeps the fallback usable.
+
+**Not validated/unfinished:** native retail visibility queries and retail
+native draws, native GPU vertex-program translation, border-address sampling
+(currently clamped), full stencil, complete level progression, long sessions,
+save/load on native renderers, F7 mouse selection/restart in a manual session,
+and comparison to console output. The native backends remain experimental;
+the user's full request to migrate both executables is not complete.
+
+## 2026-10-18: optional Vulkan execution through DXVK; D3D11 default retained
+
+Added `Vulkan` to the F7 renderer choices, applied after restart. The host
+loads unmodified DXVK 3.1.1 x64 `dxgi.dll` and `d3d11.dll` by absolute path
+from `renderers/vulkan/` beside the executable. It passes DXVK's own factory
+and adapter explicitly, verifies `IDXGIVkInteropDevice` and non-null Vulkan
+instance/physical-device/device handles, then uses the shared NV2A D3D11
+encoder. This is D3D11-to-Vulkan translation, **not native Vulkan encoding**.
+There are no guest-address or seed changes. Failure to create the backend
+logs a native D3D11 fallback. Successful DXVK modules remain loaded for the
+process lifetime, including their asynchronous workers.
+
+`d3d11` is still the default for missing/invalid preferences. The saved
+selection and active backend are separate; `RESOT_RENDERER=vulkan` overrides
+only this run and is not copied into the saved choice when another setting
+is saved. The local development INI was left at `Renderer=d3d11`.
+
+**Dependency:** ran `./tools/setup-vulkan.ps1`, downloading the official
+3.1.1 release archive and verifying SHA-256
+`40565b4a724aadc4433fa4e010b4b23916d9b1f1baeee64e17186db94f54e608`.
+Rerunning with the verified cache also passed. DLLs, licence and version
+metadata are under ignored `bin/renderers/vulkan/`; the installer and licence
+are published, not the DLLs. Network download required execution outside
+the sandbox. `tools/package.ps1` now copies this optional subdirectory and
+checks its completeness; a full portable packaging run was not repeated.
+DXVK writes additional logs beside the game and its own shader cache under
+`%LOCALAPPDATA%/dxvk` by default.
+
+**Build:** `python tools/check-hlsl.py` passed all seven entries;
+`./tools/recomp.ps1 -Target xbox-demo -BuildOnly` and the equivalent retail
+command passed. Final builds include the saved-vs-environment distinction.
+
+**GPU tests:** configured/built
+`port/third_party/xboxrecomp/tests/nv2a_vulkan` in `build/tests-nv2a-vulkan`,
+then ran `python tools/run-build-tool.py ctest --test-dir
+build/tests-nv2a-vulkan -C Release -V`: all three tests passed, none skipped.
+The DXVK test verifies real Vulkan handles, 12 presents, exact alternating
+BGRA color readbacks and resize to 192x96. A native D3D11 test uses the same
+installed-DXVK directory and rejects a DXVK interop interface on the native
+device. A separate executable without DXVK verifies failed-load cleanup,
+then native D3D11 rendering/readback/resize. These are synthetic host tests,
+not proof of complete game correctness.
+
+**Default regression on the final build:** removed the `RESOT_RENDERER`
+environment override and ran `./tools/run.ps1 -Target xbox-demo -Windowed
+-Seconds 15`, with `Renderer=d3d11` saved and DXVK still installed. The log
+reports `active renderer: Direct3D 11`, continued drawing until the harness
+stopped it, and no Present failure. The INI still reads `Renderer=d3d11`.
+Evidence: `logs/vulkan-native-default-demo.txt`. The existing D3D12 GPU
+smoke test was rerun and passed (`ctest --test-dir build/tests-nv2a-d3d12
+-C Release --output-on-failure`). Both PowerShell scripts parse successfully;
+`git diff --check` reports no whitespace errors.
+
+**Game, separately for each XBE:**
+`./tools/run.ps1 -Target xbox-demo -Windowed -Seconds 20 -DumpFrames -Set
+@{RESOT_RENDERER='vulkan'}` and the same command for `xbox-retail`.
+Both runs report verified Vulkan handles and `active renderer: Vulkan (DXVK)`.
+GPU surface readbacks were visually inspected: demo Start menu over the
+garden; retail Start New Game menu over the garden. Neither log reports a
+Present/backbuffer failure; the harness stopped both at 20 seconds.
+Initial samples were slow (including first-use compilation); later samples
+were about 56 FPS demo and 96 FPS retail. The scenes and compilation state
+differ, so these are observations, not an API performance comparison.
+DXVK logs identify NVIDIA GeForce RTX 3060, driver 595.97.0.
+Ignored evidence: `logs/vulkan-{demo,retail}-boot.{txt,bmp}` and
+`bin/sot-xbox-{demo,retail}_{d3d11,dxgi}.log`.
+
+**Not checked:** F7 mouse selection followed by an actual restart; extended
+gameplay, audio/visual parity, Vulkan fullscreen/live resolution changes in
+the game, unsupported GPU/driver recovery (only missing DLLs tested), or
+portable distribution on another machine. The Vulkan path remains optional.
+
+## 2026-10-18: optional D3D12 execution through D3D11On12
+
+Added a D3D12 device/direct queue and a two-buffer flip-discard swap chain
+to the NV2A pushbuffer renderer. Existing D3D11 draw/resource commands use
+Microsoft D3D11On12; this is **not a native D3D12 draw encoder**. Backbuffers
+are wrapped individually, acquired for composition, released to PRESENT
+and flushed before DXGI presentation. Resize drops wrapped references and
+waits for the queue fence. D3D12/D3D11On12 entry points load from system DLLs
+at run time; device initialization failure logs a fallback to D3D11.
+
+F7 Graphics saves `Graphics/Renderer=d3d11|d3d12` in `resot-options.ini`;
+restart applies it. The panel names the active backend independently of
+the saved choice. `RESOT_RENDERER` overrides the INI for a run. D3D11 remains
+the default; Vulkan remains unavailable. No guest addresses or seeds changed.
+
+**Build checks:** `python tools/check-hlsl.py` passed all seven entries;
+`./tools/recomp.ps1 -Target xbox-demo -BuildOnly` and the equivalent
+`-Target xbox-retail` passed. MSBuild required execution outside the sandbox
+after its FileTracker failed with access denied.
+
+**GPU check:** configured/built
+`port/third_party/xboxrecomp/tests/nv2a_d3d12` in `build/tests-nv2a-d3d12`,
+then ran `python tools/run-build-tool.py ctest --test-dir
+build/tests-nv2a-d3d12 -C Release -V`. Passed (not skipped): 12 presents,
+both flip buffers used, exact BGRA readback of alternating red/green/blue,
+and resize to 192x96 with subsequent readbacks. The first test exposed
+dependence on D3D11 already being loaded; explicitly loading the system
+D3D11 DLL corrected it and the test then passed.
+
+**Game checks, separately for each XBE:**
+`./tools/run.ps1 -Target xbox-demo -Windowed -Seconds 25 -DumpFrames -Set
+@{RESOT_RENDERER='d3d12'; RECOMP_PAD_SCRIPT='2000:a:200,6000:a:200,12000:a:200,18000:a:200'}`
+and the same command with `-Target xbox-retail`. Both logs report
+`active renderer: Direct3D 12 (D3D11On12)`, with no Present/backbuffer error
+reported. Demo readback shows the menu garden and Camera selected; retail
+readback shows the garden with letterbox bars. Both runs were stopped by
+the 25-second harness. After initial lower-rate samples they reported about
+60 FPS; the logs show the saved VSync preference off (a brief scripted
+retail menu toggle enabled and disabled it). These are menu observations,
+not comparative benchmarks.
+Logs/readbacks: ignored `logs/d3d12-{demo,retail}-boot.{txt,bmp}`.
+
+**D3D11 regression:** `./tools/run.ps1 -Target xbox-demo -Windowed -Seconds
+15 -Set @{RESOT_RENDERER='d3d11'}` on the final build reported the D3D11
+backend and continued rendering until the harness stopped it, with no
+Present error reported (`logs/d3d11-demo-regression.txt`). Retail D3D11
+regression was not rerun in this change.
+
+**Not checked:** F7 mouse selection and persistence through an actual restart,
+unsupported-GPU fallback, in-game fullscreen/resolution switching, sustained
+gameplay, visual parity with D3D11 or the console, or relative performance.
+Synthetic GPU resize success does not validate the game's entire resize/UI
+path. Native D3D12 command encoding remains future work.
+
+## 2026-10-18: replacement logo and Windows icons
+
+Replaced `docs/media/reSOT.png` with the user's Downloads `reSOT_logo.png`
+(byte-for-byte). The README and launcher resource 202 already reference this
+asset. Converted it to `port/windows/res/resot.ico`, preserving transparency
+and proportions with transparent square padding, at 16/24/32/48/64/128/256 px.
+The executable and launcher window both use icon resource 1.
+
+**Run:** `python tools/check-hlsl.py` (seven shader entries passed),
+`./tools/recomp.ps1 -Target xbox-demo -BuildOnly` and
+`./tools/recomp.ps1 -Target xbox-retail -BuildOnly` (both passed).
+**Checked:** loaded both built executables as resource data with Windows
+`LoadLibraryExW`; embedded PNG resource 202 matches the new PNG byte-for-byte,
+and all seven icon images in group 1 match the replacement ICO.
+**Not checked:** live launcher appearance or Windows Explorer icon caching.
+
+## 2026-10-18: F7 portable options panel restored, both targets built
+
+Recovered the host options overlay from the user's older project snapshot
+`rePOP-1a066d08c09940b45706fba0b8bf8655bb89612d`, integrating it with the
+current shared settings and native menu APIs in `port/windows/src/options.c`.
+F7 toggles options; F6 still routes to diagnostics. Options take display
+priority while open and suppress game input. Graphics and bindings share
+`resot-options.ini` with the native menu; F5/F6/F7 are reserved during binding
+capture. The scripted-input background-focus allowance is preserved.
+
+**Run:** `python tools/check-hlsl.py` (all seven shader entries passed),
+`./tools/recomp.ps1 -Target xbox-demo -BuildOnly` and
+`./tools/recomp.ps1 -Target xbox-retail -BuildOnly` (both completed and wrote
+the executables in `bin/`). The first sandboxed demo build failed with
+MSBuild FileTracker access denied; the build passed outside the sandbox.
+**Not checked:** opening, clicking, resizing or rebinding in a running game,
+the visual layout, or interaction with the diagnostics panel at runtime.
+Existing user verification of the native menu does not validate this overlay.
+
 ## 2026-10-18 (evening): xbox-demo, audio stutter in the bath fight
 
 The user reported stuttering audio and 120 -> 85-90 FPS in the bath area

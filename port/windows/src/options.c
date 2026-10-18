@@ -2,7 +2,7 @@
  * resot-options.ini and changed from the game's own menu (the reSOT Options
  * pages in source/<target>/target_hooks.c). The runtime supplies window
  * events and controller state before its keyboard merge; the F6 overlay is
- * the diagnostics panel in diag.c. */
+ * the diagnostics panel in diag.c. F7 opens the portable options panel. */
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -10,7 +10,8 @@
 #include <string.h>
 #include "options.h"
 
-enum { APPLY_SIZE = WM_APP + 44 };
+enum { PW = 520, PH = 612, BODY_TOP = 64, BODY_BOTTOM = 566,
+       ROW_H = 29, APPLY_SIZE = WM_APP + 44 };
 enum { MOVE_UP, MOVE_DOWN, MOVE_LEFT, MOVE_RIGHT, WALK, JUMP, SWORD, DAGGER,
        SPECIAL, CANCEL, REWIND, LOOK, ALT_VIEW, RESET_CAMERA, PAUSE, BACK,
        MENU_UP, MENU_DOWN, MENU_LEFT, MENU_RIGHT, CAMERA_UP, CAMERA_DOWN,
@@ -20,6 +21,13 @@ typedef struct {
     struct { uint16_t buttons; uint8_t analog[8]; int16_t lx, ly, rx, ry; } pad;
 } HostPad;
 _Static_assert(sizeof(HostPad)==24,"Host controller layout must match the runtime Xbox state");
+static const char *const s_actions[ACTIONS] = {
+    "Move forward", "Move backward", "Move left", "Move right", "Walk toggle",
+    "Jump / confirm", "Sword attack", "Use dagger", "Special action", "Cancel / drop",
+    "Rewind", "Camera look", "Alternate view", "Reset camera", "Pause / start", "Back",
+    "Menu up", "Menu down", "Menu left", "Menu right", "Camera up", "Camera down",
+    "Camera left", "Camera right", "Left stick click"
+};
 static const int s_default_keys[ACTIONS] = {
     'W','S','A','D',VK_LSHIFT,VK_SPACE,VK_LBUTTON,'E',VK_RBUTTON,'C','R','F','Q','X',
     VK_ESCAPE,VK_BACK,VK_UP,VK_DOWN,VK_LEFT,VK_RIGHT,'I','K','J','L',0
@@ -57,11 +65,32 @@ static const char *const s_native_joy[25] = {
     "L stick", "R stick", "Pad up", "Pad down", "Pad left", "Pad right", "L up", "L down",
     "L left", "L right", "R up", "R down", "R left", "R right"
 };
+static const char *const s_size_names[] = {"Monitor (borderless)","800 x 600","1024 x 768",
+    "1280 x 720","1600 x 900","1920 x 1080","2560 x 1440","3840 x 2160"};
+static const int s_caps[] = {30,60,120,0};
 static const char *const s_cap_names[] = {"30","60","120","None"};
 static SRWLOCK s_lock = SRWLOCK_INIT;
 static volatile LONG s_revision;
+static volatile LONG s_open, s_dirty = 1;
+static int s_graphics_expanded, s_controls_expanded;
+static int s_tab, s_scroll, s_dropdown, s_drag;
+static char s_status[180] = "Changes are saved automatically.";
+static HDC s_dc;
+static HBITMAP s_bitmap;
+static uint32_t *s_bits;
+static HFONT s_font, s_title_font;
 static int s_keys[ACTIONS], s_joy[ACTIONS], s_fps = 60, s_resolution;
 static int s_vsync=1, s_post_processing=1, s_capture = -1, s_capture_tab;
+static int s_renderer; /* 0 (default): D3D11, 1: native D3D12, 2: native Vulkan; restart. */
+static const char *const s_renderer_tokens[] = {"d3d11","d3d12","vulkan"};
+static const char *const s_renderer_names[] = {"D3D11","D3D12 (native)","Vulkan (native)"};
+extern int nv2a_hw_backend(void);
+static const char *active_renderer(void)
+{
+    int backend = nv2a_hw_backend();
+    return backend==100?"Vulkan (native)":backend==12?"D3D12 (native)":
+           backend==11?"D3D11":"initializing";
+}
 static int s_joy_was[25], s_walk, s_walk_was, s_pending_size, s_size_posted;
 static int s_native_capture, s_native_since;
 static int s_keyboard_enabled=1, s_mouse_speed=43, s_walk_deflection=12000;
@@ -79,7 +108,7 @@ extern void xbox_FramebufferSetOptionsCallbacks(
 extern void xbox_InputSetHostFilter(void (*)(void *, unsigned));
 
 /* The game's native pages refresh their labels when the revision moves. */
-static void mark_dirty(void) { InterlockedIncrement(&s_revision); }
+static void mark_dirty(void) { InterlockedIncrement(&s_revision); InterlockedExchange(&s_dirty,1); }
 long resot_native_revision(void) { return InterlockedCompareExchange(&s_revision,0,0); }
 
 void resot_options_summary(char *out, unsigned size)
@@ -91,10 +120,13 @@ void resot_options_summary(char *out, unsigned size)
     ReleaseSRWLockShared(&s_lock);
 }
 
-static void save_config(void)
+int resot_options_blocks_input(void) { return InterlockedCompareExchange(&s_open,0,0) != 0; }
+
+static int save_config(void)
 {
     char name[32], value[32];
     int i, ok = 1;
+    ok &= WritePrivateProfileStringA("Graphics","Renderer",s_renderer_tokens[s_renderer],s_path);
     snprintf(value,sizeof value,"%d",s_fps);
     ok &= WritePrivateProfileStringA("Graphics","FPSLimit",value,s_path);
     snprintf(value,sizeof value,"%d",s_vsync);
@@ -111,7 +143,10 @@ static void save_config(void)
         ok &= WritePrivateProfileStringA("Joystick",name,value,s_path);
     }
     if (!ok) fprintf(stderr,"[OPTIONS] could not save %s (read-only folder?)\n",s_path);
+    snprintf(s_status,sizeof s_status,"%s",ok ? "Saved to resot-options.ini." :
+             "Could not save resot-options.ini. Folder may be read-only.");
     mark_dirty();
+    return ok;
 }
 
 static void binding_name(int code, int joystick, char *text, size_t size)
@@ -145,6 +180,22 @@ static void assign_binding(int code)
     save_config();
 }
 
+static int controls_top(void) { return s_graphics_expanded ? 344 : 46; }
+static int rows_top(void) { return controls_top()+98; }
+static int max_scroll(void)
+{
+    int height=controls_top()+(s_controls_expanded?98+ACTIONS*ROW_H+15:42);
+    int maximum=height-(BODY_BOTTOM-BODY_TOP);
+    return maximum>0?maximum:0;
+}
+static void scroll_to(int value)
+{
+    int max = max_scroll();
+    s_scroll = value<0 ? 0 : value>max ? max : value;
+    s_dropdown=0;
+    InterlockedExchange(&s_dirty,1);
+}
+
 static void apply_resolution(HWND window)
 {
     RECT r;
@@ -166,13 +217,12 @@ static void apply_resolution(HWND window)
     }
 }
 
-static int event(void *handle, unsigned message, uintptr_t wp, intptr_t lp)
+static int native_event(void *handle, unsigned message, uintptr_t wp, intptr_t lp)
 {
     HWND window=(HWND)handle;
     /* SetWindowPos sends synchronous WM_SIZE messages back to this callback;
      * do not hold the options lock while Windows dispatches them. */
     if (message==APPLY_SIZE) { apply_resolution(window); return 1; }
-    if (resot_diag_event(handle,message,wp,lp)) return 1;
     if (s_native_capture) {
         /* A binding started from the game's menu: the next fresh key or mouse
          * button press, not the held repeat of the press that started it. */
@@ -182,7 +232,7 @@ static int event(void *handle, unsigned message, uintptr_t wp, intptr_t lp)
             AcquireSRWLockExclusive(&s_lock);
             if (s_capture>=0 && !s_capture_tab) {
                 if (code==VK_ESCAPE) { s_capture=-1; s_native_capture=0; mark_dirty(); }
-                else if (code!=VK_F5 && code!=VK_F6) {
+                else if (code!=VK_F5 && code!=VK_F6 && code!=VK_F7) {
                     if(code==VK_SHIFT) code=(int)MapVirtualKeyA((lp>>16)&255,MAPVK_VSC_TO_VK_EX);
                     if(code==VK_CONTROL) code=(lp&(1L<<24))?VK_RCONTROL:VK_LCONTROL;
                     if(code==VK_MENU) code=(lp&(1L<<24))?VK_RMENU:VK_LMENU;
@@ -206,12 +256,236 @@ static int event(void *handle, unsigned message, uintptr_t wp, intptr_t lp)
     return 0;
 }
 
-/* The F6 diagnostics panel; the first frame also applies a saved size. */
+static float panel_scale(HWND window)
+{
+    RECT r; float scale;
+    GetClientRect(window,&r);
+    scale=(float)r.bottom/720.0f;
+    if (scale<0.75f) scale=0.75f;
+    if ((PW+16)*scale>r.right) scale=(float)r.right/(PW+16);
+    return scale>0 ? scale : 1;
+}
+
+static int event(void *handle, unsigned message, uintptr_t wp, intptr_t lp)
+{
+    HWND window=(HWND)handle;
+    int x,y,body,action=-1,consumed=0;
+    float scale;
+    /* SetWindowPos sends synchronous WM_SIZE messages back to this callback;
+     * do not hold the options lock while Windows dispatches them. */
+    if (message==APPLY_SIZE) { apply_resolution(window); return 1; }
+    if ((message==WM_KEYDOWN || message==WM_SYSKEYDOWN) && wp==VK_F7) {
+        if (!(lp & (1L<<30))) {
+            AcquireSRWLockExclusive(&s_lock);
+            InterlockedExchange(&s_open,!s_open); s_capture=-1; s_native_capture=0; s_dropdown=0;
+            InterlockedExchange(&s_dirty,1);
+            ReleaseSRWLockExclusive(&s_lock);
+        }
+        return 1;
+    }
+    if ((message==WM_KEYDOWN || message==WM_SYSKEYDOWN ||
+         message==WM_KEYUP || message==WM_SYSKEYUP) && wp==VK_F6)
+        return resot_diag_event(handle,message,wp,lp);
+    if (!resot_options_blocks_input()) {
+        if (resot_diag_event(handle,message,wp,lp)) return 1;
+        return native_event(handle,message,wp,lp);
+    }
+    if (message==WM_SYSKEYDOWN && wp==VK_F4 && (lp&(1L<<29))) return 0;
+    if (message==WM_SETCURSOR) { SetCursor(LoadCursorA(NULL,IDC_ARROW)); return 1; }
+    /* Capture changes, resize and focus messages can arrive synchronously
+     * inside SetCapture/SetWindowPos. They need no options lock or handling. */
+    switch(message) {
+    case WM_KEYDOWN: case WM_KEYUP: case WM_SYSKEYDOWN: case WM_SYSKEYUP: case WM_CHAR:
+    case WM_MOUSEMOVE: case WM_MOUSEWHEEL: case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK:
+    case WM_LBUTTONUP: case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP: case WM_XBUTTONDOWN: case WM_XBUTTONUP: case WM_INPUT: break;
+    default: return 0;
+    }
+    if (GetForegroundWindow()!=window) return 0;
+    AcquireSRWLockExclusive(&s_lock);
+    scale=panel_scale(window);
+    x=(int)(((short)LOWORD(lp))/scale)-8;
+    y=(int)(((short)HIWORD(lp))/scale)-8;
+    body=y-BODY_TOP+s_scroll;
+    if (s_controls_expanded && body>=rows_top() && body<rows_top()+ACTIONS*ROW_H)
+        action=(body-rows_top())/ROW_H;
+    if (s_capture>=0 && !s_capture_tab &&
+        (message==WM_KEYDOWN || message==WM_SYSKEYDOWN || message==WM_LBUTTONDOWN ||
+         message==WM_RBUTTONDOWN || message==WM_MBUTTONDOWN || message==WM_XBUTTONDOWN)) {
+        int code=(int)wp;
+        if (message==WM_KEYDOWN || message==WM_SYSKEYDOWN) {
+            if (code==VK_ESCAPE) { s_capture=-1; strcpy(s_status,"Binding cancelled."); }
+            else if (code!=VK_F5 && code!=VK_F6 && code!=VK_F7) {
+                if(code==VK_SHIFT) code=(int)MapVirtualKeyA((lp>>16)&255,MAPVK_VSC_TO_VK_EX);
+                if(code==VK_CONTROL) code=(lp&(1L<<24))?VK_RCONTROL:VK_LCONTROL;
+                if(code==VK_MENU) code=(lp&(1L<<24))?VK_RMENU:VK_LMENU;
+                assign_binding(code);
+            }
+        } else assign_binding(message==WM_LBUTTONDOWN?VK_LBUTTON:message==WM_RBUTTONDOWN?VK_RBUTTON:
+                    message==WM_MBUTTONDOWN?VK_MBUTTON:HIWORD(wp)==XBUTTON1?VK_XBUTTON1:VK_XBUTTON2);
+        InterlockedExchange(&s_dirty,1); consumed=1;
+    } else if ((message==WM_KEYDOWN || message==WM_SYSKEYDOWN) && wp==VK_ESCAPE) {
+        if(s_capture>=0) s_capture=-1; else InterlockedExchange(&s_open,0);
+        InterlockedExchange(&s_dirty,1); consumed=1;
+    } else if (message==WM_MOUSEWHEEL) {
+        scroll_to(s_scroll-((short)HIWORD(wp))/WHEEL_DELTA*87); consumed=1;
+    } else if (message==WM_LBUTTONUP) { s_drag=0; ReleaseCapture(); consumed=1; }
+    else if (message==WM_MOUSEMOVE && s_drag) {
+        scroll_to((y-BODY_TOP-22)*max_scroll()/(BODY_BOTTOM-BODY_TOP-44)); consumed=1;
+    } else if (message==WM_LBUTTONDOWN || message==WM_LBUTTONDBLCLK || message==WM_RBUTTONDOWN) {
+        if(x>=PW-30 && x<PW && y>=10 && y<42) { InterlockedExchange(&s_open,0); s_capture=-1; }
+        else if(x>=PW-20 && x<PW-5 && y>=BODY_TOP && y<BODY_BOTTOM) {
+            s_drag=1; SetCapture(window);
+            scroll_to((y-BODY_TOP-22)*max_scroll()/(BODY_BOTTOM-BODY_TOP-44));
+        } else if (s_graphics_expanded && s_dropdown && x>=245 && x<480 && body>=272 && body<272+8*29) {
+            s_resolution=(body-272)/29; s_dropdown=0; save_config();
+            PostMessageA(window,APPLY_SIZE,0,0);
+        } else if(x>=20 && x<490 && y>=BODY_TOP && y<BODY_BOTTOM) {
+            if(body>=0 && body<28) {
+                s_graphics_expanded=!s_graphics_expanded;s_capture=-1;s_dropdown=0;scroll_to(0);save_config();
+            } else if(body>=controls_top() && body<controls_top()+28 &&
+                      (!s_controls_expanded || x<360)) {
+                s_controls_expanded=!s_controls_expanded;s_capture=-1;scroll_to(0);save_config();
+            } else if(s_graphics_expanded && body>=34 && body<64) {
+                if (x>=155 && x<500) {
+                    s_renderer=x<275?0:x<405?1:2;
+                    if(save_config()) snprintf(s_status,sizeof s_status,"Saved. Restart to use %s. Active: %s.",
+                        s_renderer_names[s_renderer],active_renderer());
+                }
+            } else if(s_graphics_expanded && body>=91 && body<121 && x>=245) {
+                int cap=(x-245)/58; if(cap>=0 && cap<4) {s_fps=s_caps[cap];xbox_SetFrameLimit(s_fps);save_config();}
+            } else if(s_graphics_expanded && body>=141 && body<171 && x>=245) {
+                s_vsync=x<360; xbox_SetVSync(s_vsync);save_config();
+                if(!s_vsync && s_fps)
+                    snprintf(s_status,sizeof s_status,"VSync off. FPS limiter remains at %d.",s_fps);
+            } else if(s_graphics_expanded && body>=191 && body<221 && x>=245) {
+                s_post_processing=x<360;xbox_SetPostProcessing(s_post_processing);save_config();
+            } else if(s_graphics_expanded && body>=241 && body<272 && x>=245) s_dropdown=!s_dropdown;
+            else if(s_controls_expanded && body>=controls_top() && body<controls_top()+28 && x>=360) {
+                memcpy(s_keys,s_default_keys,sizeof s_keys);memcpy(s_joy,s_default_joy,sizeof s_joy);
+                s_capture=-1;s_walk=s_walk_was=0;save_config();
+            }
+            else if(s_controls_expanded && body>=controls_top()+38 && body<controls_top()+71) { s_tab=x<255?0:1; s_capture=-1; }
+            else if(action>=0 && x>=245) {
+                if(message==WM_RBUTTONDOWN) { (s_tab?s_joy:s_keys)[action]=0; save_config(); }
+                else if(message==WM_LBUTTONDBLCLK) { s_capture=action;s_capture_tab=s_tab;
+                    strcpy(s_status,s_tab?"Press a joystick button or move a stick. Esc cancels.":
+                           "Press a key or mouse button. Esc cancels."); }
+            }
+        }
+        InterlockedExchange(&s_dirty,1); consumed=1;
+    }
+    ReleaseSRWLockExclusive(&s_lock);
+    /* Suppress every game key and raw mouse message while this host menu owns
+     * input. DefWindowProc still receives lifecycle/window-management events. */
+    if (message==WM_INPUT) { DefWindowProcA(window,message,(WPARAM)wp,(LPARAM)lp); return 1; }
+    return consumed || message==WM_KEYDOWN || message==WM_KEYUP || message==WM_SYSKEYDOWN ||
+        message==WM_SYSKEYUP || message==WM_CHAR || message==WM_MOUSEMOVE ||
+        message==WM_RBUTTONUP || message==WM_MBUTTONDOWN || message==WM_MBUTTONUP ||
+        message==WM_XBUTTONDOWN || message==WM_XBUTTONUP;
+}
+
+static void text(int x,int y,int width,const char *value,COLORREF color)
+{
+    RECT r={x,y,x+width,y+26}; SetTextColor(s_dc,color);
+    DrawTextA(s_dc,value,-1,&r,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS|DT_NOPREFIX);
+}
+static void box(int x,int y,int w,int h,COLORREF color)
+{
+    RECT r={x,y,x+w,y+h}; HBRUSH brush=CreateSolidBrush(color);
+    FillRect(s_dc,&r,brush);DeleteObject(brush);
+}
 static int panel(const uint32_t **pixels,uint32_t *width,uint32_t *height)
 {
+    int i,y; size_t n;
     HWND window=(HWND)xbox_FramebufferWindowHandle();
     if(window && s_pending_size && !s_size_posted) {s_size_posted=1;PostMessageA(window,APPLY_SIZE,0,0);}
-    return resot_diag_panel(pixels,width,height);
+    if(!resot_options_blocks_input()) return resot_diag_panel(pixels,width,height);
+    AcquireSRWLockExclusive(&s_lock);
+    if(!s_dc) {
+        BITMAPINFO info;memset(&info,0,sizeof info);
+        info.bmiHeader.biSize=sizeof info.bmiHeader;info.bmiHeader.biWidth=PW;
+        info.bmiHeader.biHeight=-PH;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;
+        s_dc=CreateCompatibleDC(NULL);
+        s_bitmap=CreateDIBSection(s_dc,&info,DIB_RGB_COLORS,(void**)&s_bits,NULL,0);
+        if(!s_dc || !s_bitmap) {ReleaseSRWLockExclusive(&s_lock);return 0;}
+        SelectObject(s_dc,s_bitmap);SetBkMode(s_dc,TRANSPARENT);
+        s_font=CreateFontA(17,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,"Segoe UI");
+        s_title_font=CreateFontA(24,0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,"Segoe UI");
+    }
+    if(InterlockedExchange(&s_dirty,0)) {
+        char label[120];
+        for(n=0;n<(size_t)PW*PH;n++)s_bits[n]=0xC0151C29u;
+        SelectObject(s_dc,s_title_font);text(18,10,440,"reSOT Options",RGB(245,248,255));
+        SelectObject(s_dc,s_font);text(PW-29,10,24,"X",RGB(200,210,227));
+        text(18,36,470,s_capture>=0?"Waiting for a new binding...":"F7 / Esc closes this menu",RGB(147,170,199));
+        SaveDC(s_dc);IntersectClipRect(s_dc,12,BODY_TOP,PW-25,BODY_BOTTOM);
+#define Y(v) (BODY_TOP+(v)-s_scroll)
+        box(16,Y(0),468,28,RGB(31,43,60));
+        text(23,Y(0),450,s_graphics_expanded?"[-] Graphics":"[+] Graphics",RGB(110,193,249));
+        if(s_graphics_expanded) {
+        text(20,Y(35),140,"Renderer",RGB(220,229,242));
+        box(155,Y(34),115,30,s_renderer==0?RGB(46,95,135):RGB(36,46,63));
+        text(163,Y(35),105,"Direct3D 11",RGB(245,248,255));
+        box(275,Y(34),127,30,s_renderer==1?RGB(46,95,135):RGB(36,46,63));
+        text(279,Y(35),120,"D3D12 (native)",RGB(245,248,255));
+        box(405,Y(34),95,30,s_renderer==2?RGB(46,95,135):RGB(36,46,63));
+        text(413,Y(35),83,"Vulkan",RGB(245,248,255));
+        snprintf(label,sizeof label,"Active: %s; restart to change",active_renderer());
+        text(155,Y(66),340,label,RGB(147,170,199));
+        text(20,Y(91),200,"FPS limiter",RGB(220,229,242));
+        for(i=0;i<4;i++) {box(245+i*58,Y(91),53,30,s_fps==s_caps[i]?RGB(46,95,135):RGB(36,46,63));
+            text(255+i*58,Y(92),48,s_cap_names[i],RGB(235,242,251));}
+        text(20,Y(141),220,"VSync",RGB(220,229,242));
+        box(245,Y(141),110,30,s_vsync?RGB(46,95,135):RGB(36,46,63));
+        box(365,Y(141),115,30,!s_vsync?RGB(46,95,135):RGB(36,46,63));
+        text(257,Y(142),95,"On",RGB(235,242,251));text(377,Y(142),95,"Off",RGB(235,242,251));
+        text(20,Y(191),220,"Post-processing",RGB(220,229,242));
+        box(245,Y(191),110,30,s_post_processing?RGB(46,95,135):RGB(36,46,63));
+        box(365,Y(191),115,30,!s_post_processing?RGB(46,95,135):RGB(36,46,63));
+        text(257,Y(192),95,"On",RGB(235,242,251));text(377,Y(192),95,"Off",RGB(235,242,251));
+        text(20,Y(241),220,"Screen resolution",RGB(220,229,242));
+        box(245,Y(241),235,30,RGB(36,46,63));text(255,Y(242),220,s_size_names[s_resolution],RGB(235,242,251));
+        text(20,Y(282),455,"Window size keeps the desktop display mode.",RGB(139,159,186));
+        text(20,Y(303),455,"The game's own timing may still limit FPS.",RGB(139,159,186));
+        }
+        box(16,Y(controls_top()),468,28,RGB(31,43,60));
+        text(23,Y(controls_top()),330,s_controls_expanded?"[-] Controls":"[+] Controls",RGB(110,193,249));
+        if(s_controls_expanded) {
+        box(360,Y(controls_top()),120,27,RGB(36,46,63));text(368,Y(controls_top()+1),106,"Reset bindings",RGB(185,207,233));
+        box(20,Y(controls_top()+38),225,33,s_tab==0?RGB(46,72,99):RGB(36,46,63));
+        box(255,Y(controls_top()+38),225,33,s_tab==1?RGB(46,72,99):RGB(36,46,63));
+        text(33,Y(controls_top()+41),205,"Keyboard / Mouse",RGB(235,242,251));text(270,Y(controls_top()+41),205,"Joystick",RGB(235,242,251));
+        for(i=0;i<ACTIONS;i++) {
+            y=Y(rows_top()+i*ROW_H);
+            if(y+ROW_H<BODY_TOP || y>=BODY_BOTTOM)continue;
+            if(s_capture==i && s_capture_tab==s_tab)box(16,y,468,ROW_H-1,RGB(51,80,111));
+            else if(i&1)box(16,y,468,ROW_H-1,RGB(28,37,51));
+            text(23,y,219,s_actions[i],RGB(220,229,242));
+            binding_name((s_tab?s_joy:s_keys)[i],s_tab,label,sizeof label);
+            if(!s_tab && s_keys[i]==s_default_keys[i] && s_aliases[i]) {
+                char alias[40];size_t used;
+                binding_name(s_aliases[i],0,alias,sizeof alias);used=strlen(label);
+                snprintf(label+used,sizeof label-used," / %s",alias);
+            }
+            text(253,y,225,s_capture==i&&s_capture_tab==s_tab?"Press input...":label,RGB(166,201,237));
+        }
+        }
+        if(s_graphics_expanded && s_dropdown)for(i=0;i<8;i++) {box(245,Y(272+i*29),235,29,RGB(42,57,78));
+            text(255,Y(272+i*29),220,s_size_names[i],RGB(235,242,251));}
+        RestoreDC(s_dc,-1);
+        box(PW-17,BODY_TOP,7,BODY_BOTTOM-BODY_TOP,RGB(34,45,61));
+        if(max_scroll())box(PW-19,BODY_TOP+s_scroll*(BODY_BOTTOM-BODY_TOP-44)/max_scroll(),11,44,RGB(111,148,184));
+        else box(PW-19,BODY_TOP,11,BODY_BOTTOM-BODY_TOP,RGB(57,75,95));
+        text(18,570,480,"Double-click to bind. Right-click clears. Esc cancels.",RGB(147,170,199));
+        text(18,591,480,s_status,RGB(147,170,199));
+        GdiFlush();
+        for(n=0;n<(size_t)PW*PH;n++)s_bits[n]=(s_bits[n]&0xFFFFFFu)|
+            ((s_bits[n]&0xFFFFFFu)==0x151C29u?0xC0000000u:0xFF000000u);
+#undef Y
+    }
+    *pixels=s_bits;*width=PW;*height=PH;
+    ReleaseSRWLockExclusive(&s_lock);return 1;
 }
 
 static int source_value(const HostPad *raw,int code)
@@ -244,7 +518,7 @@ static void input(void *state,unsigned port)
         if(scripted<0)scripted=getenv("RECOMP_PAD_LIVE")||getenv("RECOMP_PAD_SCRIPT");
         if(scripted)foreground=1;}
     AcquireSRWLockExclusive(&s_lock);
-    blocked=s_native_capture;
+    blocked=s_native_capture || resot_options_blocks_input();
     if(port==0)for(i=1;i<=24;i++) {
         int down=source_value(&raw,i)>16000;
         if(foreground && blocked && s_capture>=0 && s_capture_tab && down && !s_joy_was[i])assign_binding(i);
@@ -362,6 +636,14 @@ void resot_options_init(void)
     slash=strrchr(s_path,'\\');if(slash)slash[1]=0;else s_path[0]=0;
     if(strlen(s_path)+strlen("resot-options.ini")>=sizeof s_path)return;
     strcat(s_path,"resot-options.ini");
+    GetPrivateProfileStringA("Graphics","Renderer","d3d11",name,sizeof name,s_path);
+    env=getenv("RESOT_RENDERER");
+    s_renderer=!_stricmp(name,"vulkan")?2:!_stricmp(name,"d3d12")?1:0;
+    /* Native D3D11 remains the default for absent or invalid preferences. */
+    /* A command-line environment override affects this run, not the saved
+     * selection when an unrelated option/binding is saved. */
+    i=env&&*env?(!_stricmp(env,"vulkan")?2:!_stricmp(env,"d3d12")?1:0):s_renderer;
+    _putenv_s("RESOT_RENDERER",s_renderer_tokens[i]);
     s_fps=(int)GetPrivateProfileIntA("Graphics","FPSLimit",60,s_path);
     if(s_fps!=0 && s_fps!=30 && s_fps!=60 && s_fps!=120)s_fps=60;
     s_resolution=(int)GetPrivateProfileIntA("Graphics","Resolution",0,s_path);

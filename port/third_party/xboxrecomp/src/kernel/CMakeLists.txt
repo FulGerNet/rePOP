@@ -41,6 +41,27 @@ target_include_directories(xbox_kernel PUBLIC
 )
 
 if(WIN32)
+    # RE-SoT: native GPU command encoder; no D3D11 translation backend.
+    set(RESOT_SDL_ROOT "${CMAKE_SOURCE_DIR}/build/deps/SDL3-3.4.18" CACHE PATH "SDL3 SDK (tools/setup-native-gpu.ps1)")
+    set(RESOT_DXC "${CMAKE_SOURCE_DIR}/build/deps/dxc/bin/x64/dxc.exe" CACHE FILEPATH "DXC shader compiler")
+    if(NOT EXISTS "${RESOT_SDL_ROOT}/include/SDL3/SDL_gpu.h" OR NOT EXISTS "${RESOT_DXC}")
+        message(FATAL_ERROR "Native GPU dependencies missing. Run tools/setup-native-gpu.ps1 first.")
+    endif()
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set(native_shaders "${CMAKE_BINARY_DIR}/native-shaders")
+    add_custom_command(OUTPUT "${native_shaders}/nv2a_native_shaders.h"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/build-native-shaders.py"
+                --dxc "${RESOT_DXC}" --output "${native_shaders}"
+        DEPENDS "${CMAKE_SOURCE_DIR}/tools/build-native-shaders.py"
+                "${CMAKE_SOURCE_DIR}/tools/check-hlsl.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/nv2a_hw_d3d11.inc"
+        VERBATIM)
+    target_sources(xbox_kernel PRIVATE "${native_shaders}/nv2a_native_shaders.h")
+    target_include_directories(xbox_kernel PRIVATE "${RESOT_SDL_ROOT}/include" "${native_shaders}")
+    target_link_libraries(xbox_kernel PUBLIC "${RESOT_SDL_ROOT}/lib/x64/SDL3.lib")
+    # Optional native backend: D3D11 must still boot when SDL3.dll is absent.
+    target_link_libraries(xbox_kernel PUBLIC delayimp)
+    target_link_options(xbox_kernel INTERFACE "/DELAYLOAD:SDL3.dll")
     # platform is an INTERFACE target on Windows: it contributes the src/
     # include path that "platform/xbox_winnt.h" resolves against.
     target_link_libraries(xbox_kernel PUBLIC platform kernel32 bcrypt)

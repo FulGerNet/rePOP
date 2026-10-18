@@ -10,6 +10,47 @@ per target is small and lives in `source/<target>/`:
 | `target_hooks.c` | Entry hooks (`sub_XXXXXXXX_enter`, run before that routine's first instruction), with this XBE's addresses; handed to the lifter and built into this target only |
 | `gen/` | The lifted C (generated; ignored by Git) |
 
+## Native host GPU encoders (experimental)
+
+The pushbuffer executor still decodes the same NV2A methods. In
+`nv2a_hw_d3d11.inc`, `RESOT_RENDERER=d3d12` or `vulkan` dispatches to
+`nv2a_hw_native.inc` before creating any D3D11 device. SDL GPU selects
+`direct3d12` or `vulkan` explicitly; shaders are embedded DXIL/SPIR-V compiled
+by `tools/build-native-shaders.py` from the same combiner HLSL as D3D11.
+This replaces the former D3D11On12 and DXVK paths. D3D11 stays the default.
+
+The native frontend takes vertices from the existing NV2A interpreter,
+decodes/caches guest textures, retains GPU color/depth surfaces by guest
+address and shape, and snapshots each draw's constants, samplers, blend,
+depth, cull and scissor state. Runs of draws share one vertex upload and
+compatible native render passes. Surface/texture retirement, guest clears
+and presentation flush queued draws in guest order. SDL GPU handles native
+barriers, resource cycling, submission and fences. Frame composition is
+captured before deferred presentation, including movies and the host panel.
+GPU downloads wait for an explicit fence before the CPU reads pixels.
+
+Both executables can enable these native encoders. Retail XBE
+`0x000CE32E`/`0x000CE366` requires real visibility reports. SDL GPU's public
+API does not expose occlusion queries, so `port/third_party/sdl-gpu-query/`
+adds a versioned ABI inside SDL's native D3D12/Vulkan driver translation
+units. D3D12 uses hardware query heaps and readback resources; Vulkan uses
+precise occlusion query pools. No private SDL layout crosses the DLL ABI.
+`nv2a_hw_native_visibility.inc` scopes counters to render passes, normalizes
+to guest pixels, and publishes reports only after nonblocking fence polling.
+CLEAR drops the current counter's references but preserves pending reports;
+queries retire only after GPU completion. Clears and host blits are excluded.
+The native renderer is rejected on retail if query ABI/capability is missing.
+
+Build dependencies: `tools/setup-native-gpu.ps1` installs SHA-256-pinned
+SDL3 3.4.18 SDK/sources and DXC v1.9.2609 under ignored `build/deps/`. It
+applies the published additions and builds SDL3.dll with query ABI 1; the
+altered DLL, SDL licence and `SDL3-RESOT.txt` accompany player builds. DXC and
+its libraries are build tools. Delayed SDL loading preserves the D3D11
+fallback when it is absent. `RESOT_GPU_DEBUG=1` enables driver validation.
+Native GPU vertex-program translation, border-address sampling, full stencil
+and broader gameplay/performance validation remain unfinished. See the latest
+entry in `VALIDATION.md` for observations, commands and remaining limits.
+
 ## Pipeline
 
 ### Portable host and player overlay

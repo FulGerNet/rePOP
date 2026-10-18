@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../../port/game/guest_probe.h"
 #include "target.h"
 #if defined(_MSC_VER)
 #define RESOT_TLS __declspec(thread)
@@ -855,19 +856,39 @@ void sub_002A2670_enter(void)
 /* Labels: as in the demo, the refresh runs for our value choices once the
  * options' revision moves, after checking that the choice's text object
  * still carries our reference. */
+static int native_label_word(uint64_t va, uint32_t *value)
+{
+    /* RE-SoT: retail TEXT_MANAGER 0x007584F0 +0x44 indexes main-menu
+     * choices; those handles can outlive the menu after a world transition.
+     * The native D3D12 pause run faulted reading 0xA7F52955 via an old
+     * object's +0x9C. Probe only optional host-label metadata, never catch
+     * faults from lifted game execution. Wide arithmetic rejects wraparound. */
+    if (!resot_guest_read_word(g_xbox_mem_offset,va,value)) {
+        static unsigned logged;
+        if (logged++ < 4)
+            fprintf(stderr,"[MENU] label refresh skipped unreadable guest word %08X\n",(uint32_t)va);
+        return 0;
+    }
+    return 1;
+}
 static int native_text_object(uint32_t choice, uint32_t *out)
 {
-    uint32_t mgr = GMEM32(TEXT_MANAGER), obj, text, it, end;
-    if (!mgr || !choice || !GMEM32(mgr + 0x44))
+    uint32_t mgr, table, obj, text, it, end;
+    if (!choice || !native_label_word(TEXT_MANAGER,&mgr) || !mgr ||
+        !native_label_word((uint64_t)mgr+0x44,&table) || !table ||
+        !native_label_word((uint64_t)table+(uint64_t)choice*4,&obj) || !obj ||
+        !native_label_word((uint64_t)obj+0x9C,&text) || !text ||
+        !native_label_word((uint64_t)text+0x0C,&it) ||
+        !native_label_word((uint64_t)text+0x10,&end))
         return 0;
-    obj = GMEM32(GMEM32(mgr + 0x44) + choice * 4);
-    text = obj ? GMEM32(obj + 0x9C) : 0;
-    if (!text)
+    /* Host traversal limit, not an XBE constant: reject stale vector bounds. */
+    if (!it || end < it || ((it | end) & 3) || end-it > 65536u)
         return 0;
-    for (it = GMEM32(text + 0x0C), end = GMEM32(text + 0x10); it && it < end; it += 4) {
-        uint32_t action = GMEM32(it);
-        if (action && GMEM32(action) == TEXT_ACTION_VTABLE
-                && GMEM32(action + 0x34) == RESOT_TEXT_GROUP) {
+    for (; it < end; it += 4) {
+        uint32_t action, vtable, group;
+        if (!native_label_word(it,&action)) return 0;
+        if (action && native_label_word(action,&vtable) && vtable == TEXT_ACTION_VTABLE &&
+            native_label_word((uint64_t)action+0x34,&group) && group == RESOT_TEXT_GROUP) {
             *out = text;
             return 1;
         }

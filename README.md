@@ -104,8 +104,8 @@ Keep your game data beside it (demo and retail in separate folders), or
 select the data folder when asked. `default.xbe` is a build input and is
 embedded in the compiled EXE; it is not required beside the player EXE.
 Space / controller A skips videos; F5 toggles the FPS / Current WOW panel;
-F6 toggles the diagnostics panel (copyable with Ctrl+Shift+C); graphics and
-controls settings are under `reSOT Options` in the game's main menu. See the [Windows instructions](port/windows/README.md#play-portable-folder)
+F6 toggles the diagnostics panel (copyable with Ctrl+Shift+C); F7 opens
+`reSOT Options` for graphics and controls, also available in the game's main menu. See the [Windows instructions](port/windows/README.md#play-portable-folder)
 for the folder contents and packaging from a local build.
 
 | Platform | Instructions |
@@ -131,9 +131,11 @@ In short, on Windows:
 | Lift and build | 🟢 11,215 functions (2 of them written by hand: the D3D KickOff), 0 failed | 🟢 14,418 functions (2 by hand: the D3D KickOff), 0 failed |
 | Boot to first frame | 🟢 | 🟢 |
 | Portable launch / F5 overlay / video skip | 🟢 verified by the user (2026-10-18) | 🟢 verified by the user (2026-10-18) |
-| External game folder / options / F6 diagnostics | 🟢 verified by the user (2026-10-18), including Load Map; launcher with ISO installation run once by the user (demo ISO, 2026-10-18) | 🟢 verified by the user (2026-10-18); no hidden level select exists in this XBE |
+| External game folder / options / F6 diagnostics (F7 panel restored: both builds pass, in-game check pending) | 🟢 verified by the user (2026-10-18), including Load Map; launcher with ISO installation run once by the user (demo ISO, 2026-10-18) | 🟢 verified by the user (2026-10-18); no hidden level select exists in this XBE |
 | Movies (Bink via overlay) | 🟢 audio and video verified by the user (2026-10-18) | 🟢 audio and video verified by the user (2026-10-18) |
 | Menus | 🟢 verified by the user (2026-10-18) | 🟢 verified by the user (2026-10-18) |
+| Native D3D12 (optional in F7; restart required; SDL GPU, no 11On12) | 🟡 builds; 55-second demo run and menu GPU readback checked (2026-10-18); vertex programs on CPU; 25–63 FPS in sampled windows; gameplay validation pending | 🟡 builds; 115-second retail run and first-level GPU readback checked (2026-10-18), after stale menu-label fix; native visibility contract passes GPU tests; full gameplay/performance validation pending |
+| Native Vulkan (optional in F7; restart required; SDL GPU, no DXVK) | 🟡 builds; 45-second demo run and animated scene GPU readback checked (2026-10-18); vertex programs on CPU; 10–63 FPS in sampled windows; gameplay validation pending | 🟡 builds; 150-second retail run reached first-level courtyard and ramparts; GPU readbacks checked (2026-10-18); native visibility contract passes GPU tests; full gameplay validation pending |
 | In-level rendering | 🟡 projected shadows; cube-map upload/sampling implemented and host GPU test passed, game appearance unverified; first-level flickering/distortion traced to ordered GPU fences: gone for the user with them off (2026-10-17), now the demo default; no stencil | 🟡 first playable level reached; cube-map upload/sampling implemented and host GPU test passed, game appearance unverified; rendering accuracy incomplete |
 | Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or Alt+Enter/F11; culling widened to the new sides; pause backdrop expanded and upper-left HUD double compression removed, including sand crescents (see validation); the menu garden is not modelled past its 4:3 edge | 🟡 16:9 by default; demo's projection and culling hooks ported to the retail addresses, projected-UI policy on (menu backdrop full width); dialog text wider than its box at 16:9; HUD not reached |
 | Frame rate | 🟡 120+ FPS reported by the user (2026-10-18); first-use shader stalls moved off the executor (hourglass room: lowest 80 fps, was 7); batches reused across frames (garden 93-100 fps at ~880 draws, was 67-78); title and executor still run in lockstep; broader performance validation incomplete | 🟡 120+ FPS reported by the user (2026-10-18); broader performance validation incomplete |

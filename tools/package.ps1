@@ -17,6 +17,12 @@ foreach ($file in $files) {
 }
 New-Item -ItemType Directory -Force -Path $destination | Out-Null
 Copy-Item -LiteralPath $exe -Destination $destination -Force
+# Native D3D12/Vulkan encode through SDL GPU; no D3D11 replacement DLLs.
+foreach ($file in @('SDL3.dll','LICENSE-SDL3.txt','SDL3-RESOT.txt')) {
+    $nativeFile = Join-Path $root "bin/$file"
+    if (-not (Test-Path -LiteralPath $nativeFile)) { throw "Missing $file; run tools/setup-native-gpu.ps1." }
+    Copy-Item -LiteralPath $nativeFile -Destination $destination -Force
+}
 # extract-xiso is built into the executable (launcher ISO installation); its
 # licence asks binary redistributions to carry its notice.
 Copy-Item -LiteralPath (Join-Path $root 'port/third_party/extract-xiso/LICENSE.TXT') `
@@ -41,7 +47,10 @@ Without game files it asks for the game's Xbox ISO and extracts it beside the
 executable (extract-xiso, see LICENSE-extract-xiso.txt).
 default.xbe is needed to build, not to run this compiled executable.
 Space / controller A: skip a video. F5: FPS and Current WOW overlay.
-F6: graphics and controls options (saved beside the executable).
+F6: diagnostics. F7: graphics and controls options (saved beside the executable).
+D3D11 is the default; native D3D12 / Vulkan require a restart.
+Native backends support demo and retail with the included SDL query extension.
+They remain experimental; see docs/VALIDATION.md for observed limits.
 Alt+Enter / F11: full screen or window. Alt+F4: exit.
 Keyboard: WASD move, Space jump, Esc pause, mouse camera.
 

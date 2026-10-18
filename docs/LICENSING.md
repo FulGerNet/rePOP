@@ -19,6 +19,25 @@ copies it beside the executable as `LICENSE-extract-xiso.txt`) and
 advertising that mentions it to say: *This product includes software
 developed by in <in@fishtank.com>.*
 
+**SDL3 3.4.18** (https://github.com/libsdl-org/SDL/releases/tag/release-3.4.18)
+provides native D3D12 and Vulkan command encoders under the zlib licence.
+`tools/setup-native-gpu.ps1` checks the official SDK and source archive
+SHA-256 values, applies the additions in `port/third_party/sdl-gpu-query/`
+with `tools/patch-sdl-gpu-query.py`, then builds an **altered** SDL3.dll.
+The additions are reSOT code under the repository's MIT licence; the original
+SDL licence is preserved. Downloaded SDKs/sources and built binaries remain
+under ignored `build/deps/` and `bin/`; no SDL binaries are committed.
+`LICENSE-SDL3.txt` accompanies portable builds and `SDL3-RESOT.txt` identifies
+the binary as modified, including its source archive hash and patch location.
+The native renderer uses SDL GPU directly, without D3D11 translation.
+
+**DirectXShaderCompiler v1.9.2609**
+(https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.9.2609)
+is a build dependency only. Its official checked SDK is installed under
+ignored `build/deps/dxc/`, with its upstream licences. It compiles reSOT's
+host shaders to DXIL and SPIR-V; no compiler DLLs ship with the game.
+DXVK and D3D11On12 are no longer used by the renderer or included by packaging.
+
 **`port/windows/res/AtlantisMF.ttf`**, the launcher's title and button face
 (Atlantis MF, 1993, Richard William Mueller), was supplied by the user; its
 licence has not been checked here. The build embeds it only when the file is

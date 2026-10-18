@@ -46,6 +46,22 @@
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "dxguid.lib")
 
+/* RE-SoT: native D3D12/Vulkan use a separate explicit command encoder. */
+static int ng_init(const char *backend);
+static int ng_active(void);
+static void ng_visibility_poll(void);
+static void ng_visibility_method(uint32_t method, uint32_t value, uint64_t stamp);
+
+static void ng_clear(uint32_t param);
+static void ng_compose(void);
+static void ng_present(int sync);
+static void ng_flip(void);
+static int ng_readback(uint32_t *dst, uint32_t w, uint32_t h);
+static void hw_diag_sample(void); /* RE-SoT: shared host diagnostics, either GPU encoder. */
+void nv2a_hw_flush_present(void); /* RE-SoT: native encoder shares deferred presentation. */
+static volatile LONG s_hw_backend;
+int nv2a_hw_backend(void) { return (int)InterlockedCompareExchange(&s_hw_backend, 0, 0); }
+
 extern void *xbox_FramebufferWindowHandle(void);
 extern void  xbox_FramebufferWindowHwMode(int on);
 /* RE-SoT: end-of-submission presentation leaves decoded fences unblocked. */
@@ -214,6 +230,7 @@ static void hw_visibility_complete(void *opaque, uint32_t at, uint64_t stamp, ui
 }
 static void hw_visibility_poll(void)
 {
+    if (ng_active()) { ng_visibility_poll(); return; } /* RE-SoT: retail native query engine. */
     HRESULT before = s_hw_visibility.device_error;
     nv_hw_vis_poll(&s_hw_visibility, s_hw.ctx, hw_visibility_complete, NULL);
     if (SUCCEEDED(before) && FAILED(s_hw_visibility.device_error)) {
@@ -225,6 +242,9 @@ static void hw_visibility_poll(void)
 static void hw_visibility_method(uint32_t method, uint32_t value, uint64_t stamp)
 {
     EnterCriticalSection(&s_hw.lock);
+    if (ng_active()) {
+        ng_visibility_method(method,value,stamp); LeaveCriticalSection(&s_hw.lock); return;
+    } /* RE-SoT: the retail report dispatch never touches a D3D11 context in native modes. */
     hw_visibility_poll();
     if (method == 0x17C8) nv_hw_vis_clear(&s_hw_visibility, s_hw.ctx);
     else if (method == 0x17CC) nv_hw_vis_enable(&s_hw_visibility, s_hw.ctx, value != 0);
@@ -711,14 +731,20 @@ static int hw_init(void)
     sd.SampleDesc.Count = 1;
     sd.Windowed = TRUE;
     sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    /* RE-SoT: these modes bypass every D3D11 device/context/resource call. */
+    e = getenv("RESOT_RENDERER");
+    if (e && (!_stricmp(e, "d3d12") || !_stricmp(e, "vulkan")))
+        if (ng_init(e)) return 1;
     hr = D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0,
-                                       NULL, 0, D3D11_SDK_VERSION, &sd,
-                                       &s_hw.swap, &s_hw.dev, &fl, &s_hw.ctx);
+                                    NULL, 0, D3D11_SDK_VERSION, &sd,
+                                    &s_hw.swap, &s_hw.dev, &fl, &s_hw.ctx);
     if (FAILED(hr)) {
         fprintf(stderr, "  [HW] D3D11CreateDeviceAndSwapChain failed 0x%08lX\n", hr);
         return 0;
     }
+    fl = ID3D11Device_GetFeatureLevel(s_hw.dev);
     hw_resize_backbuffer();
+    if (!s_hw.bb_rtv) return 0; /* RE-SoT: do not report a usable backend without output. */
 
     if (!(b = hw_compile("vs_main", "vs_4_0"))) return 0;
     ID3D11Device_CreateVertexShader(s_hw.dev, ID3D10Blob_GetBufferPointer(b),
@@ -836,9 +862,15 @@ static int hw_init(void)
         return 0;
     s_hw.cull_face = 0x405;
     s_hw.front_face = 0x900;
+    /* RE-SoT: publish only after renderer resources initialized successfully. */
+    InterlockedExchange(&s_hw_backend, 11);
+    fprintf(stderr, "  [HW] active renderer: %s\n",
+            "Direct3D 11");
     xbox_FramebufferWindowHwMode(1);
-    fprintf(stderr, "  [HW] Direct3D 11 rasteriser up (feature level 0x%X, scale %dx,"
+    /* RE-SoT: name the actual API in diagnostics, including the interop path. */
+    fprintf(stderr, "  [HW] %s rasteriser up (feature level 0x%X, scale %dx,"
                     " aspect %.3f, vsync %d, vertex programs on the %s)\n",
+            "Direct3D 11",
             (unsigned)fl, s_hw.scale, s_hw.aspect, s_hw.vsync,
             s_hw.cpu_vsh ? "CPU" : "GPU");
     fflush(stderr);
@@ -2031,6 +2063,7 @@ static int hw_reuse_match(const HwReuse *e, uint64_t key, uint32_t content,
  * index list. Returns 0 when the batch has to take the interpreter path. */
 static int hw_draw_program_batch(void)
 {
+    if (ng_active()) return 0; /* RE-SoT: native encoder takes CPU-transformed vertices. */
     static uint32_t stamp[65536], batch_id;
     static uint16_t remap[65536];
     D3D11_MAPPED_SUBRESOURCE vmap, imap;
@@ -2286,6 +2319,9 @@ static void hw_put_vertex(HwVertex *o, const Nv2aVshOutput *v)
     memcpy(o->tex, v->tex, sizeof o->tex);
 }
 
+/* RE-SoT: separate native command encoder, sharing only NV2A state and shader math. */
+#include "nv2a_hw_native.inc"
+
 /* One batch of transformed vertices, in the primitive type the title used. */
 static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
 {
@@ -2357,6 +2393,13 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
     LARGE_INTEGER t0, t1;
     QueryPerformanceCounter(&t0);
     EnterCriticalSection(&s_hw.lock);
+    if (ng_active()) {
+        ng_draw(o, count);
+        LeaveCriticalSection(&s_hw.lock);
+        QueryPerformanceCounter(&t1);
+        s_hw_stat_draw_ticks += (uint64_t)(t1.QuadPart - t0.QuadPart);
+        return;
+    }
     HwSurface *bound;
     if ((bound = hw_bind_draw_state(NULL)) != NULL
         && hw_ring_map(s_hw.vb, &s_hw.vb_off, HW_VB_BYTES,
@@ -2383,6 +2426,10 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
 /* NV097_CLEAR_SURFACE: bit 0 depth, bit 1 stencil, bits 4-7 colour channels. */
 static void hw_clear(uint32_t param)
 {
+    if (ng_active()) {
+        EnterCriticalSection(&s_hw.lock); ng_clear(param); LeaveCriticalSection(&s_hw.lock);
+        return;
+    }
     HwSurface *s;
     HwDepth *d;
     uint32_t x0 = s_gpu.clip_x, y0 = s_gpu.clip_y;
@@ -2614,7 +2661,10 @@ static void hw_swap_locked(int vsync)
                     enabled ? "on" : "off", interval);
             last_preference = enabled;
         }
-        IDXGISwapChain_Present(s_hw.swap, interval, 0);
+        HRESULT hr;
+        hr = IDXGISwapChain_Present(s_hw.swap, interval, 0);
+        if (FAILED(hr))
+            fprintf(stderr, "  [HW] Present failed: 0x%08lX\n", hr);
     }
     QueryPerformanceCounter(&t1);
     s_hw.present_ticks += (uint64_t)(t1.QuadPart - t0.QuadPart);
@@ -2631,6 +2681,14 @@ static void hw_present_locked(int vsync)
  * The completed picture was already captured into the swapchain at the flip. */
 void nv2a_hw_flush_present(void)
 {
+    if (ng_active()) {
+        if (!s_hw.ok) return;
+        EnterCriticalSection(&s_hw.lock); ng_visibility_poll(); LeaveCriticalSection(&s_hw.lock);
+        if (!s_hw.pending_present) return;
+        xbox_FramebufferLimitFrame();
+        EnterCriticalSection(&s_hw.lock); ng_present(1); LeaveCriticalSection(&s_hw.lock);
+        return;
+    }
 #if RESOT_RUNTIME_RETAIL
     if (!s_hw.ok) return;
     /* RE-SoT: visibility reports also progress in submissions without flips. */
@@ -2734,6 +2792,7 @@ static void hw_diag_sample(void)
 /* NV097_FLIP_STALL: the frame the title just finished becomes the one shown. */
 static void hw_flip(void)
 {
+    if (ng_active()) { ng_flip(); return; }
     /* RE-SoT: preserve the older frame if a submission contains two flips. */
     if (s_hw.pending_present) nv2a_hw_flush_present();
     EnterCriticalSection(&s_hw.lock);
@@ -2806,6 +2865,15 @@ static void hw_flip(void)
  * window repainted; one that is flipping presents from hw_flip instead. */
 void nv2a_hw_idle_present(void)
 {
+    if (ng_active()) {
+        if (!s_hw.ok) return;
+        EnterCriticalSection(&s_hw.lock); ng_visibility_poll(); LeaveCriticalSection(&s_hw.lock);
+        if (GetTickCount()-s_hw.last_flip_ms < 100) return;
+        EnterCriticalSection(&s_hw.lock);
+        if (!s_hw.pending_present && GetTickCount()-s_hw.last_flip_ms >= 100) { ng_compose(); ng_present(0); }
+        LeaveCriticalSection(&s_hw.lock);
+        return;
+    }
     if (!s_hw.ok)
         return;
 #if RESOT_RUNTIME_RETAIL
@@ -2828,6 +2896,11 @@ void nv2a_hw_idle_present(void)
  * window's BMP dump). Returns 0 when there is nothing to copy. */
 int nv2a_hw_readback(uint32_t *dst, uint32_t w, uint32_t h)
 {
+    if (ng_active()) {
+        int result;
+        EnterCriticalSection(&s_hw.lock); result = ng_readback(dst,w,h); LeaveCriticalSection(&s_hw.lock);
+        return result;
+    }
     D3D11_TEXTURE2D_DESC td;
     D3D11_MAPPED_SUBRESOURCE map;
     ID3D11Texture2D *stage = NULL;

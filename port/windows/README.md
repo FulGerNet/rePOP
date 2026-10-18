@@ -1,7 +1,7 @@
 # reSOT on Windows
 
-The Windows build: a 64-bit executable per target, Direct3D 11, XInput and
-XAudio2.
+The Windows build: a 64-bit executable per target, Direct3D 11 (default),
+experimental native D3D12/Vulkan for the demo, XInput and XAudio2.
 
 ## Play (portable folder)
 
@@ -53,15 +53,52 @@ threads at raised IRQL and IRQL transitions per second; the current world;
 and the last lines of this run's log. Ctrl+Shift+C or the Copy button puts
 all of it, with the last 80 log lines, on the clipboard.
 
-The settings are in the game's main menu under `reSOT Options` (demo and
-retail): Graphics has the FPS limiter (30/60/120/None), VSync, post-processing
+F7 opens/closes the restored `reSOT Options` overlay (demo and retail);
+Esc or its X button also closes it. Expand Graphics or Controls to edit
+settings. Double-click a binding to change it, right-click to clear it;
+scroll to reach the remaining actions. The overlay captures game input
+while open. F6 remains assigned to diagnostics; while options are open,
+the options surface takes display priority. The same settings remain in
+the game's main menu under `reSOT Options`:
+ Graphics has the FPS limiter (30/60/120/None), VSync, post-processing
 and the window resolution (Monitor is a borderless window on the desktop);
 each choice cycles its value. Controls has the keyboard and joystick
 bindings in three pages each; choosing a binding waits for the next key,
 mouse button or joystick input (Esc cancels), and `Reset all bindings`
 restores the defaults. The game's own timing can still limit FPS. Settings
 are saved in `resot-options.ini` beside the executable.
-Logs and shader caches are kept beside the executable. Save data stays in
+F7 Graphics selects `Direct3D 11`, `D3D12 (native)` or `Vulkan (native)`
+after restarting the game. The two native modes use SDL GPU's D3D12/Vulkan
+command encoders, with DXIL/SPIR-V shaders, native GPU resources and GPU draws.
+They do not create a D3D11 device or use D3D11On12/DXVK. NV2A vertex programs
+currently run in the CPU interpreter, so performance differs from D3D11.
+
+Run `./tools/setup-native-gpu.ps1` once before building, and again when
+upgrading from a native build without retail queries. It downloads pinned,
+SHA-256-checked SDL3/DXC SDKs and SDL3 sources, applies the published
+`port/third_party/sdl-gpu-query/` additions, then builds SDL3.dll with native
+D3D12/Vulkan occlusion queries. Visual Studio and CMake are build requirements.
+The player executable needs that SDL3.dll, its licence and `SDL3-RESOT.txt`,
+which identifies this altered SDL build. It needs no compiler or SDK.
+Host shaders are embedded at build time; DXC is not a runtime requirement.
+`tools/setup-vulkan.ps1` forwards to this installer. Existing DXVK files under
+`renderers/vulkan/` are ignored and no longer packaged.
+
+**Native backends are experimental on both demo and retail.** Retail now
+uses actual hardware visibility queries, read asynchronously after submission
+fences, with immutable reports that survive counter clears. An older SDL DLL
+without the query extension or a device without the required query capability
+produces an explicit D3D11 fallback. Demo does not enable retail's report rules.
+Border-address sampling currently clamps to the texture edge; GPU vertex-program
+translation and broader gameplay validation remain pending. Stencil support is
+still incomplete, as on the D3D11 renderer.
+
+`RESOT_RENDERER=d3d11`, `d3d12` or `vulkan` overrides the saved choice for one
+run. D3D11 stays the default. The panel reports the actual active backend,
+separately from the saved choice. Missing SDL3.dll, unsupported drivers or
+initialization failure log a D3D11 fallback. `RESOT_GPU_DEBUG=1` enables SDL's
+native GPU validation where available. Logs remain beside the executable.
+Save data stays in
 that game folder, so keep it writable.
 
 After building, `./tools/package.ps1 -Target xbox-demo` (or `xbox-retail`)
