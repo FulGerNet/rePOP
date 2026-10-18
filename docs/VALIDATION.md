@@ -92,6 +92,26 @@ to 67-78 fps where draws reach 850-1090 a frame with the executor at
 7.3-7.5 ms (no shader compiled then). **Not checked:** xbox-retail; whether
 the interpreter frames differ visibly from the GPU ones.
 
+**Batch reuse across frames (xbox-demo).** Batch reuse was limited to one
+frame, so static meshes were converted and uploaded every frame; 89% of
+batches missed. A batch now stays valid while the vertex/index ring
+generation that holds it lasts (rings 64 MB / 8 MB, 8192 entries), and its
+source range is hashed in full -- from its lowest to its highest index, once
+per executed segment -- instead of 64 sampled dwords (`nv2a_hw_d3d11.inc`,
+`RESOT_RUNTIME_DEMO`). Hashing from vertex 0 put `hw_reuse_key` at 56-60% of
+the executor and 47 fps; from the lowest index it is 6-8%. **Run:** the
+scripted 80 s run above. **Seen:** reuse about 80% (3.4 M hits, 0.77 M
+misses), 7-14 thousand vertices uploaded a frame instead of 50-80 thousand,
+executor 3.4-4.3 ms at 478-655 draws (before 4.4-4.9 ms at 400-470). The user
+played the garden (`05_GP14_Jardin`): steady 93-100 fps at about 880 draws
+(was 67-78), executor 5.4 ms, title 5.3 ms; drops to about 43 fps while the
+level loads (title 15-20 ms a frame) and the user still finds the drops too
+deep. **Not checked:** a visual comparison frame by frame; xbox-retail.
+
+What is left is the lockstep: a frame costs the title's time plus the
+executor's. Overlapping them needs the executor to own what it has not yet
+consumed (see the three failed attempts above).
+
 ## 2026-10-18 (later): launcher finds both games; blue restyle
 
 The launcher now keeps one folder per game (`[Launcher] DemoDir`,

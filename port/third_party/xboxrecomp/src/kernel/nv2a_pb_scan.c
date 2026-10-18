@@ -268,6 +268,7 @@ static uint32_t pb_walk(uint32_t va, uint32_t end_va, int in_call,
 #include <windows.h>
 #endif
 uint64_t g_nv2a_exec_ticks;     /* RE-SoT: QPC ticks spent in nv2a_pb_scan_to */
+uint32_t g_nv2a_scan_serial;    /* RE-SoT: one per executed segment (hw_span_hash) */
 
 static void pb_scan_to(uint32_t start_va, uint32_t put_va);
 
@@ -275,6 +276,7 @@ void nv2a_pb_scan_to(uint32_t start_va, uint32_t put_va)
 {
 #if defined(_WIN32)
     LARGE_INTEGER t0, t1;
+    g_nv2a_scan_serial++;
     QueryPerformanceCounter(&t0);
     pb_scan_to(start_va, put_va);
     QueryPerformanceCounter(&t1);

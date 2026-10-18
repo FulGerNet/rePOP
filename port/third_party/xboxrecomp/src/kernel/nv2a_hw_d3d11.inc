@@ -63,8 +63,15 @@ extern int   xbox_FramebufferOverlayGet(const uint32_t **px, uint32_t *w,
 #define HW_MAX_DEPTHS   16
 #define HW_MAX_TEXTURES 1024
 #define HW_MAX_VERTS    (NV_MAX_INDICES * 3)
+#if RESOT_RUNTIME_DEMO
+/* RE-SoT: larger rings on the demo, so batches reused across frames (see
+ * HwReuse) stay in them for many frames before a wrap discards them. */
+#define HW_VB_BYTES     (64u << 20)     /* vertex ring, appended NO_OVERWRITE */
+#define HW_IB_BYTES     (8u << 20)      /* index ring, likewise */
+#else
 #define HW_VB_BYTES     (16u << 20)     /* vertex ring, appended NO_OVERWRITE */
 #define HW_IB_BYTES     (2u << 20)      /* index ring, likewise */
+#endif
 #define HW_VSP_MAX      192             /* translated vertex programs kept */
 #define HW_VSP_SLOTS    8               /* attributes a translated program reads */
 
@@ -1882,8 +1889,22 @@ static int hw_skip_postprocess(const Nv2aVshOutput *v, uint32_t n)
  * re-converting them held the executor to 26 fps; reuse measured 43 fps.
  * Retail's own instancing was not profiled before this port. A batch whose index list,
  * attribute layout and sampled source bytes match one already uploaded in
- * this frame and ring generation draws from those host ranges instead. */
+ * this frame and ring generation draws from those host ranges instead.
+ *
+ * RE-SoT (xbox-demo): across frames too. With reuse limited to one frame,
+ * 89% of batches missed (bath fight and hourglass room, 2026-10-18) and every
+ * static mesh of the level was converted and uploaded again each frame: the
+ * executor reached 7.3 ms a frame at 850-1300 draws, 67-90 fps. A batch now
+ * stays valid while the ring generation that holds it lasts, and its source
+ * bytes are hashed in full, not sampled, so a vertex that changed is a miss
+ * rather than a stale draw. */
+#if RESOT_RUNTIME_DEMO
+#define HW_REUSE_ENTRIES 8192
+#define HW_REUSE_ACROSS_FRAMES 1
+#else
 #define HW_REUSE_ENTRIES 1024
+#define HW_REUSE_ACROSS_FRAMES 0
+#endif
 typedef struct {
     uint64_t key;
     uint32_t content, frame, vb_gen, ib_gen, vb_off, ib_off, ni, n, prim, nslot;
@@ -1902,6 +1923,39 @@ static uint32_t hw_attr_bytes(const VertexAttr *a)
     }
 }
 
+#if HW_REUSE_ACROSS_FRAMES
+/* Every byte of a source range, eight at a time: a reuse can be many frames
+ * old. Instanced batches share one array (about 1300 vegetation draws a
+ * frame in the demo's first level), and hashing it again for each one put
+ * 56-60% of the executor in hw_reuse_key; a range is hashed once per
+ * executed segment. The title does not write vertex data while a segment it
+ * kicked is being executed (KickOff waits for the executor). */
+extern uint32_t g_nv2a_scan_serial;
+#define HW_SPAN_MEMO 512
+static struct { uint32_t offset, words, serial, hash; } s_hw_span_memo[HW_SPAN_MEMO];
+
+static uint32_t hw_span_hash(uint32_t offset, uint32_t words, const uint8_t *p)
+{
+    uint32_t slot = ((offset >> 4) ^ (words * 2654435761u)) & (HW_SPAN_MEMO - 1);
+    uint64_t c64 = 14695981039346656037ull;
+    uint32_t q, quads = words / 2, h;
+
+    if (s_hw_span_memo[slot].offset == offset && s_hw_span_memo[slot].words == words
+        && s_hw_span_memo[slot].serial == g_nv2a_scan_serial)
+        return s_hw_span_memo[slot].hash;
+    for (q = 0; q < quads; q++)
+        c64 = (c64 ^ ((const uint64_t *)p)[q]) * 1099511628211ull;
+    if (words & 1)
+        c64 = (c64 ^ ((const uint32_t *)p)[words - 1]) * 1099511628211ull;
+    h = (uint32_t)(c64 ^ (c64 >> 32));
+    s_hw_span_memo[slot].offset = offset;
+    s_hw_span_memo[slot].words = words;
+    s_hw_span_memo[slot].serial = g_nv2a_scan_serial;
+    s_hw_span_memo[slot].hash = h;
+    return h;
+}
+#endif
+
 /* Key: primitive, layout and the whole index list. Content: every dword of
  * a small source range, 64 spread dwords of a large one. Returns 0 when the
  * batch cannot be checked (inline arrays, memory outside the guest RAM). */
@@ -1910,12 +1964,13 @@ static int hw_reuse_key(const uint8_t *slot_attr, uint32_t nslot,
 {
     const uint8_t *mem = (const uint8_t *)xbox_GetMemoryOffset();
     uint64_t h = 1469598103934665603ull;
-    uint32_t c = 2166136261u, i, a, n = s_gpu.idx_count, top = 0;
+    uint32_t c = 2166136261u, i, a, n = s_gpu.idx_count, top = 0, lo = 0xFFFFu;
     if (s_gpu.inline_active)
         return 0;
     for (i = 0; i < n; i++) {
         uint16_t ix = s_gpu.idx[i];
         if (ix > top) top = ix;
+        if (ix < lo) lo = ix;
         h = (h ^ ix) * 1099511628211ull;
     }
     h = (h ^ ((uint64_t)n << 8 | s_gpu.prim)) * 1099511628211ull;
@@ -1930,10 +1985,21 @@ static int hw_reuse_key(const uint8_t *slot_attr, uint32_t nslot,
             return 0;
         p = mem + at->offset;
         words = span / 4;
+#if HW_REUSE_ACROSS_FRAMES
+        {
+            /* Only the vertices the batch can reach: from its lowest index,
+             * not from vertex 0 of an array shared by the whole level. */
+            uint32_t first = lo * at->stride;
+            c = (c ^ hw_span_hash(at->offset + first, (span - first) / 4,
+                                  p + first)) * 16777619u;
+        }
+        (void)step; (void)w;
+#else
         step = words > 4096 / 4 ? words / 64 : 1;
         for (w = 0; w < words; w += step)
             c = (c ^ ((const uint32_t *)p)[w]) * 16777619u;
         if (words) c = (c ^ ((const uint32_t *)p)[words - 1]) * 16777619u;
+#endif
     }
     *key = h;
     *content = c;
@@ -1949,7 +2015,8 @@ static int hw_reuse_match(const HwReuse *e, uint64_t key, uint32_t content,
                           const uint8_t *slot_attr, uint32_t nslot)
 {
     uint32_t a;
-    if (e->key != key || e->content != content || e->frame != s_hw.frame
+    if (e->key != key || e->content != content
+        || (!HW_REUSE_ACROSS_FRAMES && e->frame != s_hw.frame)
         || e->vb_gen != s_hw_vb_gen || e->ib_gen != s_hw_ib_gen
         || e->n != s_gpu.idx_count || e->prim != s_gpu.prim || e->nslot != nslot)
         return 0;
