@@ -7,6 +7,7 @@ entry point to d3dcompiler_47.dll, the way the backend assembles them:
 
     common + main                     vs_main, vs_blit, ps_main, ps_blit, ps_debug, ps_solid
     common + program head + body + tail    vs_prog (a translated vertex program)
+    common + uber                     vs_uber (native encoders' program interpreter)
 
 The body of vs_prog comes from the title's own vertex programs at run time;
 here a stand-in exercises every helper the translator can emit.
@@ -76,6 +77,8 @@ def check(dll, target):
     program = (common + embedded(text, "s_hw_hlsl_vsp_head") + SAMPLE_BODY
                + embedded(text, "s_hw_hlsl_vsp_tail"))
     failed += compile_entry(dll, program, "vs_prog", "vs_4_0")
+    # The native encoders' offline program interpreter (build-native-shaders.py).
+    failed += compile_entry(dll, common + embedded(text, "s_hw_hlsl_uber"), "vs_uber", "vs_4_0")
     return failed
 
 

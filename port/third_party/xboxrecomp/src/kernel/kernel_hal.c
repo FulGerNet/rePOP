@@ -12,6 +12,7 @@
  */
 
 #include "kernel.h"
+#include "resot_runtime.h" /* RE-SoT: demo interrupt dispatch restoration. */
 #include "xbox_memory_layout.h"   /* RECOMP_TLS, g_fs_base */
 #include <stdio.h>
 #include <stdlib.h>
@@ -307,6 +308,15 @@ int xbox_IrqlEnterInterrupt(int level)
 void xbox_IrqlLeaveInterrupt(int saved)
 {
     if (g_current_irql != (KIRQL)saved) {
+#if RESOT_RUNTIME_DEMO
+        /* RE-SoT: demo 0x002EF6CD services DirectSound voice lists. An ISR
+         * may lower below DISPATCH_LEVEL and raise again, taking a recursive
+         * guest dispatch reference. Restore that edge too: otherwise the
+         * outer dispatcher's Leave drops only its own reference, permanently
+         * stranding the lock on the ISR thread (Android log: tid 1004).
+         * A subsequent timed-out guest raise then edits these lists unlocked. */
+        dispatch_guest_edge(g_current_irql, (KIRQL)saved);
+#endif
         irql_track(g_current_irql, (KIRQL)saved, IRQL_CALLER());
         g_current_irql = (KIRQL)saved;
         irql_publish();

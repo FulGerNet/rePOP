@@ -1430,7 +1430,19 @@ VOID OutputDebugStringA(LPCSTR str)
     if (str) fputs(str, stderr);
 }
 
-VOID ExitProcess(UINT exitCode) { exit((int)exitCode); }
+VOID ExitProcess(UINT exitCode)
+{
+#if defined(__ANDROID__)
+    /* RE-SoT: match Win32 process termination while SDL/audio and the log
+     * flusher are live. exit() destroys shared-library mutexes under those
+     * threads, causing Android FORTIFY aborts on a normal guest exit. */
+    fflush(stdout);
+    fflush(stderr);
+    _exit((int)exitCode);
+#else
+    exit((int)exitCode);
+#endif
+}
 
 BOOL IsDebuggerPresent(void)
 {

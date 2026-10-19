@@ -22670,12 +22670,12 @@ loc_00116629: ;
 }
 
 /**
- * sub_00116660
+ * sub_00116660_gen
  * Original: 0x00116660 - 0x0011679A (314 bytes, 89 insns)
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00116660(void)
+void sub_00116660_gen(void)
 {
     extern void sub_00116660_enter(void);
     sub_00116660_enter();

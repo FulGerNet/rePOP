@@ -47,6 +47,19 @@ signed with the building computer's debug key; it contains the C lifted from
 the user's own XBEs and is, like the Windows executables, a local build for
 the owner of the discs.
 
+**libadrenotools / liblinkernsbypass (Android only).**
+The Android build fetches [libadrenotools](https://github.com/bylaws/libadrenotools)
+at commit `8fae8ce254dfc1344527e05301e43f37dea2df80` and its pinned
+liblinkernsbypass submodule (`aa3975893d83ef1bc84c321ec60c65fbf1287887`).
+Both carry the BSD 2-Clause licence, copyright Billy Laws. Their notices are
+packaged as `assets/licenses/LICENSE-libadrenotools.txt` and
+`LICENSE-liblinkernsbypass.txt`. Upstream source is fetched unchanged under
+ignored `build/deps`; the app links the loader and packages its shared hooks.
+The altered SDL Android loader entry-point bridge is applied by
+`tools/patch-sdl-android-driver.py` in addition to the query patch described
+above. No third-party custom GPU driver package is distributed in the APK;
+users import those separately, under the package's own terms.
+
 **DirectXShaderCompiler v1.9.2609**
 (https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.9.2609)
 is a build dependency only. Its official checked SDK is installed under

@@ -120,6 +120,7 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
         case LauncherView.BTN_DEMO: start(0); break;
         case LauncherView.BTN_GAME: start(1); break;
         case LauncherView.BTN_ISO: pickIso(); break;
+        case LauncherView.BTN_DRIVER: GpuDrivers.show(this); break;
         case LauncherView.BTN_GITHUB:
             try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_URL))); }
             catch (ActivityNotFoundException ignored) {}
@@ -167,6 +168,9 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request==GpuDrivers.PICK_DRIVER && result==RESULT_OK && data!=null && data.getData()!=null) {
+            GpuDrivers.install(this,data.getData()); return;
+        }
         if (request != PICK_ISO || result != RESULT_OK || data == null || data.getData() == null) return;
         beginInstall(data.getData());
     }

@@ -2,7 +2,7 @@
 # diagnostics under logs/. -Seconds 0 runs until the game exits.
 #
 #   .\tools\run.ps1                              # the demo, full screen; keyboard, mouse or pad
-#   .\tools\run.ps1 -Windowed                    # in a window (Alt+Enter / F11 switch while running)
+#   .\tools\run.ps1 -Windowed                    # in a window (F11 switches while running)
 #   .\tools\run.ps1 -Aspect 4:3                  # the original picture shape
 #   .\tools\run.ps1 -Target xbox-retail
 #   .\tools\run.ps1 -Seconds 180 -SnapshotEvery 5 -Pad `

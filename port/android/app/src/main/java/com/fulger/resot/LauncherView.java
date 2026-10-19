@@ -33,7 +33,7 @@ import java.util.Random;
  */
 final class LauncherView extends View {
     static final int W = 1000, H = 640;
-    static final int BTN_DEMO = 0, BTN_GAME = 1, BTN_ISO = 2, BTN_GITHUB = 3, BTN_CLOSE = 4, BTN_CANCEL = 5, BTN_COUNT = 6;
+    static final int BTN_DEMO = 0, BTN_GAME = 1, BTN_ISO = 2, BTN_GITHUB = 3, BTN_CLOSE = 4, BTN_CANCEL = 5, BTN_DRIVER = 6, BTN_COUNT = 7;
     private static final int LOGO_Y = 30, LOGO_SIZE = 178, TITLE_Y = 206, BTN_W = 310, BTN_H = 64, BTN_Y = 382;
     private static final int N_SAND = 240;
 
@@ -82,6 +82,7 @@ final class LauncherView extends View {
         buttons[BTN_GITHUB] = new RectF(40, H - 62, 330, H - 34);
         buttons[BTN_CLOSE] = new RectF(W - 66, 32, W - 32, 66);
         buttons[BTN_CANCEL] = new RectF((W - BTN_W) / 2f, 512, (W + BTN_W) / 2f, 512 + BTN_H);
+        buttons[BTN_DRIVER] = new RectF(380,H-62,690,H-34);
         for (float[] s : sand) spawn(s, true);
         setFocusable(true);
         setFocusableInTouchMode(true);
@@ -98,6 +99,7 @@ final class LauncherView extends View {
         enabled[BTN_DEMO] = state.installed[0];
         enabled[BTN_GAME] = state.installed[1];
         enabled[BTN_ISO] = enabled[BTN_GITHUB] = enabled[BTN_CLOSE] = enabled[BTN_CANCEL] = true;
+        enabled[BTN_DRIVER] = true;
         if (!enabled[focus] || !visible(focus))
             focus = state.extracting ? BTN_CANCEL : enabled[BTN_DEMO] ? BTN_DEMO : enabled[BTN_GAME] ? BTN_GAME : BTN_ISO;
         invalidate();
@@ -358,6 +360,8 @@ final class LauncherView extends View {
                  290, sans, 14, gh ? 0xFFEBF5FF : 0xFF8CB9F5, Paint.Align.LEFT, false);
             text(canvas, "Install from ISO…  ▸", buttons[BTN_ISO].left, buttons[BTN_ISO].centerY(),
                  210, sans, 14, iso ? 0xFFEBF5FF : 0xFF8CB9F5, Paint.Align.RIGHT, false);
+            text(canvas,"GPU driver…",buttons[BTN_DRIVER].centerX(),buttons[BTN_DRIVER].centerY(),310,sans,14,
+                 hover==BTN_DRIVER||focus==BTN_DRIVER?0xFFEBF5FF:0xFF6EA5F0,Paint.Align.CENTER,false);
             if (gh) glowLine(canvas, buttons[BTN_GITHUB].left + 20, buttons[BTN_GITHUB].bottom - 3,
                              buttons[BTN_GITHUB].left + 220, buttons[BTN_GITHUB].bottom - 3, 0x78BEFF, 0.8f);
             if (iso) glowLine(canvas, buttons[BTN_ISO].left + 60, buttons[BTN_ISO].bottom - 3,
@@ -399,7 +403,7 @@ final class LauncherView extends View {
     @Override public boolean performClick() { super.performClick(); return true; }
 
     private void moveFocus(int step) {
-        int[] order = state.extracting ? new int[] { BTN_CANCEL } : new int[] { BTN_DEMO, BTN_GAME, BTN_ISO, BTN_GITHUB };
+        int[] order = state.extracting ? new int[] { BTN_CANCEL } : new int[] { BTN_DEMO, BTN_GAME, BTN_ISO, BTN_DRIVER, BTN_GITHUB };
         int at = 0;
         for (int i = 0; i < order.length; i++) if (order[i] == focus) at = i;
         for (int i = 1; i <= order.length; i++) {

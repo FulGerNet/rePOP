@@ -32,10 +32,20 @@ public class GameActivity extends SDLActivity {
     @Override protected String[] getArguments() {
         java.io.File files = getExternalFilesDir(null);
         String game = getIntent().getStringExtra(EXTRA_GAME_DIR);
-        return new String[] {
+        if(retail() && game!=null) {
+            java.io.File base=files!=null?files:getFilesDir();
+            try { SaveFolders.prepare(new java.io.File(game),new java.io.File(base,"saves/xbox-retail")); }
+            catch(java.io.IOException e) {
+                // Abort before guest writes rather than hide a failed migration.
+                throw new IllegalStateException("Cannot migrate retail saves",e);
+            }
+        }
+        java.util.ArrayList<String> args = new java.util.ArrayList<>(java.util.Arrays.asList(
             "--game", game != null ? game : "",
-            "--data", files != null ? files.getAbsolutePath() : getFilesDir().getAbsolutePath()
-        };
+            "--data", files != null ? files.getAbsolutePath() : getFilesDir().getAbsolutePath(),
+            "--native-libs", getApplicationInfo().nativeLibraryDir));
+        GpuDrivers.addArguments(this,args);
+        return args.toArray(new String[0]);
     }
 
     @Override protected void onCreate(Bundle savedInstanceState) {

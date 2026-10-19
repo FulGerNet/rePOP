@@ -679,6 +679,18 @@ void sub_0023FCA0_enter(void)
  * slot 1, thiscall, ret 4), would queue the descriptor for the menu AI. Ours
  * are taken here and never queued. */
 #include "../../port/windows/src/options.h"
+extern void sub_000C05D0_gen(void);
+/* Demo XBE: 0x000C05D0 normalizes an int16 stick pair at ECX to EAX's
+ * float[2], including the original radial deadzone. 0x000C08A3 is the left
+ * pair; return 0x000C08B2 is the right pair (ESI-180). Scale only that result
+ * after normalization so keyboard full deflection can exceed 1.0 safely. */
+void sub_000C05D0(void)
+{
+    uint32_t output=g_eax, ret=GMEM32(g_esp);
+    sub_000C05D0_gen();
+    if(ret==0x000C08B2u)
+        resot_scale_look((float *)((uintptr_t)g_xbox_mem_offset+output));
+}
 extern uint32_t xbox_ContiguousAlloc(uint32_t size, uint32_t alignment);
 extern void sub_001104E0_gen(void);
 extern void sub_00061470_gen(void);
@@ -689,7 +701,7 @@ extern void sub_0023FCA0(void);
 #define RESOT_TEXT_SLOT     96u
 #define RESOT_TEXTS         80u
 enum { T_ROOT, T_GRAPHICS, T_CONTROLS, T_KEY0, T_KEY1, T_KEY2, T_JOY0, T_JOY1, T_JOY2,
-       T_RESET, T_GFX = 10, T_KEYS = 20, T_JOYS = 50 };
+       T_RESET, T_GFX = 10, T_LOOK = 15, T_KEYS = 20, T_JOYS = 50 };
 static const char *const s_static_texts[] = {
     "reSOT Options", "Graphics", "Controls",
     "Keyboard: move and fight", "Keyboard: actions", "Keyboard: menus and camera",
@@ -704,6 +716,8 @@ static void resot_text(uint32_t index, char *out, unsigned size)
         snprintf(out, size, "%s", s_static_texts[index]);
     else if (index >= T_GFX && index < T_GFX + RESOT_NATIVE_GRAPHICS_ITEMS)
         resot_native_label(RESOT_NATIVE_GRAPHICS, (int)(index - T_GFX), out, size);
+    else if (index == T_LOOK)
+        resot_native_label(RESOT_NATIVE_CONTROLS, 0, out, size);
     else if (index >= T_KEYS && index < T_KEYS + RESOT_NATIVE_ACTIONS)
         resot_native_label(RESOT_NATIVE_KEYS, (int)(index - T_KEYS), out, size);
     else if (index >= T_JOYS && index < T_JOYS + RESOT_NATIVE_ACTIONS)
@@ -759,10 +773,11 @@ static void native_layout(void)
     p->n = RESOT_NATIVE_GRAPHICS_ITEMS;
     for (i = 0; i < p->n; i++)
         native_choice(p, i, T_GFX + (uint32_t)i, DO_MSG, (int)MSG_ID(P_GFX, i));
-    p = &s_pages[P_CTRL]; p->title = T_CONTROLS; p->top = 0.26f; p->step = 0.05f; p->n = 7;
+    p = &s_pages[P_CTRL]; p->title = T_CONTROLS; p->top = 0.26f; p->step = 0.05f; p->n = 8;
+    native_choice(p, 0, T_LOOK, DO_MSG, (int)MSG_ID(P_CTRL, 0));
     for (i = 0; i < 6; i++)
-        native_choice(p, i, T_KEY0 + (uint32_t)i, DO_OPEN, P_K0 + i);
-    native_choice(p, 6, T_RESET, DO_MSG, (int)MSG_RESET);
+        native_choice(p, i + 1, T_KEY0 + (uint32_t)i, DO_OPEN, P_K0 + i);
+    native_choice(p, 7, T_RESET, DO_MSG, (int)MSG_RESET);
     for (i = 0; i < 6; i++) {
         int joy = i >= 3, part = i % 3;
         p = &s_pages[P_K0 + i];
@@ -944,6 +959,8 @@ void sub_00061470(void)
         resot_native_reset_bindings();
     else if ((id >> 8) == P_GFX)
         resot_native_activate(RESOT_NATIVE_GRAPHICS, (int)(id & 0xFF));
+    else if ((id >> 8) == P_CTRL)
+        resot_native_activate(RESOT_NATIVE_CONTROLS, (int)(id & 0xFF));
     else if ((id >> 8) >= P_K0 && (id >> 8) <= P_J2)
         resot_native_activate((id >> 8) >= P_J0 ? RESOT_NATIVE_JOY : RESOT_NATIVE_KEYS,
                               (int)(id & 0xFF));

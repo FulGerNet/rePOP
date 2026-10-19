@@ -10,6 +10,7 @@
 #include "nv2a_vsh_interp.h"
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 enum { T = 1, V = 2, C = 3 };             /* source mux */
 #define XYZW 0x1B                         /* swizzle x,y,z,w */
@@ -63,6 +64,28 @@ int main(void)
                o.pos[0], o.pos[1], o.pos[2], o.pos[3]);
         return 1;
     }
-    puts("ok");
+    /* RE-SoT: unused inputs may be absent from the CPU fetch path. Decode
+     * invalidation must follow start-slot changes and partial word uploads. */
+    {
+        uint32_t mov[4] = {0};
+        mov[1] = (1u << 21) | (7u << 9);
+        src(mov,0,V,0,XYZW);
+        mov[3] = (15u << 12) | (1u << 11) | 1u;
+        nv2a_vsh_set_instruction(10,mov);
+        nv2a_vsh_set_start_slot(10);
+        if (nv2a_vsh_input_mask() != (1u << 7)) return 2;
+        for (int i=0;i<16;i++) for (int j=0;j<4;j++) in[i][j]=NAN;
+        in[7][0]=3; in[7][1]=4; in[7][2]=5; in[7][3]=1;
+        if (!nv2a_vsh_run((const float (*)[4])in,&o) || memcmp(o.pos,in[7],16)) return 3;
+        mov[1] = (1u << 21) | (2u << 9) | XYZW;
+        nv2a_vsh_set_load_slot(10);
+        for (int j=0;j<4;j++) nv2a_vsh_program_word(mov[j]);
+        if (nv2a_vsh_input_mask() != (1u << 2)) return 4;
+        in[2][0]=9; in[2][1]=8; in[2][2]=7; in[2][3]=1;
+        if (!nv2a_vsh_run((const float (*)[4])in,&o) || memcmp(o.pos,in[2],16)) return 5;
+        nv2a_vsh_set_start_slot(NV2A_VSH_SLOTS);
+        if (nv2a_vsh_input_mask() || nv2a_vsh_run((const float (*)[4])in,&o)) return 6;
+    }
+    puts("epilogue, sparse inputs and program-cache invalidation passed");
     return 0;
 }

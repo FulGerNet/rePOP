@@ -7,10 +7,10 @@ encoder on Vulkan, the same code as the Windows build's optional Vulkan
 renderer (`port/third_party/xboxrecomp/src/kernel/nv2a_hw_native.inc`); there
 is no Direct3D 11 on Android.
 
-**State: first build.** The APK builds and both game libraries link
-(see [VALIDATION.md](../../docs/VALIDATION.md)). It has not yet been run on a
-device: boot, rendering, audio, input and the ISO installation are unverified
-on Android.
+**State: device validation in progress.** User logs show both games running
+on Android. The 2026-10-19 demo log ends in an audio-service crash; the retail
+log shows severe frame-rate drops. Save/load persistence and the latest
+corrections still need device validation; see [VALIDATION.md](../../docs/VALIDATION.md).
 
 ## What is in the APK
 
@@ -88,14 +88,97 @@ Without one, an overlay is drawn over the game (`TouchControls.java`):
 | | right stick click | reset camera |
 | | START / BACK, d-pad | pause, back, menus |
 | top centre (eye) | | tap: show/hide the overlay; hold: move the controls, then SAVE (RESET restores) |
-| top left FPS | | the FPS / current WOW panel (F5 on Windows) |
+| top left FPS | | the FPS / current WOW / active Renderer panel (F5 on Windows) |
 
 The overlay hides itself when a controller is connected. The game's rumble
 drives the controller, or the phone's vibrator. The Android back key is B.
 A hardware keyboard and mouse work with the Windows layout (WASD, Space,
 mouse buttons...). The game's own reSOT Options pages (FPS limit, VSync,
 post-processing, keyboard and joystick bindings) work as on Windows and are
-saved in `resot-options.ini`; the resolution is the device's.
+saved in `resot-options.ini`. On Android, the resolution entry cycles the
+**internal rendering resolution**, without resizing the fullscreen surface:
+240p (0.5x), 360p (0.75x), 480p (1x), 720p (1.5x), 1080p (2.25x), and
+1440p (3x), relative to the game's 480-line view. Width follows the aspect
+ratio. The default is now **480p/1x** (previous Android rendering used 2x).
+The INI key is `[Graphics] InternalResolutionPercent=100` (allowed values:
+50, 75, 100, 150, 225, 300). A change takes effect when the next guest render
+target is used. Postprocess targets retain their guest resolution, movies
+retain their decoded size, and final presentation still fills the device.
+Lower internal resolutions reduce GPU pixel work only.
+**Look sensitivity** is in **reSOT Options → Controls** in both games:
+25–200% in steps of 25, with 100% retaining the original speed. It applies
+to controller, keyboard/mouse and the touch camera, after the game's original
+stick deadzone; movement sensitivity is unchanged. The setting is stored as
+`[Controls] LookSensitivityPercent`, and the same option is in Windows F7.
+Android now selects Hor+ from the fullscreen drawable's width/height before
+starting either game (for example, a 2400x1080 drawable uses 20:9). Projection
+and culling widen together; the existing HUD policy keeps its proportions.
+The selected dimensions and aspect are logged at startup. An explicit
+`RECOMP_HW_ASPECT` override takes precedence. Windows keeps its 16:9 default;
+this automatic choice follows the Android device's drawable at game startup.
+Windows now exposes the same internal resolution choices in the main menu
+and F7; F11 alone changes fullscreen/window mode.
+Android defaults to `PostProcessing=0` in `[Graphics]` to reduce GPU work;
+Windows keeps `PostProcessing=1`. An existing saved value takes precedence:
+set it to `0` in an existing Android INI or turn it off in the game's options.
+Retail's option-label refresh now reads its text-object metadata on Android;
+previously that metadata probe was implemented only on Windows, so values
+appeared stale until the page reopened. Device validation of this correction
+is pending.
+
+The shared native renderer services live movie overlays at the presentation
+thread's cadence instead of the generic 100-ms idle repaint interval. NV2A
+vertex programs now run on the GPU (`vs_uber`, compiled offline to SPIR-V, so
+no shader compiler is needed on the phone); in earlier device logs the CPU
+interpreter took 17–49 ms of every frame. With that APK the phone then waited
+31–90 ms a frame for the GPU: the vertex and pixel shaders indexed local
+register arrays, which Adreno keeps in slow private memory. The named-register
+rewrite then compiled so slowly on Adreno that the screen stayed black for a
+long time after the intro movies. Android therefore now runs vertex programs
+on the CPU spread over worker threads (`[VSH] CPU vertex programs: N worker
+thread(s)` in the log; on Windows, 6 threads cut the interpreter from about
+12 to 4.3 ms a frame), with the original pixel shader (`ps_main_arr`).
+Windows keeps the GPU interpreter. The phone then showed two more costs: up
+to a second to create each pipeline of the main pixel shader, on every run,
+and worker threads woken through semaphores costing more than they saved.
+Pipelines are now kept in a `VkPipelineCache` saved as `vulkan-pipelines.bin`
+in the game's data folder; with it the driver compiled the main pixel shader
+once (320 ms) and reused it for every later pipeline (0.3-0.5 ms), even on
+the first run. Spinning worker threads then stalled the renderer, so Android
+is back on the same path as Windows: vertex programs on the GPU (`vs_uber`),
+no vertex worker threads, and pixels sampling only the textures a draw binds.
+Device frame rate with this APK is not yet validated; `[HW native] pipeline …
+created in … ms` lines show driver compile times. The startup log line `[HW] active renderer`
+says whether programs run on the GPU or the CPU. Native timing logs
+distinguish movie composition Hz from guest frame rate.
+
+## Custom Adreno Vulkan drivers
+
+The Android launcher has **GPU driver…** → **Install driver ZIP…**, plus
+**Use system driver** and **Use installed**. Import a driver package compatible
+with your GPU and Android version (for example, a suitable Turnip package for
+Adreno 750). The ZIP must contain `meta.json` at its root, with `name`,
+`libraryName` and optionally `minApi`, and the named arm64 `.so`. reSOT does
+not download or include a custom GPU driver and does not install anything
+into Android's system driver folders. Changes apply on the next game start.
+
+The importer validates paths, duplicate entries, size/entry limits and ELF
+architecture, then stores the package in app-private internal storage.
+Previous imported directories are retained because a running game may still
+have libraries mapped from them. Selecting the system driver leaves the
+installed package available for later comparison.
+
+The app uses [libadrenotools](https://github.com/bylaws/libadrenotools), pinned
+to `8fae8ce254dfc1344527e05301e43f37dea2df80`, with liblinkernsbypass pinned
+by its submodule. SDL's Android Vulkan entry-point lookup is patched by
+`tools/patch-sdl-android-driver.py` to use the isolated loader; the hooks are
+extracted into `nativeLibraryDir` (`useLegacyPackaging=true`). A failed loader
+or device-enumeration probe leaves the system loader selected. A driver may
+still fail later or fall back internally; check `[DRIVER]` in the game log and
+adrenotools messages in logcat. No custom-driver speedup has been measured here.
+
+This driver selector exists only on Android, as requested; the Windows
+launcher has no Android driver-loading facility.
 
 ## Build
 
@@ -134,3 +217,21 @@ release key before handing it to anyone.
 The guest's 4 GB address space is reserved in one piece (PROT_NONE) before
 anything is mapped into it, because an Android process has the ART heap and
 its libraries in places a fixed Xbox aperture could otherwise hit.
+
+Retail saves and profiles are ordinary files under
+`Android/data/com.fulger.resot/files/saves/xbox-retail/UDATA/5553001d/`.
+Title data lives in the adjacent `TDATA` folder. On the first launch after
+updating, files from the installed game's `UDATA`/`TDATA` and the old
+`UserData`/`TitleData` folders are copied when missing; originals and newer
+destination files are preserved. No reinstall or data clearing is needed.
+
+Synthetic sparse `Partition0.img` through `Partition5.img` are now kept in
+`saves/xbox-retail/.devices/` for bare Xbox disk requests. They contain boot
+and utility-device compatibility data, not the profile/save folders.
+Old root-level images are retained; they are not migrated or used as save files.
+The raw partition table and utility/cache devices are required during XAPI
+startup. Directory opens used to query a partition's free space use the image's
+parent directory; byte reads still use the image. Random-access writes, relative directory opens and flush error reporting
+were corrected for Android retail. Host regression tests pass; save/create,
+close-app, reopen and load must still be checked on the phone. The demo's
+storage path has not received this retail-specific change.

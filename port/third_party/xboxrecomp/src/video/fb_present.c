@@ -135,6 +135,19 @@ static volatile LONG s_frame_draws;
 static volatile LONG s_debug_panel;
 static void (*s_wow_provider)(char *, size_t);
 
+/* RE-SoT: report the backend that initialized successfully, including a
+ * native-backend fallback, rather than the saved renderer preference. */
+extern int nv2a_hw_backend(void);
+static const char *fb_renderer_name(void)
+{
+    switch (nv2a_hw_backend()) {
+    case 11: return "Direct3D 11";
+    case 12: return "Direct3D 12";
+    case 100: return "Vulkan";
+    default: return "Software";
+    }
+}
+
 /* RE-SoT: optional host options own the topmost panel and native input while
  * open. Callbacks keep the standalone runtime independent of the host UI. */
 static int (*s_options_panel)(const uint32_t **, uint32_t *, uint32_t *);
@@ -169,7 +182,7 @@ void xbox_FramebufferSetWowProvider(void (*provider)(char *, size_t))
 int xbox_FramebufferDebugPanelGet(const uint32_t **pixels, uint32_t *width,
                                  uint32_t *height)
 {
-    enum { PANEL_W = 280, PANEL_H = 88 }; /* RE-SoT: compact user overlay. */
+    enum { PANEL_W = 280, PANEL_H = 111 }; /* RE-SoT: include active renderer. */
     static HDC dc;
     static uint32_t *bits;
     static DWORD refreshed, sampled;
@@ -222,6 +235,9 @@ int xbox_FramebufferDebugPanelGet(const uint32_t **pixels, uint32_t *width,
         snprintf(line, sizeof line, "Current WOW: %s", scene);
         text.top = 56; text.bottom = 77;
         DrawTextA(dc, line, -1, &text, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        snprintf(line, sizeof line, "Renderer: %s", fb_renderer_name());
+        text.top = 79; text.bottom = 100;
+        DrawTextA(dc, line, -1, &text, DT_SINGLELINE | DT_NOPREFIX);
         GdiFlush();
         /* RE-SoT: GDI clears text pixels' alpha; restore opaque glyphs after
          * drawing, retaining 63% opacity on untouched background pixels. */
@@ -242,7 +258,7 @@ extern void resot_host_draw_text(uint32_t *bits, int w, int h, int x, int y,
 int xbox_FramebufferDebugPanelGet(const uint32_t **pixels, uint32_t *width,
                                  uint32_t *height)
 {
-    enum { PANEL_W = 440, PANEL_H = 88 };
+    enum { PANEL_W = 440, PANEL_H = 114 }; /* RE-SoT: same fourth row as Windows. */
     static uint32_t bits[PANEL_W * PANEL_H];
     static DWORD refreshed, sampled;
     static LONG last_flips;
@@ -270,6 +286,8 @@ int xbox_FramebufferDebugPanelGet(const uint32_t **pixels, uint32_t *width,
         resot_host_draw_text(bits, PANEL_W, PANEL_H, 12, 34, line, 0xFFEBEFF8u);
         snprintf(line, sizeof line, "Current WOW: %s", scene);
         resot_host_draw_text(bits, PANEL_W, PANEL_H, 12, 60, line, 0xFFEBEFF8u);
+        snprintf(line, sizeof line, "Renderer: %s", fb_renderer_name());
+        resot_host_draw_text(bits, PANEL_W, PANEL_H, 12, 86, line, 0xFFEBEFF8u);
         refreshed = now;
     }
     *pixels = bits; *width = PANEL_W; *height = PANEL_H;
@@ -489,6 +507,12 @@ static void fb_toggle_fullscreen(HWND h)
 
 static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
+    /* RE-SoT: keep the sole fullscreen toggle available while F7 or a
+     * binding capture consumes game input; never bind F11 to a game action. */
+    if ((m==WM_KEYDOWN || m==WM_KEYUP) && w==VK_F11) {
+        if (m==WM_KEYDOWN && !(l & (1 << 30))) fb_toggle_fullscreen(h);
+        return 0;
+    }
     /* RE-SoT: a host options panel consumes its mouse/keyboard messages and
      * releases game-held input, so opening/rebinding cannot drive the Prince. */
     if (s_options_event && s_options_event(h, m, (uintptr_t)w, (intptr_t)l)) {
@@ -506,16 +530,7 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             PostMessageA(h, WM_CLOSE, 0, 0);
             return 0;
         }
-        if (w == VK_RETURN && (l & (1 << 29)) && !(l & (1 << 30))) {
-            fb_toggle_fullscreen(h);    /* Alt+Enter, not the key repeat */
-            return 0;
-        }
-        break;
-    case WM_KEYDOWN:
-        if (w == VK_F11 && !(l & (1 << 30))) {
-            fb_toggle_fullscreen(h);
-            return 0;
-        }
+        /* RE-SoT: F11 is the only fullscreen toggle. */
         break;
     }
     switch (m) {

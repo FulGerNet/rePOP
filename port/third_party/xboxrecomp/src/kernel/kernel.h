@@ -672,7 +672,8 @@ NTSTATUS __stdcall xbox_NtWriteFile(
     PLARGE_INTEGER ByteOffset);
 
 NTSTATUS __stdcall xbox_NtClose(HANDLE Handle);
-#ifdef _WIN32
+#if defined(_WIN32) || (defined(__ANDROID__) && RESOT_RUNTIME_RETAIL)
+/* RE-SoT: abandoned Android retail profile searches also need close cleanup. */
 void xbox_dir_context_drop(HANDLE FileHandle);
 #endif
 

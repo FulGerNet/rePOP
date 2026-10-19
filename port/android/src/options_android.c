@@ -4,8 +4,8 @@
  *
  * The same settings and bindings as the Windows host (options.c), with the
  * same defaults and the same pad remapping, so a layout behaves alike on
- * both: Graphics (FPS limit, VSync, post-processing; the resolution is the
- * device's), Keyboard (a Bluetooth/USB keyboard) and Joystick. There is no
+ * both: Graphics (FPS limit, VSync, post-processing; Android's resolution
+ * controls internal rendering), Keyboard (a Bluetooth/USB keyboard) and Joystick. There is no
  * F6/F7 panel on Android; the touch controls are configured in the app
  * (TouchControls.java). */
 #include <stdint.h>
@@ -50,14 +50,18 @@ static const char *const s_native_joy[25] = {
     "L left", "L right", "R up", "R down", "R left", "R right"
 };
 static const char *const s_cap_names[] = {"30", "60", "120", "None"};
+static const int s_render_scales[] = {50,75,100,150,225,300};
+static const char *const s_render_names[] = {"240p (0.5x)","360p (0.75x)","480p (1x)","720p (1.5x)","1080p (2.25x)","1440p (3x)"};
+static int s_resolution = 2; /* Android default: guest-sized main targets. */
 
 static SRWLOCK s_lock = SRWLOCK_INIT;
 static volatile LONG s_revision;
-static int s_keys[ACTIONS], s_joy[ACTIONS], s_fps = 60, s_vsync = 1, s_post_processing = 1;
+static int s_keys[ACTIONS], s_joy[ACTIONS], s_fps = 60, s_vsync = 1, s_post_processing = 0;
 static int s_capture = -1, s_capture_tab, s_capture_armed, s_native_capture;
 static DWORD s_native_since;
 static int s_joy_was[25], s_key_was[256], s_walk, s_walk_was;
 static int s_keyboard_enabled = 1, s_mouse_speed = 43, s_walk_deflection = 12000;
+static int s_look_sensitivity = 100;
 static char s_path[1200];
 
 extern int  xbox_FramebufferKeyDown(int);
@@ -65,6 +69,7 @@ extern void xbox_FramebufferTakeMouse(int *, int *);
 extern void xbox_SetFrameLimit(int);
 extern void xbox_SetVSync(int);
 extern void xbox_SetPostProcessing(int);
+extern void xbox_SetRenderScalePercent(int);
 extern void xbox_InputSetHostFilter(void (*)(void *, unsigned));
 extern const char *resot_android_data_dir(void);
 
@@ -74,9 +79,9 @@ long resot_native_revision(void) { return InterlockedCompareExchange(&s_revision
 void resot_options_summary(char *out, unsigned size)
 {
     AcquireSRWLockShared(&s_lock);
-    snprintf(out, size, "FPS limit %s, VSync %s, post-processing %s, resolution Device",
+    snprintf(out, size, "FPS limit %s, VSync %s, post-processing %s, internal resolution %s",
              s_cap_names[s_fps == 30 ? 0 : s_fps == 60 ? 1 : s_fps == 120 ? 2 : 3],
-             s_vsync ? "on" : "off", s_post_processing ? "on" : "off");
+             s_vsync ? "on" : "off", s_post_processing ? "on" : "off",s_render_names[s_resolution]);
     ReleaseSRWLockShared(&s_lock);
 }
 
@@ -123,8 +128,9 @@ static int save_config(void)
         mark_dirty();
         return 0;
     }
-    fprintf(f, "[Graphics]\nRenderer=vulkan\nFPSLimit=%d\nVSync=%d\nPostProcessing=%d\n",
-            s_fps, s_vsync, s_post_processing);
+    fprintf(f, "[Graphics]\nRenderer=vulkan\nFPSLimit=%d\nVSync=%d\nPostProcessing=%d\nInternalResolutionPercent=%d\n",
+            s_fps, s_vsync, s_post_processing,s_render_scales[s_resolution]);
+    fprintf(f, "[Controls]\nLookSensitivityPercent=%d\n",s_look_sensitivity);
     fprintf(f, "[Keyboard]\n");
     for (i = 0; i < ACTIONS; i++) fprintf(f, "Action%d=%d\n", i, s_keys[i]);
     fprintf(f, "[Joystick]\n");
@@ -278,6 +284,14 @@ static void input(void *state, unsigned port)
 
 /* ── the game's native pages ───────────────────────────────── */
 
+void resot_scale_look(float *axes)
+{
+    AcquireSRWLockShared(&s_lock);
+    axes[0] = resot_look_value(axes[0],s_look_sensitivity);
+    axes[1] = resot_look_value(axes[1],s_look_sensitivity);
+    ReleaseSRWLockShared(&s_lock);
+}
+
 void resot_native_label(int page, int item, char *out, unsigned size)
 {
     char value[100];
@@ -287,8 +301,10 @@ void resot_native_label(int page, int item, char *out, unsigned size)
         case 0: snprintf(out, size, "FPS limit: %s", s_cap_names[s_fps == 30 ? 0 : s_fps == 60 ? 1 : s_fps == 120 ? 2 : 3]); break;
         case 1: snprintf(out, size, "VSync: %s", s_vsync ? "On" : "Off"); break;
         case 2: snprintf(out, size, "Post processing: %s", s_post_processing ? "On" : "Off"); break;
-        default: snprintf(out, size, "Resolution: Device"); break;
+        default: snprintf(out, size, "Internal resolution: %s",s_render_names[s_resolution]); break;
         }
+    } else if (page == RESOT_NATIVE_CONTROLS && item == 0) {
+        snprintf(out,size,"Look sensitivity: %d%%",s_look_sensitivity);
     } else if (item >= 0 && item < ACTIONS) {
         int joy = page == RESOT_NATIVE_JOY;
         if (s_capture == item && s_capture_tab == joy && s_native_capture)
@@ -312,8 +328,12 @@ void resot_native_activate(int page, int item)
         case 0: s_fps = s_fps == 30 ? 60 : s_fps == 60 ? 120 : s_fps == 120 ? 0 : 30; xbox_SetFrameLimit(s_fps); break;
         case 1: s_vsync = !s_vsync; xbox_SetVSync(s_vsync); break;
         case 2: s_post_processing = !s_post_processing; xbox_SetPostProcessing(s_post_processing); break;
-        default: break;   /* the device's resolution */
+        case 3: s_resolution=(s_resolution+1)%6; xbox_SetRenderScalePercent(s_render_scales[s_resolution]); break;
+        default: break;
         }
+        save_config();
+    } else if (page == RESOT_NATIVE_CONTROLS && item == 0) {
+        s_look_sensitivity = s_look_sensitivity >= 200 ? 25 : s_look_sensitivity + 25;
         save_config();
     } else if (item >= 0 && item < ACTIONS) {
         s_capture = item; s_capture_tab = page == RESOT_NATIVE_JOY; s_native_capture = 1; s_capture_armed = 0;
@@ -330,6 +350,7 @@ void resot_native_reset_bindings(void)
     memcpy(s_joy, s_default_joy, sizeof s_joy);
     s_capture = -1; s_native_capture = 0; s_walk = s_walk_was = 0;
     save_config();
+    mark_dirty();
     ReleaseSRWLockExclusive(&s_lock);
 }
 
@@ -346,11 +367,18 @@ void resot_options_init(void)
     if (s_walk_deflection < 1000) s_walk_deflection = 1000;
     if (s_walk_deflection > 32767) s_walk_deflection = 32767;
     snprintf(s_path, sizeof s_path, "%s/resot-options.ini", resot_android_data_dir());
+    s_look_sensitivity = resot_look_percent(ini_get("Controls","LookSensitivityPercent",100));
     s_fps = ini_get("Graphics", "FPSLimit", 60);
     if (s_fps != 0 && s_fps != 30 && s_fps != 60 && s_fps != 120) s_fps = 60;
     env = getenv("RECOMP_HW_VSYNC");
     s_vsync = ini_get("Graphics", "VSync", !env || *env != '0') != 0;
-    s_post_processing = ini_get("Graphics", "PostProcessing", 1) != 0;
+    s_post_processing = ini_get("Graphics", "PostProcessing", 0) != 0;
+    {
+        int percent=ini_get("Graphics","InternalResolutionPercent",100);
+        s_resolution=2;
+        for (int r=0;r<6;r++) if (s_render_scales[r]==percent) s_resolution=r;
+        xbox_SetRenderScalePercent(s_render_scales[s_resolution]);
+    }
     for (i = 0; i < ACTIONS; i++) {
         snprintf(name, sizeof name, "Action%d", i);
         s_keys[i] = ini_get("Keyboard", name, s_default_keys[i]);

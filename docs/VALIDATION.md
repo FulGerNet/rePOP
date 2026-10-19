@@ -7,6 +7,635 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-19: Android back on GPU vertex programs; vertex threads off there
+
+**Log** (`C:/Users/Admin/Desktop/logs/xbox-retail-err.txt`, 11:36-11:37; no
+demo log). The user reports the menu hanging with no UI.
+- Pipeline cache: `0 bytes loaded` (first run), then the first main-shader
+  pipeline took 320 ms and the next 14 took 0.3-0.5 ms (they had taken
+  465-1075 ms each without a cache). With a `VkPipelineCache` the Adreno
+  driver reuses the compiled shader across pipelines, already in the first
+  run.
+- One frame sample only (1.8 FPS, `vertex` 174 ms, 6 spinning workers), then
+  no further `[HW native]` sample while audio and kernel summaries continue:
+  the executor stopped. The exact cause was not identified; spinning workers
+  competing with the guest threads on the phone's eight cores are the likely
+  one (the semaphore wake in `ReleaseSemaphore` is a broadcast, checked).
+
+**Change.** Android uses the Windows configuration again: `vs_uber` and the
+named-register `ps_main` (the long first-frame compile is what the pipeline
+cache now absorbs), with bound-only texture sampling. Vertex worker threads
+default to 0 on Android (`RESOT_VSH_THREADS` still sets them). The
+`ps_main_arr` variant was removed.
+
+**Checks.** `check-hlsl.py` passes; both `-BuildOnly` builds and
+`tools/build-android.ps1` pass (`logs/gpu2-*-build.txt`, APK 21.8 MB);
+Windows retail Vulkan menu 145-149 FPS. Not checked: the phone.
+
+## 2026-10-19: Vulkan pipeline cache, spinning vertex workers, bound-only texture samples
+
+**Logs** (`C:/Users/Admin/Desktop/logs/xbox-retail-err.txt`, 11:18-11:20;
+the demo file there is still the 11:00 one). The user reports a lower frame
+rate than before.
+- Every pipeline using the main pixel shader took 465-1075 ms to create on
+  the phone (33 in the log; blit/solid pipelines 8-18 ms), on the executor,
+  so each new blend/depth combination stalled the game for up to a second.
+  SDL 3.4.18 creates Vulkan pipelines with no `VkPipelineCache`.
+- With 6 vertex workers, `vertex` was 43-58 ms a frame (executor 59-79 ms,
+  5.5-13.5 FPS), worse than one thread earlier (17-49 ms). Present 5.6-6.9
+  ms: the GPU was no longer the limit.
+
+**Changes.**
+- `port/third_party/sdl-gpu-query/resot_pipeline_cache_vulkan.inc`, applied
+  by `tools/patch-sdl-gpu-query.py`: one `VkPipelineCache` per device for
+  SDL's graphics pipelines, loaded from and saved to a file
+  (`RESOT_SetVulkanPipelineCachePath`, `RESOT_SaveVulkanPipelineCache`).
+  The runtime saves it every 5 s when pipelines were created and at
+  shutdown: `bin/shadercache/vulkan-pipelines.bin` on Windows,
+  `vulkan-pipelines.bin` in the game's data folder on Android.
+- Vertex workers spin on a generation counter and sleep only after about
+  200,000 idle polls, instead of a semaphore wake per batch.
+- The pixel shaders sample a stage's texture only when one is bound, and
+  only the 2D or the cube texture (the `?:` sampled both, eight samples a
+  pixel even for untextured draws).
+
+**Checks.** `check-hlsl.py` passes all entries. `tools/setup-native-gpu.ps1`
+rebuilt SDL3.dll with the patch (`logs/sdl-cache-build.txt`). Windows
+retail, Vulkan: a first run wrote a 1,793,992-byte cache; the second logged
+`RE-SoT pipeline cache: 1793992 bytes loaded` and grew it to 3,328,959.
+Threaded CPU path (`RESOT_NATIVE_CPU_VSH=1`, `logs/vmt-vk/cache1.txt`):
+`vertex` 3.9-4.5 ms, 92-112 FPS (semaphore version 4.2-4.3 ms; this PC did
+not show the Android wake cost). Default Vulkan (`logs/samp-vulkan/`) menu
+189 FPS; D3D11 (`logs/samp-d3d11/`) 164-201 FPS in the courtyard; snapshots
+of both look right. Both `-BuildOnly` builds and `tools/build-android.ps1`
+pass; the APK's `libSDL3.so` contains both exports.
+
+Not checked: the phone. Pipeline times there will only drop from the second
+run (the first still compiles each once); whether spinning workers beat one
+thread on the Snapdragon; NVIDIA's pipeline times say nothing about Adreno's.
+
+## 2026-10-19: Android CPU vertex threads, per-host pixel shader
+
+**Reports.** With the named-register APK the user saw a long black screen
+after the intro movies in both games; after waiting, the menu appeared at
+about 18 FPS. Logs of that run were not available (the files in
+`C:/Users/Admin/Desktop/logs` were from 11:00 and end before any 3D frame).
+On Windows the user saw lower FPS after `ps_main` had been put back to its
+indexed form for Android.
+
+**Change.**
+- `ps_main` keeps named registers (faster on the desktop GPU). The indexed
+  original is kept as `ps_main_arr` (`s_hw_hlsl_ps_arr`) and is the Android
+  pixel shader, the one earlier APKs started quickly with. Inferred, not
+  measured on the device: the long first-frame stall was the Adreno
+  compiler on the named-register shaders. Pipeline creation is now logged
+  (`[HW native] pipeline N (shader S) created in X ms`, first 16 and any
+  over 50 ms); on the RTX 3060 each took 0.0-1.1 ms.
+- The CPU interpreter runs a batch's distinct vertices on worker threads
+  (`vmt_*`, nv2a_pb_exec.c): cores minus two, at most seven, batches of at
+  least 128 distinct vertices, serial for programs that write constants.
+  `RESOT_VSH_THREADS=<n>` overrides; startup logs `[VSH] CPU vertex
+  programs: N worker thread(s)`. Android's native renderer now uses this by
+  default instead of `vs_uber` (`RESOT_NATIVE_GPU_VSH=1` selects it);
+  Windows keeps `vs_uber`.
+
+**Checks.** `python tools/check-hlsl.py` passes all entries (new:
+`ps_main_arr`). Windows retail, Vulkan:
+- CPU path with threads (`RESOT_NATIVE_CPU_VSH=1`, `logs/vmt-vk/`): 6
+  workers on 8 cores; menu `vertex` 4.2-4.3 ms, executor 7.4-7.8 ms, 100-106
+  FPS (single thread earlier: 11.6-12.1 ms, 16.2-16.6 ms, 51-54 FPS).
+- Default (`vs_uber` + named `ps_main`, `logs/split-vk/`): menu pages
+  140-194 FPS, present 1.6-1.9 ms.
+Both `-BuildOnly` builds and `tools/build-android.ps1` pass
+(`logs/vmt-*-build.txt`, APK 21.7 MB, generated header contains
+`ps_main_arr`).
+
+Not checked: anything on the phone with this APK (start-up time, FPS);
+whether Adreno's slow compile came from `ps_main`, `vs_uber` or both; the
+threaded path's gameplay visuals (the scripted run stayed in menus).
+
+## 2026-10-19: shaders without indexed local arrays (Adreno GPU time)
+
+**Why.** The user's logs with the GPU vertex-program APK
+(`C:/Users/Admin/Desktop/logs/xbox-*-err.txt`, 10:41-10:42; Hor+ 2712:1220,
+internal 480p) show the CPU no longer limiting: executor 4-12 ms in steady
+samples, `vertex` 0.01-0.03 ms. FPS stayed at 8-16 (one demo sample 28.6)
+with `present` 31-90 ms, i.e. waiting for the GPU; before that APK present
+was 3-16 ms. SPIR-V disassembly showed function-local arrays indexed at run
+time: `vs_uber` (R[13], o[13], v[8]) and `ps_main`'s combiner registers
+(`R[16]`, 43 dynamic accesses per pixel). Qualcomm's Adreno guidance warns
+that such arrays are placed in slow private memory.
+
+**Change.** Both shaders now use named registers chosen by selects on the
+draw's uniform control words (`ub_temp`/`ub_wt`, `rc_r`/`rc_w`); the
+semantics are unchanged. `dxc -spirv -Fc` shows zero `OpVariable
+%_ptr_Function` in `vs_uber`, `ps_main` and `vs_main` (was one 16-element
+array in `ps_main`). `ps_main` is shared with D3D11.
+
+**Checks.** `python tools/check-hlsl.py` passes all entries; both
+`-BuildOnly` builds and `tools/build-android.ps1` pass
+(`logs/regs-*-build.txt`, APK 21.8 MB). Windows retail, scripted runs:
+- Vulkan (`logs/regs-vk/`, `logs/regs-vk2/`): menu 145-152 FPS, present
+  1.6-1.8 ms (previous build: 42-77 FPS, present 7-20 ms); first courtyard
+  119-135 FPS (previous 66-124). Snapshots of menu, loading, courtyard,
+  tutorial text, landscape view and Game Over look right by eye.
+- D3D11 (`logs/regs-d3d11/`): menu, cutscene and courtyard look right. Cold
+  `ps_main` compile 2,707 ms, once (disk cache), previously about 600 ms.
+
+Stray input reached the windowed game during one check (a delete-profile
+prompt and the Extra Features page appeared in a run that only pressed
+Start); the retail profile files were unchanged afterwards (09:52 times).
+
+Not checked: Android frame rate with this APK (the reason for the change),
+D3D12, the demo at run time, pixel-exact comparison with the old shaders.
+
+## 2026-10-19: GPU vertex programs on native Vulkan/D3D12; retail menu without Xbox Live
+
+**Why.** The user's Android logs (`C:/Users/Admin/Desktop/logs/xbox-*-err.txt`,
+08:51-08:52) show steady-state samples of 12-25 FPS with `vertex` 17-49 ms of
+a 27-70 ms executor; draw 1.4-10 ms, present 3-16 ms. The native encoders ran
+every NV2A vertex program in the CPU interpreter (D3D11 translates them to
+HLSL and compiles at run time, which Android cannot do).
+
+**Change.** `vs_uber` (`s_hw_hlsl_uber`, nv2a_hw_d3d11.inc) is compiled
+offline to SPIR-V and DXIL by `tools/build-native-shaders.py` and interprets
+the program on the GPU: `nv2a_vsh_pack_gpu` (nv2a_vsh_interp.c) packs the
+decoded instructions, one uint4 each, cached by program generation; the
+constants (3 KB) and the program are snapshotted per change into pools and
+pushed as vertex uniform buffers 1 and 2 only when they change. Each batch's
+distinct vertices go up as their raw input registers (`fetch_attr`, the same
+reads as the interpreter, at most eight inputs) with a 16-bit index ring.
+The interpreter remains for programs that write constants, have no FINAL or
+read more than eight inputs, and with `RESOT_NATIVE_CPU_VSH=1`. The CPU
+checks of the D3D11 path (glow-composite corners, flat 2D bounds for the
+widened picture) are kept.
+
+**Checks.** `python tools/check-hlsl.py` passes all nine entries (new:
+`vs_uber`); DXC built `vs_uber.spirv` (22,224 bytes) and `.dxil` (12,076).
+`tools/recomp.ps1 -BuildOnly` passes for both targets
+(`logs/uber-demo-build.txt`, `uber-retail-build.txt`).
+
+Windows retail, native Vulkan, same scripted 130-second run as the HUD check
+(`./tools/run.ps1 -Target xbox-retail -Seconds 130 -Windowed -NoVsync
+-SnapshotEvery 15 -Set @{RESOT_RENDERER='vulkan'; RECOMP_PAD_SCRIPT=...}`):
+- GPU programs (`logs/uber-gpu/`): `vertex` 0.02-0.03 ms; menu executor
+  4.6-6.7 ms; first courtyard 66-124 FPS, executor 3.7-10.4 ms. Snapshots
+  (title, main menu, cutscene, courtyard with tutorial text and health bar,
+  landscape view) look right; compared by eye only, not pixel by pixel.
+- `RESOT_NATIVE_CPU_VSH=1` (`logs/uber-cpu/`): menu `vertex` 11.6-12.1 ms,
+  executor 16.2-16.6 ms, 51-54 FPS. At this slower rate the timed presses
+  selected Xbox Live at about 35 s and the title launched `dashupdate.xbe`
+  and exited, so the gameplay part of the comparison is missing.
+- One texture upload per frame appeared in the GPU run's samples and not in
+  the CPU run; a traced 40-second run (`RESOT_TEX_DEBUG`, removed) showed
+  only first uses in the texture cache (127, none re-decoded) and 0.0
+  uploads per frame. Its source was not identified.
+
+Not checked: Android (APK built, not run on a device); D3D12 at run time;
+the demo at run time with this build; fog, lighting and skinning programs
+compared numerically against the interpreter; programs that fall back.
+
+**Xbox Live menu (retail).** `RESOT_MENU_TRACE=1` (`logs/uber-gpu/menutrace.txt`)
+shows the main menu's choices: Start New Game (return `0x00234B78`), Load
+Saved Game, Options, Xbox Live (`0x00234D3A`, text `0B008C4E:56`), Extra
+Features. The handle goes to `[ebp+0x288]`, which only the bind at
+`0x00235406` reads (scan of `0x00230000-0x00238000`). Wrappers of
+`0x002A3910` and `0x00116660` skip exactly those two calls; the skipped
+bind returns what `0x00116660`'s epilogue (`0x00116765-0x00116799`) would.
+`RESOT_XBOX_LIVE_MENU=1` keeps it. The pause menu's Xbox Live choice
+(`0x001A33F6`) is unchanged.
+
+`tools/recomp.ps1 -Target xbox-retail` (full relift: 13 functions wrapped as
+`sub_X_gen`, was 11) passed (`logs/live-retail-recomp.txt`). A traced run
+(`logs/live-menu/`) shows the main page built as Start New Game, Load Saved
+Game, Options, Extra Features, then reSOT Options; snapshots show that list
+with no gap. The trace shows the remaining choices bound to actions (A3, A4,
+A5, A7 and the reSOT entry A8) and no bind for the removed one. Scripted
+presses could not reliably reach Extra Features (the profile page consumed
+them), so choosing each remaining entry was not exercised.
+
+Final builds after these changes: both `-BuildOnly` builds and
+`tools/build-android.ps1` pass (`logs/uber-android-build.txt`,
+`bin/reSOT-android.apk`, 21.7 MB); the Android build's generated shader
+header contains `vs_uber`.
+
+## 2026-10-19: Look sensitivity, F5 renderer line, Android retail profile search
+
+**Look sensitivity** (25–200%, steps of 25, default 100%) is in reSOT
+Options → Controls of both games' main menus, in Windows F7 → Controls and in
+the Android menus. It is saved as `[Controls] LookSensitivityPercent`. The
+gain is applied after the title's own radial deadzone, to the float result of
+the right-stick normalizer: demo XBE `0x000C05D0` called from `0x000C08AD`
+(return `0x000C08B2`), retail XBE `0x000DBDE0` called from `0x000DC0BD`
+(return `0x000DC0C2`); `python tools/xbe-dis.py` confirms both call pairs
+(left pair first, then the right pair). Keyboard camera keys, controller right
+stick and the Android touch look all reach the game as that stick, so all of
+them are scaled; movement (left pair) is not. `python tools/test-look-sensitivity.py`
+passes 4/4 (Windows and Android option code, each target). Not checked in the
+game: how the camera feels at 25% and 200%, and whether the right stick also
+drives anything other than the camera.
+
+**F5** shows `Renderer:` with the backend that actually initialized
+(`nv2a_hw_backend`: Direct3D 11, Direct3D 12, Vulkan, or Software), so a
+fallback is reported rather than the saved preference. Same row on Android.
+Not yet seen on screen.
+
+**Android retail "damaged profile"** on a profile created from scratch with
+the previous APK. The user's logs show `options.cfg` and `pop2.sav` written
+and read back at their expected sizes. The POSIX `NtQueryDirectoryFile` kept
+a directory search alive until end of directory; XAPI's FindFirstFile stops
+after one exact-name answer and closes the handle, and a later directory
+opened at the same reused handle value inherited the old search's cursor and
+pattern (wrong name or size). The Windows backend already freed this on close.
+Android retail now frees the search (and its `DIR`) in both `NtClose` paths.
+Not unit-tested: no host test covers the POSIX directory search, and no phone
+run has created, reloaded and selected a profile with this APK.
+
+Build checks: `tools/recomp.ps1 -Target xbox-demo -BuildOnly` and the retail
+equivalent pass (`logs/look-demo-build.txt`, `look-retail-build.txt`);
+`tools/build-android.ps1` passes (`logs/look-android-build.txt`,
+`bin/reSOT-android.apk`, 21.6 MB). No shaders changed. Nothing was run in
+the game for this entry.
+
+## 2026-10-19: Android crash logs, native vertex buffers and device Hor+
+
+Inputs: `C:/Users/Admin/Desktop/logs/xbox-demo-err.txt` (301525 bytes)
+and `xbox-retail-err.txt` (717162 bytes), supplied by the user. Both identify
+the supported XBE hashes and the system Vulkan driver. Demo terminates in
+`sub_002EF6CD+0x22C`, signal 11, guest address `0xFFFFFFBE`, ESI zero.
+Earlier messages report forced DPC delivery and a dispatch owner (tid 1004)
+that other guest threads cannot acquire. Retail reaches sampled 1.23 GPU FPS
+and 2.4 native FPS, about 747 draws/frame; its final timing sample reports
+185.82 ms vertex, 352.97 ms draw and 559.05 ms present. Those counters are
+sampled windows, not a sum or a controlled benchmark; no texture uploads
+are reported in that sample.
+
+Source inspection found that demo interrupt return restored IRQL but could
+leave a recursive guest dispatch reference acquired by a callback that
+lowered and raised IRQL. The demo epilogue now restores that edge, and demo
+DPCs remain pending while another thread owns dispatch rather than running
+unprotected after 250 ms. Retail keeps its existing dispatch policy.
+`python tools/test-demo-dispatch.py` passes using the production HAL helper
+bodies: recursive reference release, already-lowered return, raised saved
+IRQL, and 10000 refused DPC polls. This proves the ownership correction;
+the available log does not identify the exact leaking callback or prove
+the new APK eliminates the device crash.
+
+Native rendering previously cycled a 16 MB GPU vertex buffer and 16 MB
+staging buffer on every flushed run. Visibility and state transitions can
+flush many small runs. GPU vertices now append across submissions until
+the ring wraps; only wrapping cycles its backing storage. Staging starts
+at 64 KB and grows to the largest required run. Draw order is preserved.
+The GPU regression uploads disjoint regions and wraps/cycles while earlier
+copies remain queued, then checks readback on D3D12 and Vulkan; both pass.
+Actual Adreno performance improvement has not been measured.
+
+The new retail log shows successful creation of `SaveMeta.xbx`, `pop2.sav`
+and `options.cfg`; missing-file probes precede creation and do not establish
+failed writes. The existing local append-policy, relative-path and migration
+corrections are retained. `SaveFoldersTest` and `retail_save_random_write`
+pass. Bounded `[SAVE READ]`/`[SAVE WRITE]` diagnostics now include offsets,
+byte counts and resulting sizes for retail UDATA `.sav`/`.cfg` files on
+Android. A create-save, process exit, relaunch and load cycle is still needed
+on the phone; the supplied logs contain no such persistence evidence.
+
+Android selects `RECOMP_HW_ASPECT` from the fullscreen drawable before either
+target's projection hooks or renderer initialize. For example 2400x1080
+selects 20:9; projection and culling use the same ratio, with the existing HUD
+policy. Explicit environment overrides remain effective. Windows retains
+its default. Startup dimensions/ratio are logged; device appearance and
+window resizing after startup have not been validated.
+
+Build checks: `python tools/check-hlsl.py` passes all seven shaders;
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly`, retail equivalent, and
+`tools/build-android.ps1` pass (logs `demo-oct19-build.txt`,
+`retail-oct19-build.txt`, `android-oct19-build.txt`). Build tools required
+execution outside the sandbox for MSBuild/Gradle native services.
+`adb devices` returned no attached device; no phone installation or runtime
+validation was performed here.
+
+## 2026-10-18: shared internal resolution, Android retail files and driver picker
+
+User reports a large Android speed improvement at lower resolution. Windows
+now uses the same six internal scale choices in both reSOT Options and F7,
+stored as `Graphics/InternalResolutionPercent` (100 default). The obsolete
+window-size index is ignored. Both native GPU encoders and D3D11 resize
+their main color/depth targets and viewport/scissor coordinates independently
+of the physical window. Guest-sized effect targets remain separate. F11 is
+the only fullscreen toggle and is handled before options input capture.
+
+Fresh phone log `C:/Users/Admin/Desktop/logs/xbox-retail-err.txt` (23:25)
+shows profile/file requests for `SaveMeta.xbx`, `pop2.sav`, `options.cfg` and
+`saveimage.xbx`, and ends with `Swapchain composition not supported!`.
+It does not establish successful save persistence. Source inspection found
+POSIX `O_APPEND` incorrectly enabled whenever append permission was present,
+even alongside write/full access. Android retail now reserves it for append
+only access, honors explicit write offsets/EOF and seek failures, retries
+interrupted writes and reports flush failures. Relative object paths also
+respect their directory handle, as the Windows backend does.
+
+Android retail's resolved partition1 UDATA/TDATA now map to ordinary folders
+under `files/saves/xbox-retail/`. Java copies missing files from the previous
+game-directory and UserData/TitleData locations, preserving originals and
+newer destination files. Copies publish only after a complete synced write.
+Bare device images remain needed for boot/cache compatibility and are now
+under `.devices`; old root images are retained. Demo storage is unchanged.
+
+Android AlertDialog's message hid its driver choice list. Removed that
+message and added an explicit **Install ZIP…** document-picker button.
+Native Vulkan combines the background clear with the front blit and, unlike
+D3D12's fixed sampler heap, submits offscreen rendering and presentation in
+one command buffer. Backgrounded windows defer presentation, and unsupported
+swapchain changes are retried instead of aborting. Android executor timing
+now uses the host clock; previous zero totals yielded negative attribution.
+Frequent retail path logging is bounded to avoid synchronous I/O per lookup.
+
+Checks performed:
+
+- `python tools/check-hlsl.py`: seven shader checks passed.
+- `tools/recomp.ps1 -Target xbox-retail -BuildOnly`, demo equivalent and
+  `tools/build-android.ps1`: passed; logs `internal-save-*-build.txt`.
+- `python tools/run-build-tool.py cmake --build build/tests/native-gpu --config Release`
+  and CTest: **5/5 passed**, both GPU APIs, label probe, scale edges and
+  full-access header rewrite/close/reopen regression. The latter exercises
+  the production access policy through equivalent Windows CRT file I/O,
+  not the complete Android kernel bridge.
+- JVM `SaveFoldersTest`: profile/save copy, repeated migration, original
+  preservation and newer destination preservation passed. Existing
+  `GpuDriversImportTest` passed. These do not test Android UI/native loading.
+- `tools/run.ps1 -Target xbox-retail -Seconds 25 -Windowed -NoVsync`
+  with Vulkan and scripted A presses: ran to timed stop, late menu samples
+  53–66 FPS with changing draw counts; not a controlled comparison.
+- A 15-second Vulkan run with temporary INI internal percent 75 logged
+  `Internal resolution: 75% (360p for 480-line guest)` and reached a
+  52 FPS menu sample, then timed stop, no fatal error. Original INI restored.
+  Evidence: `logs/internal-save-vulkan-75-err.txt`. This is not evidence of
+  live UI cycling, fullscreen transitions or gameplay correctness.
+
+Still needed on the phone: create profile/save, close process, relaunch and
+load; verify migration with real prior saves; background/resume rendering;
+picker visibility/import and actual custom driver identity; frame-rate
+comparison in the same scene. No phone persistence fix or FPS gain is
+claimed on the strength of these builds or host tests.
+
+## 2026-10-18: Android-only internal resolution and custom Adreno driver support
+
+The user reports Windows Vulkan performance improved and the movie stutter is
+resolved on both hosts. Android frame rate remains low; they identify the GPU
+as **Adreno 750**. They request Android-only internal resolution controls and
+an experiment with libadrenotools. No new phone log or driver package was
+provided with this request.
+
+Android's resolution choice now cycles 50%, 75%, 100%, 150%, 225%, 300% of
+the guest view (240p/360p/480p/720p/1080p/1440p for its 480-line main target),
+saved as `Graphics/InternalResolutionPercent`. The new default is 100%/480p,
+instead of the previous 2x rendering. The native encoder applies this to main
+color/depth targets, viewport/scissor edges, readback dimensions and query
+pixel normalization. It flushes/submits outstanding draws before retiring old
+targets when a setting changes. Guest-sized effects, decoded movie pixels,
+the physical window and final presentation remain separately sized. Windows
+uses its previous integer scaling and resolution options unchanged.
+
+The Android launcher now imports standard driver ZIPs (root `meta.json` with
+`name`, `libraryName`, optional `minApi`), validates paths/duplicates/entry and
+size bounds plus ELF64 little-endian AArch64 shared-library identity, and
+stores them in app-private internal storage. Selection uses separate private
+preferences, so saving game options cannot erase it. System/installed driver
+choices apply on the next game process. No custom driver binary is bundled
+or downloaded automatically.
+
+Integrated upstream libadrenotools at
+`8fae8ce254dfc1344527e05301e43f37dea2df80`, liblinkernsbypass submodule at
+`aa3975893d83ef1bc84c321ec60c65fbf1287887`. SDL's Android loader is patched
+to resolve Vulkan entry points via the chosen isolated loader; normal SDL
+loader ownership/refcounting remains intact. A preflight instance/device
+enumeration checks basic usability; failure keeps system Vulkan selected.
+That is not proof of custom-driver use: upstream can fall back internally,
+and later SDL-required features can still fail. The native log records the
+probe device and requested library; upstream hook messages are in logcat.
+No custom-driver run or speedup on Adreno 750 has been observed here.
+
+Checks performed:
+
+- `python tools/check-hlsl.py`: seven checks passed.
+- `tools/build-android.ps1`: both targets and all four hook DSOs built;
+  release APK `bin/reSOT-android.apk` is approximately 21.6 MB. It is smaller
+  because legacy packaging compresses the libraries, then extracts them at
+  install time as libadrenotools requires. Log:
+  `logs/android-scale-driver-build.txt`.
+- ZIP inventory confirms `libSDL3.so`, both game DSOs, launcher DSO,
+  `libmain_hook.so`, `libhook_impl.so`, `libfile_redirect_hook.so` and
+  `libgsl_alloc_hook.so`, plus both BSD dependency licence notices.
+- NDK `llvm-readelf --dyn-syms` confirms SDL exports
+  `RESOT_SetAndroidVulkanGetInstanceProcAddr` and `RESOT_GetVulkanQueryAPI`;
+  retail's ELF dependencies are all packaged SDL/system libraries.
+  The merged manifest has `extractNativeLibs=true`.
+- `tools/recomp.ps1 -Target xbox-retail -BuildOnly` and the demo equivalent
+  passed (`logs/android-scale-windows-*-build.txt`). No changes were made to
+  `port/windows` for this request.
+- Rebuilt `build/tests/native-gpu`; CTest **4/4 passed**, including both GPU
+  APIs, the metadata probe and internal-size/scissor-edge arithmetic.
+- Compiled production `GpuDrivers.java` and
+  `port/android/tests/GpuDriversImportTest.java` with JDK javac and Android
+  API 36's android.jar into `build/tests/android-driver-import`, then ran
+  `com.fulger.resot.GpuDriversImportTest` on the JVM: valid ZIP/arm64, traversal,
+  absolute paths, duplicate canonical paths, entry count, wrong architecture
+  and truncated ELF cases passed. This tests importer/ELF helpers, not the
+  Android picker, preference UI, or native loader on a phone.
+- Ran `tools/patch-sdl-android-driver.py` twice successfully (idempotent).
+
+Device checks still needed: live resolution cycling, target recreation and
+picture/occlusion correctness at each scale; launcher layout and ZIP import;
+custom-driver identity, loading and performance comparison on the user's
+Adreno 750. No new Android FPS claim follows from a successful build or these
+host-side tests. Lower resolution only addresses GPU pixel work; the CPU
+vertex interpreter remains a potential bottleneck.
+
+## 2026-10-18: Android retail boot confirmed; option refresh and native performance
+
+The user confirms retail now runs on Android after the Partition1 volume-open
+correction. They report stale value labels in the retail main-menu reSOT
+Options page (values update only after leaving/reopening), Bink stutter on
+both Vulkan hosts, and low Vulkan frame rate. This confirms device boot and
+menu progress, not complete rendering/audio/gameplay accuracy.
+
+Found that `resot_guest_read_word` unconditionally rejected every non-Windows
+read. Retail's existing label-refresh hook therefore could not resolve any
+text object on Android, despite the options revision changing. Android now
+accepts bounded reads in main/contiguous RAM and committed, readable extended
+VM regions, while rejecting reserved/guarded ranges and arithmetic overflow.
+Resetting Android bindings also marks the labels dirty. Windows retains its
+existing VirtualQuery checks. Android label behavior after this change still
+needs the device retest.
+
+Native Vulkan/D3D12 idle presentation used the generic 100-ms repaint interval
+even while PVIDEO was active. Bink movies that do not issue guest flips were
+therefore composed at at most 10 Hz. Live overlays now bypass that idle limit
+and follow the host presentation thread; idle screens keep the old interval.
+The final Windows retail Vulkan run without scripted input records **50.0,
+51.0, 52.0 and 53.0 Hz movie composition**, across the initial overlays.
+Composition cadence is not the decoded frame rate, audiovisual synchronization,
+or a visual comparison with the console. Android playback is not retested here.
+
+The shared CPU vertex interpreter now decodes instructions once per program
+generation, reads only operands consumed by each MAC/ILU operation, and exposes
+the used-input mask so the executor fetches only those attributes. Paired
+operations still read their operands before writes; constant writes remain
+live. Native queued draws now retain only the 64-byte vertex uniform header,
+instead of copying the unused roughly 3 KB D3D11 constant tail for every draw.
+Both native hosts now log vertex/draw/executor/present timings; Android's vertex
+timer is enabled through the existing compatibility clock.
+
+Windows observations with retail Vulkan, VSync off and the saved FPS limit 0:
+
+- Before: last three five-second samples **38.0, 40.2, 38.6 FPS**, at
+  **155.2, 153.2, 153.0 draws/frame** (`logs/vulkan-perf-before-err.txt`).
+- After: late samples **61.8, 61.0, 55.8 FPS**, at
+  **153.2, 153.0, 153.0 draws/frame** (`logs/vulkan-perf-timings-err.txt`).
+  The latest half-second timings at these points show **9.68–10.37 ms vertex
+  interpretation**, **13.64–13.87 ms executor**, **1.98–2.15 ms present**.
+- These are separate wall-clock runs with animated menu scenery, different
+  warm-up lengths and no identical-frame replay. They suggest an improvement;
+  they are not a controlled benchmark or a level-wide FPS guarantee. Earlier
+  after-change windows at around 200 draws/frame still measured 25–35 FPS.
+  CPU vertex execution remains a significant limit. Android performance is
+  unmeasured after the change.
+
+Commands and checks:
+
+- `python tools/check-hlsl.py`: seven shader checks passed.
+- `tools/recomp.ps1 -Target xbox-retail -BuildOnly` and the demo equivalent:
+  both final Windows builds passed.
+- `tools/build-android.ps1`: final APK built with both targets;
+  `bin/reSOT-android.apk` (50.8 MB). Build logs use `vulkan-perf-*-build.txt`.
+- CMake build + CTest of `build/tests/vsh`: epilogue, sparse/poisoned inputs,
+  changed start slot, word-by-word program uploads and missing program passed.
+- Differential harness in `build/tests/vsh-differential`: **10,000 randomized
+  programs** compared to the pre-change interpreter from Git HEAD, including
+  context writes and poisoning unused inputs with NaNs; outputs and constants
+  agreed. This local harness contains no game code or assets.
+- Rebuilt `build/tests/native-gpu`; CTest: D3D12, Vulkan and guest metadata probe
+  **3/3 passed**. The probe test exercises Windows; Android metadata checks
+  compile but have not been executed on a device here.
+- Baseline and after runs: `tools/run.ps1 -Target xbox-retail -Seconds 40
+  -Windowed -NoVsync -Set @{RESOT_RENDERER='vulkan';RECOMP_PAD_SCRIPT=
+  '2000:a:200,5000:a:200,8000:a:200,12000:a:200';RECOMP_FPS_LIMIT='0'}`;
+  the timings run used 45 seconds. The saved INI already had FPSLimit=0,
+  VSync=0, PostProcessing=0. These saved preferences were not changed.
+- Final movie run: `tools/run.ps1 -Target xbox-retail -Seconds 15 -Windowed
+  -NoVsync -Set @{RESOT_RENDERER='vulkan'}`; log retained as
+  `logs/vulkan-movie-cadence-err.txt`.
+
+## 2026-10-18: Android retail Partition1 volume-directory failure isolated
+
+Latest user log `C:/Users/Admin/Desktop/logs/xbox-retail-err.txt`, PID 6497,
+records all six partition backings ready. The first volume open then fails:
+kernel call #21, ordinal 202, returning to retail XBE `0x0033744A`, requests
+`\\Device\\Harddisk0\\partition1\\` and returns `0xC000003A`. Only three
+more kernel calls follow before `HalReturnToFirmware(2)`. The mutex FORTIFY
+messages seen on the previous build no longer appear.
+
+The previous storage correction was incomplete: Windows explicitly redirects
+directory opens of a device image to its parent for free-space queries;
+POSIX still called `open(Partition1.img, O_DIRECTORY)`. This necessarily
+fails with ENOTDIR, which its status conversion maps to `0xC000003A`.
+The lifted retail routine at `0x00337414` checks the open at `0x0033744A`
+before issuing the volume-size query. Added the directory redirect only for
+Android retail bare partition devices 0–5. Byte-oriented device opens retain
+the image file; ordinary directories and assets do not use this exception.
+POSIX open failures now retain path, options and errno in the release log.
+
+The supplied demo log separately records `active renderer: vulkan native`
+and menu/options hooks, followed by continued file/audio/kernel activity.
+This establishes renderer initialization and guest progress, without visual
+evidence or a claim that gameplay, output or controls are correct.
+
+Commands: `python tools/check-hlsl.py` (7/7 passed),
+`tools/build-android.ps1` (release APK built with both targets), and
+`tools/recomp.ps1 -Target xbox-retail -BuildOnly` plus the demo equivalent
+(both passed). Build logs: `logs/fix-android-volume-build.txt`,
+`logs/fix-xbox-retail-volume-build.txt`, `logs/fix-xbox-demo-volume-build.txt`.
+The updated Android volume-query path has not been run on a device here;
+successful retail boot and subsequent rendering remain unverified.
+
+## 2026-10-18: Android retail exits after memory initialization
+
+New user logs from `C:/Users/Admin/Desktop/logs/` (latest session PID 29328,
+also reproduced in the two preceding archived runs) confirm that the earlier
+memory fix passed its previous stopping point: extended VMA reserves 191 MB,
+the tiled alias check passes, memory initialization completes, and the guest
+entry executes. Options also log `post-processing off`.
+
+The title then requests `HalReturnToFirmware(2)` with launch-data type 1 and
+words `1,0,2,0,...`, before any native renderer initialization is logged.
+`FORTIFY: pthread_mutex_lock called on a destroyed mutex` follows during
+process exit. This is an explicit guest dashboard handoff, followed by a host
+shutdown error; the log contains no Vulkan initialization error.
+
+Comparing the Windows run and source found missing Android storage parity:
+Windows provides raw Partition0/Partition5 image files for XAPI's cache mount,
+while the POSIX path treated those device names as a directory or untranslated
+host path. The Android log reaches the same title-directory/metadata setup
+before exiting. Missing partition backing is the inferred next startup blocker;
+the provided log's first-200-call budget does not record the exact failed
+open. Added sparse raw partition backing and the same partition-table geometry
+as Windows, guarded by Android + retail. Bare devices map to images; paths
+inside partitions retain directory translation. Guest paths and partition
+creation results now appear on stderr for the device retest.
+
+Android `ExitProcess` now flushes the logs and uses `_exit`, avoiding C-library
+shutdown handlers destroying mutexes while audio/SDL/logging threads remain
+alive. Other POSIX hosts keep their existing exit behavior.
+
+Validation commands: `python tools/check-hlsl.py` passed all seven checks;
+`tools/build-android.ps1` built both game libraries and the release APK
+(`bin/reSOT-android.apk`, 50.8 MB);
+`tools/recomp.ps1 -Target xbox-retail -BuildOnly` and the demo equivalent
+both passed. Logs: `logs/fix-android-storage-build.txt`,
+`logs/fix-retail-storage-build.txt`, `logs/fix-demo-storage-build.txt`.
+No Android device run, sparse-storage behavior on the user's filesystem,
+successful cache mount, rendering, audio or gameplay is claimed by these builds.
+
+## 2026-10-18: Android retail pre-entry hang and native texture staging
+
+User-provided `xbox-retail-err.txt` from Android (PID 23530) ends memory
+initialization at `RAM mirror: 28/28`, with `ext-vma=1` and zero KickOffs
+over ten seconds, followed by the user's close request. This is before
+`xbox_MemoryLayoutInit: complete` and before entry into the game. Inspection
+found that `host_free_run` loops indefinitely when the POSIX `VirtualQuery`
+returns `MEM_FREE` with `RegionSize=0`. Android now reserves extended VMA
+directly inside its owned guest range; the scan also stops on a non-advancing
+query. No retail addresses, seeds or lifted code changed. This explains the
+observed stopping point; successful Android boot after the change has **not**
+been observed. `adb devices` found no connected devices.
+
+The shared Vulkan/D3D12 encoder now keeps a texture upload transfer buffer,
+growing it as needed and cycling its storage before overwriting it. Previously
+each texture, movie or options-panel upload created and released a buffer.
+This removes repeated resource creation; no measured performance gain is
+claimed. Android defaults to `Graphics/PostProcessing=0`; Windows stays at
+`1`, and saved INI values take precedence on both hosts.
+
+Commands run:
+
+- `python tools/check-hlsl.py`: all seven shader checks passed.
+- `tools/recomp.ps1 -Target xbox-retail -BuildOnly` and the equivalent
+  `xbox-demo` command: both Windows Release builds passed.
+- `tools/build-android.ps1`: release APK built with both targets, including
+  the Android options default; output `bin/reSOT-android.apk` (50.8 MB).
+- `python tools/run-build-tool.py ctest --test-dir build/tests/native-gpu -C Release --output-on-failure`:
+  native D3D12/Vulkan GPU checks and guest-label probe passed (3/3). These
+  standalone tests do not exercise the changed texture upload helper.
+- `tools/run.ps1 -Target xbox-retail -Seconds 35 -Windowed -Set
+  @{RESOT_RENDERER='vulkan';RECOMP_PAD_SCRIPT='3000:a:200,6000:a:200,10000:a:200,15000:start:200,20000:a:200'}`:
+  native Vulkan executed 159,138 draws; sampled windows after startup reported
+  28.6–40.6 FPS (initial window 2.0 FPS). No fatal error in the captured log.
+  This was a runtime smoke test, without visual inspection or a baseline A/B
+  comparison; it does not establish correct gameplay or improved frame rate.
+
+Build logs: `logs/fix-retail-build.txt`, `logs/fix-demo-build.txt`,
+`logs/fix-android-build.txt`; run log: `logs/xbox-retail-err.txt`.
+
 ## 2026-10-18 (night): Android ISO installation, first runs reported by the user
 
 **Update, third APK (Java ISO reader, handle registry):** the user reports

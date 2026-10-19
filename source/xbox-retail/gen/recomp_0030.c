@@ -14987,12 +14987,12 @@ loc_002A3899: ;
 }
 
 /**
- * sub_002A3910
+ * sub_002A3910_gen
  * Original: 0x002A3910 - 0x002A39D7 (199 bytes, 50 insns)
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_002A3910(void)
+void sub_002A3910_gen(void)
 {
     extern void sub_002A3910_enter(void);
     sub_002A3910_enter();

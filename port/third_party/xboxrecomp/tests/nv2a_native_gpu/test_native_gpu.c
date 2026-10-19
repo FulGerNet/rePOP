@@ -16,6 +16,53 @@ static void report_complete(void *opaque, uint32_t at, uint64_t stamp, uint32_t 
 }
 
 #define REQUIRE(x) do { if (!(x)) { fprintf(stderr,"line %d: %s: %s\n",__LINE__,#x,SDL_GetError()); return 1; } } while (0)
+/* RE-SoT: small retail visibility runs append to a vertex ring. Verify
+ * disjoint uploads preserve preceding runs, and wrapping/cycling preserves
+ * copies already encoded against the previous backing allocation. */
+static int test_vertex_ring(SDL_GPUDevice *device)
+{
+    SDL_GPUBufferCreateInfo bi = {SDL_GPU_BUFFERUSAGE_VERTEX,128,0};
+    SDL_GPUTransferBufferCreateInfo ti = {SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,64,0};
+    SDL_GPUBuffer *buffer = SDL_CreateGPUBuffer(device,&bi);
+    SDL_GPUTransferBuffer *upload = SDL_CreateGPUTransferBuffer(device,&ti), *download;
+    SDL_GPUCommandBuffer *cmd;
+    SDL_GPUFence *fence;
+    const Uint32 *pixels;
+    int run, i;
+    REQUIRE(buffer && upload);
+    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD; ti.size = 256;
+    download = SDL_CreateGPUTransferBuffer(device,&ti); REQUIRE(download);
+    cmd = SDL_AcquireGPUCommandBuffer(device); REQUIRE(cmd);
+    for (run = 0; run < 3; run++) {
+        Uint32 *mapped = SDL_MapGPUTransferBuffer(device,upload,true);
+        SDL_GPUTransferBufferLocation src = {upload,0}, to = {download,(Uint32)run*64};
+        SDL_GPUBufferRegion region = {buffer,run == 1 ? 64 : 0,64};
+        SDL_GPUCopyPass *copy;
+        REQUIRE(mapped);
+        for (i = 0; i < 16; i++) mapped[i] = (Uint32)(100*run+i);
+        SDL_UnmapGPUTransferBuffer(device,upload);
+        copy = SDL_BeginGPUCopyPass(cmd); REQUIRE(copy);
+        SDL_UploadToGPUBuffer(copy,&src,&region,run != 1);
+        SDL_DownloadFromGPUBuffer(copy,&region,&to); /* Snapshot before wrap. */
+        if (run == 1) {
+            region.offset = 0; to.offset = 192;
+            SDL_DownloadFromGPUBuffer(copy,&region,&to);
+        }
+        SDL_EndGPUCopyPass(copy);
+    }
+    fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd); REQUIRE(fence);
+    REQUIRE(SDL_WaitForGPUFences(device,true,&fence,1));
+    pixels = SDL_MapGPUTransferBuffer(device,download,false); REQUIRE(pixels);
+    for (run = 0; run < 3; run++) for (i = 0; i < 16; i++)
+        REQUIRE(pixels[run*16+i] == (Uint32)(100*run+i));
+    for (i = 0; i < 16; i++) REQUIRE(pixels[48+i] == (Uint32)i);
+    SDL_UnmapGPUTransferBuffer(device,download);
+    SDL_ReleaseGPUFence(device,fence);
+    SDL_ReleaseGPUTransferBuffer(device,upload); SDL_ReleaseGPUTransferBuffer(device,download);
+    SDL_ReleaseGPUBuffer(device,buffer);
+    puts("vertex ring append/wrap preserves queued uploads and readbacks");
+    return 0;
+}
 int main(int argc, char **argv)
 {
     const char *backend = argc > 1 ? argv[1] : "direct3d12";
@@ -43,6 +90,7 @@ int main(int argc, char **argv)
     device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_SPIRV,true,backend);
     REQUIRE(device);
     REQUIRE(!strcmp(SDL_GetGPUDeviceDriver(device),backend));
+    REQUIRE(!test_vertex_ring(device));
     query_library = SDL_LoadObject("SDL3.dll"); REQUIRE(query_library);
     get_api = (ResotGetGpuQueryAPI)SDL_LoadFunction(query_library,dx ? "RESOT_GetD3D12QueryAPI" : "RESOT_GetVulkanQueryAPI");
     REQUIRE(get_api);

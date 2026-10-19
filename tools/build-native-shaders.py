@@ -22,9 +22,12 @@ def main():
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     text = check.source(None).read_text(encoding="utf-8")
-    hlsl = check.embedded(text, "s_hw_hlsl_vs_common") + check.embedded(text, "s_hw_hlsl")
+    hlsl = (check.embedded(text, "s_hw_hlsl_vs_common") + check.embedded(text, "s_hw_hlsl")
+            + check.embedded(text, "s_hw_hlsl_uber"))
     # SDL's explicit resource layout, shared by its native D3D12/Vulkan drivers.
     hlsl = hlsl.replace("VSC : register(b0)", "VSC : register(b0, space1)")
+    hlsl = hlsl.replace("VUC : register(b1)", "VUC : register(b1, space1)")
+    hlsl = hlsl.replace("VUP : register(b2)", "VUP : register(b2, space1)")
     hlsl = hlsl.replace("PSC : register(b0)", "PSC : register(b0, space3)")
     hlsl = re.sub(r"register\(([ts]\d+)\)", r"register(\1, space2)", hlsl)
     # Each texture slot has its own sampler, including the four cube slots.
@@ -49,7 +52,7 @@ def main():
     src = output / "nv2a-native.hlsl"
     src.write_text(hlsl, encoding="ascii")
     header = ["/* RE-SoT: generated host shaders; tools/build-native-shaders.py. */\n"]
-    for entry, old_profile in check.ENTRIES:
+    for entry, old_profile in check.ENTRIES + [("vs_uber", "vs_4_0")]:
         for fmt in ("dxil", "spirv"):
             binary = output / f"{entry}.{fmt}"
             cmd = [args.dxc, str(src), "-E", entry, "-T", old_profile.replace("4_0", "6_0"),

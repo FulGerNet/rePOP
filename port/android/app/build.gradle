@@ -26,7 +26,7 @@ android {
         externalNativeBuild {
             cmake {
                 arguments "-DANDROID_PLATFORM=android-29", "-DRESOT_PYTHON=" + python
-                targets "SDL3-shared", "resot_launcher", "resot_demo", "resot_retail"
+                targets "SDL3-shared", "resot_launcher", "resot_demo", "resot_retail", "main_hook", "file_redirect_hook", "gsl_alloc_hook", "hook_impl"
             }
         }
     }
@@ -61,7 +61,8 @@ android {
 
     packaging {
         jniLibs {
-            useLegacyPackaging false
+            // libadrenotools needs hooks in ApplicationInfo.nativeLibraryDir.
+            useLegacyPackaging true
         }
     }
 
@@ -90,6 +91,12 @@ tasks.register("resotAssets", Copy) {
     }
     from(new File(root, "port/third_party/xboxrecomp/NOTICE")) {
         into "licenses"; rename { "NOTICE-xboxrecomp.txt" }
+    }
+    from(new File(root, "build/deps/libadrenotools/LICENSE")) {
+        into "licenses"; rename { "LICENSE-libadrenotools.txt" }
+    }
+    from(new File(root, "build/deps/libadrenotools/lib/linkernsbypass/LICENSE")) {
+        into "licenses"; rename { "LICENSE-liblinkernsbypass.txt" }
     }
     into generatedAssets
 }

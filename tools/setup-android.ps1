@@ -34,4 +34,20 @@ Get-CheckedArchive 'gradle-9.1.0-bin.zip' `
     (Join-Path $cache 'gradle-9.1.0/bin/gradle.bat')
 & python (Join-Path $PSScriptRoot 'patch-sdl-gpu-query.py') (Join-Path $cache 'sdl-source/SDL3-3.4.18')
 if ($LASTEXITCODE) { throw 'SDL query patch failed.' }
+& python (Join-Path $PSScriptRoot 'patch-sdl-android-driver.py') (Join-Path $cache 'sdl-source/SDL3-3.4.18')
+if ($LASTEXITCODE) { throw 'SDL Android driver patch failed.' }
+# Pinned upstream source; the commit pins liblinkernsbypass via .gitmodules.
+$adreno = Join-Path $cache 'libadrenotools'
+$adrenoCommit = '8fae8ce254dfc1344527e05301e43f37dea2df80'
+if (-not (Test-Path (Join-Path $adreno 'CMakeLists.txt'))) {
+    & git clone --recursive https://github.com/bylaws/libadrenotools.git $adreno
+    if ($LASTEXITCODE) { throw 'libadrenotools clone failed.' }
+}
+$actualCommit = & git -C $adreno rev-parse HEAD
+if ($actualCommit -ne $adrenoCommit) {
+    & git -C $adreno checkout --detach $adrenoCommit
+    if ($LASTEXITCODE) { throw 'libadrenotools pinned checkout failed.' }
+}
+& git -C $adreno submodule update --init --recursive
+if ($LASTEXITCODE) { throw 'libadrenotools dependency checkout failed.' }
 Write-Output 'Android dependencies ready. Build with tools/build-android.ps1.'

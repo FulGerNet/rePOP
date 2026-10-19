@@ -28,6 +28,13 @@ supersampling normalization, asynchronous polling, FIFO immutable snapshots,
 and resource retirement. Native retail initialization checks ABI and actual
 query allocation; missing support produces an explicit D3D11 fallback.
 
+`resot_pipeline_cache_vulkan.inc` adds a persistent `VkPipelineCache`: SDL
+3.4.18 creates Vulkan graphics pipelines without one, and Adreno took up to a
+second per pipeline on every run. `RESOT_SetVulkanPipelineCachePath(path)`
+(before creating the device) names the file; `RESOT_SaveVulkanPipelineCache`
+writes it when pipelines were created since the last save. The driver
+validates the data and ignores another device's.
+
 The synthetic tests in `xboxrecomp/tests/nv2a_native_gpu/` exercise both real
 GPU query implementations, visible/occluded samples, counter scales,
 repeated reports, and CLEAR before submission. These tests contain no game

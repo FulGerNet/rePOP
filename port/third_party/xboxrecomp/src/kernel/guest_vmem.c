@@ -56,6 +56,10 @@ static size_t host_free_run(uintptr_t host, size_t limit)
         MEMORY_BASIC_INFORMATION mbi;
         if (!VirtualQuery((void *)cur, &mbi, sizeof mbi) || mbi.State != MEM_FREE)
             break;
+        /* RE-SoT: a query must advance; the POSIX shim reports unknown
+         * regions with size zero. Never spin forever during Android boot. */
+        if ((uintptr_t)mbi.BaseAddress + mbi.RegionSize <= cur)
+            break;
         cur = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
     }
     return cur - host < limit ? cur - host : limit;
@@ -93,7 +97,14 @@ int guest_vmem_init(ptrdiff_t offset, uint64_t mirror_lo, uint64_t mirror_top)
     s_lo = (uint32_t)mirror_top;
     host = (void *)((uintptr_t)s_lo + (uintptr_t)offset);
 
+    /* RE-SoT: Android's VirtualQuery tracks our mappings only, not host free
+     * runs. Ask VirtualAlloc for the range directly: its fixed-address mmap
+     * refuses collisions rather than replacing existing mappings. */
+#ifdef __ANDROID__
+    bytes = (GUEST_VMEM_TOP - s_lo) & ~(size_t)0xFFFF;
+#else
     bytes = host_free_run((uintptr_t)host, GUEST_VMEM_TOP - s_lo) & ~(size_t)0xFFFF;
+#endif
     if (bytes && !VirtualAlloc(host, bytes, MEM_RESERVE, PAGE_NOACCESS))
         bytes = 0;
     if (!bytes) {

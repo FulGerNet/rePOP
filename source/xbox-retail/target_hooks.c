@@ -554,6 +554,18 @@ static void text_dump(void)
  * (0x00234DC8, return 0x00234DCD), and again for each new main menu.
  * RESOT_HIDDEN_MENUS=0 disables them. */
 #include "../../port/windows/src/options.h"
+extern void sub_000DBDE0_gen(void);
+/* Retail XBE: 0x000DBDE0 normalizes ECX's int16 stick pair into EAX's
+ * float[2]. Its callers return to 0x000DC0B3 (left) and 0x000DC0C2 (right,
+ * ESI-180). Keep the title's radial deadzone and scale only the latter
+ * float result: a 200% full keyboard/controller/touch look then reaches 2.0. */
+void sub_000DBDE0(void)
+{
+    uint32_t output=g_eax, ret=GMEM32(g_esp);
+    sub_000DBDE0_gen();
+    if(ret==0x000DC0C2u)
+        resot_scale_look((float *)((uintptr_t)g_xbox_mem_offset+output));
+}
 extern uint32_t xbox_ContiguousAlloc(uint32_t size, uint32_t alignment);
 extern void sub_000F84A0_gen(void);
 extern void sub_00039B20_gen(void);
@@ -601,7 +613,7 @@ static uint32_t guest_cdecl(void (*fn)(void), const uint32_t *args, int n)
 static uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
 enum { T_ROOT, T_GRAPHICS, T_CONTROLS, T_KEY0, T_KEY1, T_KEY2, T_JOY0, T_JOY1, T_JOY2,
-       T_RESET, T_GFX = 10, T_KEYS = 20, T_JOYS = 50 };
+       T_RESET, T_GFX = 10, T_LOOK = 15, T_KEYS = 20, T_JOYS = 50 };
 static const char *const s_static_texts[] = {
     "reSOT Options", "Graphics", "Controls",
     "Keyboard: move and fight", "Keyboard: actions", "Keyboard: menus and camera",
@@ -616,6 +628,8 @@ static void resot_text(uint32_t index, char *out, unsigned size)
         snprintf(out, size, "%s", s_static_texts[index]);
     else if (index >= T_GFX && index < T_GFX + RESOT_NATIVE_GRAPHICS_ITEMS)
         resot_native_label(RESOT_NATIVE_GRAPHICS, (int)(index - T_GFX), out, size);
+    else if (index == T_LOOK)
+        resot_native_label(RESOT_NATIVE_CONTROLS, 0, out, size);
     else if (index >= T_KEYS && index < T_KEYS + RESOT_NATIVE_ACTIONS)
         resot_native_label(RESOT_NATIVE_KEYS, (int)(index - T_KEYS), out, size);
     else if (index >= T_JOYS && index < T_JOYS + RESOT_NATIVE_ACTIONS)
@@ -673,10 +687,11 @@ static void native_layout(void)
     p->n = RESOT_NATIVE_GRAPHICS_ITEMS;
     for (i = 0; i < p->n; i++)
         native_choice(p, i, T_GFX + (uint32_t)i, DO_MSG, (int)MSG_ID(P_GFX, i));
-    p = &s_pages[P_CTRL]; p->title = T_CONTROLS; p->top = 0.3f; p->step = 0.0567f; p->n = 7;
+    p = &s_pages[P_CTRL]; p->title = T_CONTROLS; p->top = 0.3f; p->step = 0.05f; p->n = 8;
+    native_choice(p, 0, T_LOOK, DO_MSG, (int)MSG_ID(P_CTRL, 0));
     for (i = 0; i < 6; i++)
-        native_choice(p, i, T_KEY0 + (uint32_t)i, DO_OPEN, P_K0 + i);
-    native_choice(p, 6, T_RESET, DO_MSG, (int)MSG_RESET);
+        native_choice(p, i + 1, T_KEY0 + (uint32_t)i, DO_OPEN, P_K0 + i);
+    native_choice(p, 7, T_RESET, DO_MSG, (int)MSG_RESET);
     for (i = 0; i < 6; i++) {
         int joy = i >= 3, part = i % 3;
         p = &s_pages[P_K0 + i];
@@ -832,6 +847,45 @@ void sub_002A2B20_enter(void)
     }
 }
 
+/* Xbox Live is not provided (xbox-retail XBE). The main menu adds its choice
+ * at 0x00234D35 (return 0x00234D3A, text 0B008C4E:56) and stores the handle
+ * at [ebp+0x288]; the only reader is the bind at 0x00235406 (return
+ * 0x0023540B). Skipping both leaves the page as if the title never had it.
+ * The skipped add writes handle 0 to its out argument. The skipped bind
+ * writes binding 0 and returns as 0x00116660 does (0x00116765-0x00116799):
+ * eax/ecx/edx = the [0x758D64]/[0x758D68]/[0x758D6C] values it restores.
+ * RESOT_XBOX_LIVE_MENU=1 keeps the choice. The pause menu's Xbox Live
+ * choice (return 0x001A33F6) is not changed. */
+#define LIVE_ADD_RET  0x00234D3Au
+#define LIVE_BIND_RET 0x0023540Bu
+extern void sub_002A3910_gen(void);
+extern void sub_00116660_gen(void);
+static int hide_live(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("RESOT_XBOX_LIVE_MENU"); on = !(e && *e && *e != '0'); }
+    return on;
+}
+void sub_002A3910(void)
+{
+    if (hide_live() && GMEM32(g_esp) == LIVE_ADD_RET) {
+        GMEM32(GMEM32(g_esp + 4)) = 0;
+        g_esp += 4;                                   /* ret (cdecl) */
+        return;
+    }
+    sub_002A3910_gen();
+}
+void sub_00116660(void)
+{
+    if (hide_live() && GMEM32(g_esp) == LIVE_BIND_RET && GMEM32(g_esp + 12) == 0) {
+        GMEM32(GMEM32(g_esp + 4)) = 0;
+        g_eax = GMEM32(0x00758D64u); g_ecx = GMEM32(0x00758D68u); g_edx = GMEM32(0x00758D6Cu);
+        g_esp += 4;
+        return;
+    }
+    sub_00116660_gen();
+}
+
 void sub_002A3910_enter(void)
 {
     char t[80];
@@ -933,6 +987,8 @@ void sub_00039B20(void)
         resot_native_reset_bindings();
     else if ((id >> 8) == P_GFX)
         resot_native_activate(RESOT_NATIVE_GRAPHICS, (int)(id & 0xFF));
+    else if ((id >> 8) == P_CTRL)
+        resot_native_activate(RESOT_NATIVE_CONTROLS, (int)(id & 0xFF));
     else if ((id >> 8) >= P_K0 && (id >> 8) <= P_J2)
         resot_native_activate((id >> 8) >= P_J0 ? RESOT_NATIVE_JOY : RESOT_NATIVE_KEYS,
                               (int)(id & 0xFF));

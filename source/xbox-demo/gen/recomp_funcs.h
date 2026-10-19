@@ -2647,7 +2647,7 @@ void sub_000C0190(void);
 void sub_000C0200(void);
 void sub_000C0280(void);
 void sub_000C03F0(void);
-void sub_000C05D0(void);
+void sub_000C05D0_gen(void);
 void sub_000C06A0(void);
 void sub_000C0930(void);
 void sub_000C0B40(void);
@@ -11225,6 +11225,7 @@ void sub_00656D65(void);
 /* Hand-written overrides (defined by the project) */
 void sub_00018EA0(void);  /* 0x00018EA0 */
 void sub_00061470(void);  /* 0x00061470 */
+void sub_000C05D0(void);  /* 0x000C05D0 */
 void sub_001104E0(void);  /* 0x001104E0 */
 void sub_0029D0C0(void);  /* 0x0029D0C0 */
 void sub_0029D170(void);  /* 0x0029D170 */

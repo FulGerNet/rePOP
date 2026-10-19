@@ -19,7 +19,7 @@
         android:isGame="true"
         android:appCategory="game"
         android:hardwareAccelerated="true"
-        android:extractNativeLibs="false"
+        android:extractNativeLibs="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
         android:enableOnBackInvokedCallback="false">
 

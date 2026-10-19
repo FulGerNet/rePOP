@@ -725,7 +725,8 @@ static void bridge_NtClose(void)
     if (raw_handle && raw_handle != 0xDEAD0001u && raw_handle != 0xBEEF0010u) {
         HANDLE h = bridge_take_handle(raw_handle);
         if (h && h != INVALID_HANDLE_VALUE) {
-#ifdef _WIN32
+#if defined(_WIN32) || (defined(__ANDROID__) && RESOT_RUNTIME_RETAIL)
+            /* RE-SoT: free POSIX profile searches before malloc can reuse h. */
             xbox_dir_context_drop(h);
 #endif
             CloseHandle(h);
@@ -2442,9 +2443,9 @@ extern int  xbox_DispatchTryEnter(void);
 extern void xbox_DispatchLeave(void);
 
 /* RE-SoT: may deferred work run now? Not while a guest thread is at
- * DISPATCH_LEVEL or above, as on the single-CPU console. After 250 ms of
- * refusals it runs anyway (once logged): a leaked raise must not stop every
- * DPC and timer for the rest of the run. Returns 1 owned, 2 forced, 0 no. */
+ * DISPATCH_LEVEL or above, as on the single-CPU console. Retail retains its
+ * logged 250 ms escape for a leaked raise; demo always defers while owned.
+ * Returns 1 owned, 2 forced (retail only), 0 no. */
 static int kernel_dispatch_enter(void)
 {
     static DWORD refused_since;
@@ -2452,6 +2453,12 @@ static int kernel_dispatch_enter(void)
         refused_since = 0;
         return 1;
     }
+#if RESOT_RUNTIME_DEMO
+    /* RE-SoT: demo 0x002EF6CD shares its voice lists with DirectSound DPCs.
+     * Time passing cannot make a raised-IRQL list mutation safe to interrupt.
+     * Keep queued work pending instead of racing it after the old timeout. */
+    return 0;
+#else
     if (!refused_since)
         refused_since = GetTickCount() | 1;
     if (GetTickCount() - refused_since > 250) {
@@ -2463,6 +2470,7 @@ static int kernel_dispatch_enter(void)
         return 2;
     }
     return 0;
+#endif
 }
 
 /* Run whatever is queued. Called from the timer thread, which has the guest

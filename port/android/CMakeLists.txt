@@ -15,10 +15,11 @@ cmake_minimum_required(VERSION 3.22)
 # Both game libraries are in every APK; GameActivity loads one of them in its
 # own process. A target whose lifted sources are absent (tools/recomp.ps1 has
 # not been run for it) is left out, and the launcher reports it.
-project(reSOT_android C)
+project(reSOT_android C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 17)
 
 get_filename_component(RESOT_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 set(RT "${RESOT_ROOT}/port/third_party/xboxrecomp/src")
@@ -41,6 +42,13 @@ set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SDL_ANDROID_JAR OFF CACHE BOOL "" FORCE)
 add_subdirectory("${RESOT_SDL_SOURCE}" sdl EXCLUDE_FROM_ALL)
+
+# libadrenotools and its pinned linker namespace dependency are fetched by
+# setup-android.ps1. Hooks must be shipped/extracted alongside the game DSOs.
+set(BUILD_SHARED_LIBS OFF)
+add_subdirectory("${RESOT_ROOT}/build/deps/libadrenotools" adrenotools EXCLUDE_FROM_ALL)
+set_target_properties(adrenotools PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(linkernsbypass PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ── host shaders: the same HLSL as Windows, SPIR-V for Vulkan ──
 set(native_shaders "${CMAKE_BINARY_DIR}/native-shaders")
@@ -81,6 +89,7 @@ set(RUNTIME_SOURCES
 # options.c do, for Android; scene.c and the manual overrides are shared.
 set(HOST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/main_android.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/driver_android.c
     ${CMAKE_CURRENT_LIST_DIR}/src/input_android.c
     ${CMAKE_CURRENT_LIST_DIR}/src/audio_android.c
     ${CMAKE_CURRENT_LIST_DIR}/src/options_android.c
@@ -109,7 +118,8 @@ function(resot_android_game id lib runtime_define)
         "${RESOT_ROOT}/port/third_party/xboxrecomp/include/xbox"
         "${native_shaders}")
     target_compile_options(${lib} PRIVATE ${RESOT_GUEST_FLAGS} -O2 -w)
-    target_link_libraries(${lib} PRIVATE SDL3::SDL3-shared android log m)
+    target_link_libraries(${lib} PRIVATE SDL3::SDL3-shared adrenotools android log m)
+    add_dependencies(${lib} main_hook file_redirect_hook gsl_alloc_hook hook_impl)
     # Unresolved symbols are build errors, not a crash when the game starts.
     target_link_options(${lib} PRIVATE "-Wl,--no-undefined")
 endfunction()

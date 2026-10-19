@@ -48,8 +48,7 @@ static const char *const s_joy_names[25] = {
     "D-pad left", "D-pad right", "Left stick up", "Left stick down", "Left stick left",
     "Left stick right", "Right stick up", "Right stick down", "Right stick left", "Right stick right"
 };
-static const int s_sizes[][2] = {{0,0},{800,600},{1024,768},{1280,720},{1600,900},
-                                      {1920,1080},{2560,1440},{3840,2160}};
+static const int s_scales[] = {50,75,100,150,225,300};
 /* The game's menu font has no hyphen or brackets, and a page is one column
  * that starts right of centre: short names for the native pages. */
 static const char *const s_native_actions[ACTIONS] = {
@@ -58,15 +57,13 @@ static const char *const s_native_actions[ACTIONS] = {
     "Menu up", "Menu down", "Menu left", "Menu right", "Cam up", "Cam down",
     "Cam left", "Cam right", "Stick click"
 };
-static const char *const s_native_sizes[] = {"Monitor","800x600","1024x768","1280x720",
-    "1600x900","1920x1080","2560x1440","3840x2160"};
+static const char *const s_native_sizes[] = {"240p 0.5x","360p 0.75x","480p 1x","720p 1.5x","1080p 2.25x","1440p 3x"};
 static const char *const s_native_joy[25] = {
     "None", "A", "B", "X", "Y", "Black", "White", "L trigger", "R trigger", "Start", "Back",
     "L stick", "R stick", "Pad up", "Pad down", "Pad left", "Pad right", "L up", "L down",
     "L left", "L right", "R up", "R down", "R left", "R right"
 };
-static const char *const s_size_names[] = {"Monitor (borderless)","800 x 600","1024 x 768",
-    "1280 x 720","1600 x 900","1920 x 1080","2560 x 1440","3840 x 2160"};
+static const char *const s_size_names[] = {"240p (50%)","360p (75%)","480p (100%)","720p (150%)","1080p (225%)","1440p (300%)"};
 static const int s_caps[] = {30,60,120,0};
 static const char *const s_cap_names[] = {"30","60","120","None"};
 static SRWLOCK s_lock = SRWLOCK_INIT;
@@ -94,12 +91,14 @@ static const char *active_renderer(void)
 static int s_joy_was[25], s_walk, s_walk_was, s_pending_size, s_size_posted;
 static int s_native_capture, s_native_since, s_capture_armed;
 static int s_keyboard_enabled=1, s_mouse_speed=43, s_walk_deflection=12000;
+static int s_look_sensitivity=100;
 static char s_path[1024];
 
 extern void *xbox_FramebufferWindowHandle(void);
 extern int xbox_FramebufferKeyDown(int);
 extern void xbox_FramebufferTakeMouse(int *, int *);
 extern void xbox_SetFrameLimit(int);
+extern void xbox_SetRenderScalePercent(int);
 extern void xbox_SetVSync(int);
 extern void xbox_SetPostProcessing(int);
 extern void xbox_FramebufferSetOptionsCallbacks(
@@ -143,8 +142,10 @@ static int save_config(void)
     ok &= WritePrivateProfileStringA("Graphics","VSync",value,s_path);
     snprintf(value,sizeof value,"%d",s_post_processing);
     ok &= WritePrivateProfileStringA("Graphics","PostProcessing",value,s_path);
-    snprintf(value,sizeof value,"%d",s_resolution);
-    ok &= WritePrivateProfileStringA("Graphics","Resolution",value,s_path);
+    snprintf(value,sizeof value,"%d",s_scales[s_resolution]);
+    ok &= WritePrivateProfileStringA("Graphics","InternalResolutionPercent",value,s_path);
+    snprintf(value,sizeof value,"%d",s_look_sensitivity);
+    ok &= WritePrivateProfileStringA("Controls","LookSensitivityPercent",value,s_path);
     for (i=0;i<ACTIONS;i++) {
         snprintf(name,sizeof name,"Action%d",i);
         snprintf(value,sizeof value,"%d",s_keys[i]);
@@ -191,10 +192,10 @@ static void assign_binding(int code)
 }
 
 static int controls_top(void) { return s_graphics_expanded ? 344 : 46; }
-static int rows_top(void) { return controls_top()+98; }
+static int rows_top(void) { return controls_top()+138; }
 static int max_scroll(void)
 {
-    int height=controls_top()+(s_controls_expanded?98+ACTIONS*ROW_H+15:42);
+    int height=controls_top()+(s_controls_expanded?138+ACTIONS*ROW_H+15:42);
     int maximum=height-(BODY_BOTTOM-BODY_TOP);
     return maximum>0?maximum:0;
 }
@@ -208,23 +209,8 @@ static void scroll_to(int value)
 
 static void apply_resolution(HWND window)
 {
-    RECT r;
-    int width=s_sizes[s_resolution][0], height=s_sizes[s_resolution][1];
-    MONITORINFO mi;
-    mi.cbSize=sizeof mi;
-    GetMonitorInfoA(MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST),&mi);
-    if (!width) {
-        SetWindowLongPtrA(window,GWL_STYLE,WS_POPUP|WS_VISIBLE);
-        SetWindowPos(window,NULL,mi.rcMonitor.left,mi.rcMonitor.top,
-            mi.rcMonitor.right-mi.rcMonitor.left,mi.rcMonitor.bottom-mi.rcMonitor.top,
-            SWP_NOZORDER|SWP_FRAMECHANGED);
-    } else {
-        r.left=r.top=0; r.right=width; r.bottom=height;
-        AdjustWindowRect(&r,WS_OVERLAPPEDWINDOW,FALSE);
-        SetWindowLongPtrA(window,GWL_STYLE,WS_OVERLAPPEDWINDOW|WS_VISIBLE);
-        SetWindowPos(window,NULL,mi.rcWork.left+24,mi.rcWork.top+24,r.right-r.left,r.bottom-r.top,
-                     SWP_NOZORDER|SWP_FRAMECHANGED);
-    }
+    (void)window;
+    xbox_SetRenderScalePercent(s_scales[s_resolution]);
 }
 
 static int native_event(void *handle, unsigned message, uintptr_t wp, intptr_t lp)
@@ -347,7 +333,7 @@ static int event(void *handle, unsigned message, uintptr_t wp, intptr_t lp)
         else if(x>=PW-20 && x<PW-5 && y>=BODY_TOP && y<BODY_BOTTOM) {
             s_drag=1; SetCapture(window);
             scroll_to((y-BODY_TOP-22)*max_scroll()/(BODY_BOTTOM-BODY_TOP-44));
-        } else if (s_graphics_expanded && s_dropdown && x>=245 && x<480 && body>=272 && body<272+8*29) {
+        } else if (s_graphics_expanded && s_dropdown && x>=245 && x<480 && body>=272 && body<272+6*29) {
             s_resolution=(body-272)/29; s_dropdown=0; save_config();
             PostMessageA(window,APPLY_SIZE,0,0);
         } else if(x>=20 && x<490 && y>=BODY_TOP && y<BODY_BOTTOM) {
@@ -375,7 +361,10 @@ static int event(void *handle, unsigned message, uintptr_t wp, intptr_t lp)
                 memcpy(s_keys,s_default_keys,sizeof s_keys);memcpy(s_joy,s_default_joy,sizeof s_joy);
                 s_capture=-1;s_walk=s_walk_was=0;save_config();
             }
-            else if(s_controls_expanded && body>=controls_top()+38 && body<controls_top()+71) { s_tab=x<255?0:1; s_capture=-1; }
+            else if(s_controls_expanded && body>=controls_top()+38 && body<controls_top()+68 && x>=245) {
+                s_look_sensitivity=s_look_sensitivity>=200?25:s_look_sensitivity+25;save_config();
+            }
+            else if(s_controls_expanded && body>=controls_top()+78 && body<controls_top()+111) { s_tab=x<255?0:1; s_capture=-1; }
             else if(action>=0 && x>=245) {
                 if(message==WM_RBUTTONDOWN) { (s_tab?s_joy:s_keys)[action]=0; save_config(); }
                 else if(message==WM_LBUTTONDBLCLK) { s_capture=action;s_capture_tab=s_tab;s_capture_armed=0;
@@ -463,9 +452,13 @@ static int panel(const uint32_t **pixels,uint32_t *width,uint32_t *height)
         text(23,Y(controls_top()),330,s_controls_expanded?"[-] Controls":"[+] Controls",RGB(110,193,249));
         if(s_controls_expanded) {
         box(360,Y(controls_top()),120,27,RGB(36,46,63));text(368,Y(controls_top()+1),106,"Reset bindings",RGB(185,207,233));
-        box(20,Y(controls_top()+38),225,33,s_tab==0?RGB(46,72,99):RGB(36,46,63));
-        box(255,Y(controls_top()+38),225,33,s_tab==1?RGB(46,72,99):RGB(36,46,63));
-        text(33,Y(controls_top()+41),205,"Keyboard / Mouse",RGB(235,242,251));text(270,Y(controls_top()+41),205,"Joystick",RGB(235,242,251));
+        text(23,Y(controls_top()+39),215,"Look sensitivity",RGB(220,229,242));
+        snprintf(label,sizeof label,"%d%%  (click to change)",s_look_sensitivity);
+        box(245,Y(controls_top()+38),235,30,RGB(36,46,63));
+        text(255,Y(controls_top()+39),220,label,RGB(235,242,251));
+        box(20,Y(controls_top()+78),225,33,s_tab==0?RGB(46,72,99):RGB(36,46,63));
+        box(255,Y(controls_top()+78),225,33,s_tab==1?RGB(46,72,99):RGB(36,46,63));
+        text(33,Y(controls_top()+81),205,"Keyboard / Mouse",RGB(235,242,251));text(270,Y(controls_top()+81),205,"Joystick",RGB(235,242,251));
         for(i=0;i<ACTIONS;i++) {
             y=Y(rows_top()+i*ROW_H);
             if(y+ROW_H<BODY_TOP || y>=BODY_BOTTOM)continue;
@@ -481,7 +474,7 @@ static int panel(const uint32_t **pixels,uint32_t *width,uint32_t *height)
             text(253,y,225,s_capture==i&&s_capture_tab==s_tab?"Press input...":label,RGB(166,201,237));
         }
         }
-        if(s_graphics_expanded && s_dropdown)for(i=0;i<8;i++) {box(245,Y(272+i*29),235,29,RGB(42,57,78));
+        if(s_graphics_expanded && s_dropdown)for(i=0;i<6;i++) {box(245,Y(272+i*29),235,29,RGB(42,57,78));
             text(255,Y(272+i*29),220,s_size_names[i],RGB(235,242,251));}
         RestoreDC(s_dc,-1);
         box(PW-17,BODY_TOP,7,BODY_BOTTOM-BODY_TOP,RGB(34,45,61));
@@ -589,6 +582,14 @@ static void input(void *state,unsigned port)
     ReleaseSRWLockExclusive(&s_lock);
 }
 
+void resot_scale_look(float *axes)
+{
+    AcquireSRWLockShared(&s_lock);
+    axes[0]=resot_look_value(axes[0],s_look_sensitivity);
+    axes[1]=resot_look_value(axes[1],s_look_sensitivity);
+    ReleaseSRWLockShared(&s_lock);
+}
+
 void resot_native_label(int page, int item, char *out, unsigned size)
 {
     char value[100];
@@ -600,6 +601,8 @@ void resot_native_label(int page, int item, char *out, unsigned size)
         case 2: snprintf(out,size,"Post processing: %s",s_post_processing?"On":"Off"); break;
         default: snprintf(out,size,"Resolution: %s",s_native_sizes[s_resolution]); break;
         }
+    } else if (page==RESOT_NATIVE_CONTROLS && item==0) {
+        snprintf(out,size,"Look sensitivity: %d%%",s_look_sensitivity);
     } else if (item>=0 && item<ACTIONS) {
         int joy=page==RESOT_NATIVE_JOY;
         if (s_capture==item && s_capture_tab==joy && s_native_capture)
@@ -631,8 +634,11 @@ void resot_native_activate(int page, int item)
         case 0: s_fps=s_fps==30?60:s_fps==60?120:s_fps==120?0:30; xbox_SetFrameLimit(s_fps); break;
         case 1: s_vsync=!s_vsync; xbox_SetVSync(s_vsync); break;
         case 2: s_post_processing=!s_post_processing; xbox_SetPostProcessing(s_post_processing); break;
-        case 3: s_resolution=(s_resolution+1)%8; resize=1; break;
+        case 3: s_resolution=(s_resolution+1)%6; resize=1; break;
         }
+        save_config();
+    } else if (page==RESOT_NATIVE_CONTROLS && item==0) {
+        s_look_sensitivity=s_look_sensitivity>=200?25:s_look_sensitivity+25;
         save_config();
     } else if (item>=0 && item<ACTIONS) {
         s_capture=item; s_capture_tab=page==RESOT_NATIVE_JOY; s_native_capture=1; s_capture_armed=0;
@@ -663,6 +669,7 @@ void resot_options_init(void)
     slash=strrchr(s_path,'\\');if(slash)slash[1]=0;else s_path[0]=0;
     if(strlen(s_path)+strlen("resot-options.ini")>=sizeof s_path)return;
     strcat(s_path,"resot-options.ini");
+    s_look_sensitivity=resot_look_percent((int)GetPrivateProfileIntA("Controls","LookSensitivityPercent",100,s_path));
     GetPrivateProfileStringA("Graphics","Renderer","d3d11",name,sizeof name,s_path);
     env=getenv("RESOT_RENDERER");
     s_renderer=!_stricmp(name,"vulkan")?2:!_stricmp(name,"d3d12")?1:0;
@@ -673,12 +680,14 @@ void resot_options_init(void)
     _putenv_s("RESOT_RENDERER",s_renderer_tokens[i]);
     s_fps=(int)GetPrivateProfileIntA("Graphics","FPSLimit",60,s_path);
     if(s_fps!=0 && s_fps!=30 && s_fps!=60 && s_fps!=120)s_fps=60;
-    s_resolution=(int)GetPrivateProfileIntA("Graphics","Resolution",0,s_path);
-    if(s_resolution<0 || s_resolution>=8)s_resolution=0;
+    s_resolution=2;
+    { int percent=(int)GetPrivateProfileIntA("Graphics","InternalResolutionPercent",100,s_path);
+      for(i=0;i<6;i++)if(s_scales[i]==percent)s_resolution=i; }
+    xbox_SetRenderScalePercent(s_scales[s_resolution]);
     env=getenv("RECOMP_HW_VSYNC");
     s_vsync=GetPrivateProfileIntA("Graphics","VSync",!env || *env!='0',s_path)!=0;
     s_post_processing=GetPrivateProfileIntA("Graphics","PostProcessing",1,s_path)!=0;
-    s_pending_size=GetFileAttributesA(s_path)!=INVALID_FILE_ATTRIBUTES;
+    s_pending_size=0; /* Internal resolution never changes the window. */
     for(i=0;i<ACTIONS;i++) {
         snprintf(name,sizeof name,"Action%d",i);
         s_keys[i]=(int)GetPrivateProfileIntA("Keyboard",name,s_default_keys[i],s_path);

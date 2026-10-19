@@ -40,8 +40,9 @@ installs another disc, for example the other game. `run.ps1`
 The app starts full screen with graphics, audio, keyboard and controller
 enabled. Space or controller A skips a Bink video, including videos whose
 original skip permission is disabled. F5 opens/closes the compact translucent top-left panel
-with game FPS and `Current WOW`, the loaded BF world's own name (`None`
-when no world is loaded). Alt+Enter/F11 changes window mode; Alt+F4 exits.
+with game FPS, `Current WOW` (the loaded BF world's own name, `None`
+when no world is loaded), and `Renderer:` showing the active Direct3D 11,
+Direct3D 12, Vulkan or software renderer. F11 changes window mode; Alt+F4 exits.
 F6 opens the translucent diagnostics panel. Like F5 it leaves the game
 playable. It shows, twice a second: frame rate and frame time with the
 current graphics settings; executor time (interpreter, draw calls), present
@@ -61,8 +62,15 @@ while open. F6 remains assigned to diagnostics; while options are open,
 the options surface takes display priority. The same settings remain in
 the game's main menu under `reSOT Options`:
  Graphics has the FPS limiter (30/60/120/None), VSync, post-processing
-and the window resolution (Monitor is a borderless window on the desktop);
-each choice cycles its value. Controls has the keyboard and joystick
+and internal rendering resolution (240p, 360p, 480p, 720p, 1080p, 1440p);
+each choice cycles its value. Resolution changes from either menu or F7 preserve the current
+fullscreen/window state; only F11 toggles it, including while F7 is open.
+The INI key is `[Graphics] InternalResolutionPercent` (50/75/100/150/225/300,
+default 100). The old `Resolution` window-size index is no longer used.
+The labels assume a 480-line guest target; aspect ratio remains unchanged.
+Movies and options retain display resolution; effects retain guest resolution.
+ Controls has **Look sensitivity** (25–200% in steps of 25, default 100%),
+also in F7, and the keyboard and joystick
 bindings in three pages each; choosing a binding waits for the next key,
 mouse button or joystick input (Esc cancels), and `Reset all bindings`
 restores the defaults. A joystick binding is taken only after every pad
@@ -73,6 +81,10 @@ timing can still limit FPS. Settings are saved in `resot-options.ini`
 beside the executable, except in runs with `RECOMP_PAD_SCRIPT` or
 `RECOMP_PAD_LIVE`: their scripted presses can reach these pages, so their
 changes last only for that run.
+Look sensitivity uses `[Controls] LookSensitivityPercent` and scales only
+the right-stick camera values after the original deadzone. It applies to
+keyboard/mouse and controller look, including full deflection above 100%;
+the Android counterpart applies the same setting to touch look too.
 F7 Graphics selects `Direct3D 11`, `D3D12 (native)` or `Vulkan (native)`
 after restarting the game. The two native modes use SDL GPU's D3D12/Vulkan
 command encoders, with DXIL/SPIR-V shaders, native GPU resources and GPU draws.
@@ -95,9 +107,13 @@ uses actual hardware visibility queries, read asynchronously after submission
 fences, with immutable reports that survive counter clears. An older SDL DLL
 without the query extension or a device without the required query capability
 produces an explicit D3D11 fallback. Demo does not enable retail's report rules.
-Border-address sampling currently clamps to the texture edge; GPU vertex-program
-translation and broader gameplay validation remain pending. Stencil support is
-still incomplete, as on the D3D11 renderer.
+Border-address sampling currently clamps to the texture edge; broader gameplay
+validation remains pending. Stencil support is still incomplete, as on the
+D3D11 renderer. NV2A vertex programs run on the GPU in `vs_uber`, a shader
+compiled offline that interprets the program (no shader compiler at run
+time); programs that write constants or read more than eight inputs still use
+the CPU interpreter. `RESOT_NATIVE_CPU_VSH=1` puts every program back on the
+CPU, for comparison.
 
 `RESOT_RENDERER=d3d11`, `d3d12` or `vulkan` overrides the saved choice for one
 run. D3D11 stays the default. The panel reports the actual active backend,
@@ -207,7 +223,7 @@ pad, for comparison.
 picture Hor+: more scene at the sides, the same vertical view, the 2D at its
 original 4:3 size; the in-game HUD moves out to the screen's sides
 (`-Set @{RECOMP_HW_HUD_EDGE='0'}` keeps it in the 4:3 frame). The game opens as a borderless window over the whole
-monitor; `-Windowed` opens a window instead, and Alt+Enter or F11 switch
+monitor; `-Windowed` opens a window instead, and F11 switches
 between the two while it runs. `-NoVsync` stops waiting for the
 display, `-NoAudio` leaves the sound hardware out.
 

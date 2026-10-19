@@ -17,6 +17,7 @@
 #define _GNU_SOURCE   /* FNM_CASEFOLD */
 #include "kernel.h"
 #include "resot_runtime.h" /* RE-SoT: per-target behaviour. */
+#include "resot_file_access.h" /* RE-SoT: save files allow random writes. */
 #include <string.h>
 #include <stdio.h>
 
@@ -759,6 +760,48 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
 /* ====================  POSIX backend  =================================== */
 /* ======================================================================== */
 
+/* RE-SoT: Android retail opens profile folders relative to an existing
+ * directory handle. Resolving these against game_dir loses that parent. */
+static int posix_object_path(PXBOX_OBJECT_ATTRIBUTES oa, char *out, size_t size)
+{
+    const char *path=get_xbox_path(oa);
+    if (!path) return 0;
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+    if (oa->RootDirectory && path[0]!='\\' && path[0]!='/' && !strchr(path,':')) {
+        const char *parent=w32_handle_path(oa->RootDirectory);
+        if (!parent || snprintf(out,size,"%s/%s",parent,path)>=(int)size) return 0;
+        for(char *p=out;*p;p++) if(*p=='\\') *p='/';
+        return 1;
+    }
+#endif
+    return xbox_translate_path(path,out,(int)size);
+}
+
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+/* RE-SoT: retain bounded evidence of profile I/O in device release logs.
+ * Missing-file probes alone cannot distinguish creation from a saved header
+ * appended at EOF; offsets and resulting sizes make the next run reviewable. */
+static void resot_trace_save_io(HANDLE handle, const char *operation,
+                               PLARGE_INTEGER offset, ULONG requested,
+                               ssize_t transferred)
+{
+    static LONG reads, writes;
+    const char *path = w32_handle_path(handle);
+    if (!path || !strstr(path, "/UDATA/") ||
+        (!strstr(path, ".sav") && !strstr(path, ".cfg"))) return;
+    LONG count = InterlockedIncrement(operation[0] == 'W' ? &writes : &reads);
+    if (count > 32) return;
+    int saved_errno = errno;
+    struct stat st;
+    int fd = w32_handle_fd(handle);
+    long long size = fstat(fd, &st) == 0 ? (long long)st.st_size : -1;
+    fprintf(stderr, "  [SAVE %s] %s offset=%lld want=%u got=%lld size=%lld\n",
+            operation, path, offset ? (long long)offset->QuadPart : -2LL,
+            (unsigned)requested, (long long)transferred, size);
+    errno = saved_errno;
+}
+#endif
+
 /* Convert Xbox access mask + disposition to POSIX open() flags. */
 static int posix_open_flags(ACCESS_MASK access, ULONG disposition)
 {
@@ -779,7 +822,14 @@ static int posix_open_flags(ACCESS_MASK access, ULONG disposition)
     /* O_TRUNC / O_CREAT imply write intent */
     if ((extra & (O_TRUNC | O_CREAT)) && rw == O_RDONLY)
         rw = O_RDWR;
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+    /* RE-SoT: full file access includes APPEND_DATA, but also WRITE_DATA.
+     * O_APPEND would ignore the save writer's seeks and append its header
+     * instead of updating it, leaving profiles unreadable on the next boot. */
+    if (resot_append_only((uint32_t)access))
+#else
     if (access & XBOX_FILE_APPEND_DATA)
+#endif
         extra |= O_APPEND;
     return rw | extra;
 }
@@ -829,13 +879,35 @@ NTSTATUS __stdcall xbox_NtCreateFile(
         return STATUS_INVALID_PARAMETER;
 
     const char* xbox_path = get_xbox_path(ObjectAttributes);
-    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, MAX_PATH)) {
+    if (!xbox_path || !posix_object_path(ObjectAttributes, host_path, MAX_PATH)) {
         xbox_log(XBOX_LOG_ERROR, XBOX_LOG_FILE, "NtCreateFile: path translation failed");
         return STATUS_OBJECT_PATH_NOT_FOUND;
     }
 
     int fd;
     if (CreateOptions & XBOX_FILE_DIRECTORY_FILE) {
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+        /* RE-SoT: retail's free-space probe at XBE 0x00337414 (open
+         * returns to 0x0033744A) opens Partition1 as a directory. The raw
+         * device maps to Partition1.img, so O_DIRECTORY on it is ENOTDIR.
+         * Match Windows: use the image's parent for volume queries, while
+         * ordinary file opens keep the image for byte reads and IOCTL size.
+         * Limit this exception to bare emulated partition devices. */
+        static const char prefix[] = "\\Device\\Harddisk0\\Partition";
+        size_t prefix_len = sizeof(prefix) - 1;
+        if (!_strnicmp(xbox_path, prefix, prefix_len) &&
+            xbox_path[prefix_len] >= '0' && xbox_path[prefix_len] <= '5') {
+            const char *rest = xbox_path + prefix_len + 1;
+            if (*rest == '\\' || *rest == '/') ++rest;
+            if (!*rest) {
+                char *slash = strrchr(host_path, '/');
+                if (slash && slash != host_path) {
+                    *slash = 0;
+                    fprintf(stderr, "  [FILE] partition volume query -> %s\n", host_path);
+                }
+            }
+        }
+#endif
         if (CreateDisposition == XBOX_FILE_CREATE || CreateDisposition == XBOX_FILE_OPEN_IF)
             mkdir(host_path, 0755);   /* EEXIST is fine */
         fd = open(host_path, O_RDONLY | O_DIRECTORY);
@@ -845,6 +917,12 @@ NTSTATUS __stdcall xbox_NtCreateFile(
 
     if (fd < 0) {
         int e = errno;
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+        /* RE-SoT: release-build diagnostics must retain the POSIX cause,
+         * not only the bridge's NTSTATUS and an unpopulated Win32 error. */
+        fprintf(stderr, "  [FILE] open FAILED: %s (options=0x%X errno=%d: %s)\n",
+                host_path, (unsigned)CreateOptions, e, strerror(e));
+#endif
         XBOX_TRACE(XBOX_LOG_FILE, "NtCreateFile FAILED: %s (errno=%d)", host_path, e);
         if (IoStatusBlock) {
             IoStatusBlock->Status = STATUS_OBJECT_NAME_NOT_FOUND;
@@ -881,6 +959,10 @@ NTSTATUS __stdcall xbox_NtReadFile(
         lseek(fd, (off_t)ByteOffset->QuadPart, SEEK_SET);
 
     ssize_t n = read(fd, Buffer, Length);
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+    /* RE-SoT: see the bounded save diagnostics above. */
+    resot_trace_save_io(FileHandle, "READ", ByteOffset, Length, n);
+#endif
     if (n < 0) {
         XBOX_TRACE(XBOX_LOG_FILE, "NtReadFile(handle=%p) errno=%d", FileHandle, errno);
         IoStatusBlock->Status = STATUS_UNSUCCESSFUL;
@@ -913,10 +995,27 @@ NTSTATUS __stdcall xbox_NtWriteFile(
         return STATUS_INVALID_HANDLE;
     }
 
+    /* RE-SoT: retail save writes must honor their explicit offset, including
+     * EOF (-1); report failed seeks instead of writing at an unrelated offset. */
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+    if (ByteOffset && (ByteOffset->QuadPart>=0 || ByteOffset->QuadPart==-1) &&
+        lseek(fd, ByteOffset->QuadPart==-1 ? 0 : (off_t)ByteOffset->QuadPart,
+              ByteOffset->QuadPart==-1 ? SEEK_END : SEEK_SET)<0) {
+        IoStatusBlock->Status=errno_to_status(errno);
+        IoStatusBlock->Information=0;
+        return IoStatusBlock->Status;
+    }
+    ssize_t n;
+    do { n=write(fd,Buffer,Length); } while(n<0 && errno==EINTR);
+#else
     if (ByteOffset && ByteOffset->QuadPart >= 0)
         lseek(fd, (off_t)ByteOffset->QuadPart, SEEK_SET);
-
     ssize_t n = write(fd, Buffer, Length);
+#endif
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+    /* RE-SoT: see the bounded save diagnostics above. */
+    resot_trace_save_io(FileHandle, "WRITE", ByteOffset, Length, n);
+#endif
     if (n < 0) {
         XBOX_TRACE(XBOX_LOG_FILE, "NtWriteFile(handle=%p) errno=%d", FileHandle, errno);
         IoStatusBlock->Status = STATUS_UNSUCCESSFUL;
@@ -934,6 +1033,10 @@ NTSTATUS __stdcall xbox_NtClose(HANDLE Handle)
 {
     XBOX_TRACE(XBOX_LOG_FILE, "NtClose(handle=%p)", Handle);
     if (Handle && Handle != INVALID_HANDLE_VALUE) {
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+        /* RE-SoT: same lifetime rule as the guest NtClose bridge below. */
+        xbox_dir_context_drop(Handle);
+#endif
         CloseHandle(Handle);
         return STATUS_SUCCESS;
     }
@@ -944,7 +1047,7 @@ NTSTATUS __stdcall xbox_NtDeleteFile(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes)
 {
     char host_path[MAX_PATH];
     const char* xbox_path = get_xbox_path(ObjectAttributes);
-    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, MAX_PATH))
+    if (!xbox_path || !posix_object_path(ObjectAttributes, host_path, MAX_PATH))
         return STATUS_OBJECT_PATH_NOT_FOUND;
     XBOX_TRACE(XBOX_LOG_FILE, "NtDeleteFile: %s", host_path);
     if (unlink(host_path) == 0) return STATUS_SUCCESS;
@@ -1118,12 +1221,21 @@ NTSTATUS __stdcall xbox_NtQueryVolumeInformationFile(
 NTSTATUS __stdcall xbox_NtFlushBuffersFile(HANDLE FileHandle, PXBOX_IO_STATUS_BLOCK IoStatusBlock)
 {
     int fd = w32_handle_fd(FileHandle);
+    /* RE-SoT: never claim a failed save flush was durable on Android. */
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+    int result;
+    do { result=fd<0 ? -1 : fsync(fd); } while(fd>=0 && result<0 && errno==EINTR);
+    NTSTATUS status=fd<0 ? STATUS_INVALID_HANDLE : result<0 ? errno_to_status(errno) : STATUS_SUCCESS;
+    if(IoStatusBlock) { IoStatusBlock->Status=status; IoStatusBlock->Information=0; }
+    return status;
+#else
     if (fd >= 0) fsync(fd);
     if (IoStatusBlock) {
         IoStatusBlock->Status = STATUS_SUCCESS;
         IoStatusBlock->Information = 0;
     }
     return STATUS_SUCCESS;
+#endif
 }
 
 NTSTATUS __stdcall xbox_NtQueryFullAttributesFile(
@@ -1136,7 +1248,7 @@ NTSTATUS __stdcall xbox_NtQueryFullAttributesFile(
     if (!FileInformation)
         return STATUS_INVALID_PARAMETER;
     const char* xbox_path = get_xbox_path(ObjectAttributes);
-    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, MAX_PATH))
+    if (!xbox_path || !posix_object_path(ObjectAttributes, host_path, MAX_PATH))
         return STATUS_OBJECT_PATH_NOT_FOUND;
     if (stat(host_path, &st) != 0)
         return STATUS_OBJECT_NAME_NOT_FOUND;
@@ -1162,6 +1274,26 @@ typedef struct {
 static DIR_CONTEXT s_dir_contexts[MAX_DIR_CONTEXTS];
 static CRITICAL_SECTION s_dir_cs;
 static BOOL s_dir_cs_init = FALSE;
+
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+/* RE-SoT: XAPI FindFirstFile closes after one exact-name result. Unlike the
+ * Windows backend, POSIX kept that search alive until EOF. Reused malloc
+ * handle addresses then inherited another filename's cursor and size;
+ * retail rejects pop2.sav before reading it when its size is not 48262.
+ * Release both the DIR stream and slot on close, including abandoned scans. */
+void xbox_dir_context_drop(HANDLE FileHandle)
+{
+    if (!s_dir_cs_init) return;
+    EnterCriticalSection(&s_dir_cs);
+    for (int i = 0; i < MAX_DIR_CONTEXTS; ++i) {
+        DIR_CONTEXT *ctx = &s_dir_contexts[i];
+        if (ctx->handle != FileHandle) continue;
+        if (ctx->dir) closedir(ctx->dir);
+        memset(ctx, 0, sizeof(*ctx));
+    }
+    LeaveCriticalSection(&s_dir_cs);
+}
+#endif
 
 NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
     HANDLE FileHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine, PVOID ApcContext,

@@ -16,12 +16,24 @@ int resot_diag_event(void *window, unsigned message, uintptr_t wp, intptr_t lp);
 
 /* The same settings for the game's own menu pages (target_hooks.c). Pages:
  * Graphics (items 0-3: FPS limit, VSync, post-processing, resolution) and
- * the keyboard and joystick bindings (item = action, 0-24). Activating a
- * graphics item cycles it; activating a binding waits for the next key or
+ * Controls (item 0: Look sensitivity), and the keyboard and joystick
+ * bindings (item = action, 0-24). Activating a setting cycles it; a binding waits for the next key or
  * joystick input. Everything is saved to resot-options.ini at once. */
-enum { RESOT_NATIVE_GRAPHICS, RESOT_NATIVE_KEYS, RESOT_NATIVE_JOY };
+enum { RESOT_NATIVE_GRAPHICS, RESOT_NATIVE_KEYS, RESOT_NATIVE_JOY, RESOT_NATIVE_CONTROLS };
 #define RESOT_NATIVE_GRAPHICS_ITEMS 4
 #define RESOT_NATIVE_ACTIONS 25
+/* Shared by the hosts and target hooks. Apply sensitivity to normalized
+ * camera floats, after the title's deadzone, so 200% also speeds full-stick
+ * and digital keyboard look without overflowing the Xbox int16 input. */
+static inline int resot_look_percent(int percent)
+{
+    return percent < 25 ? 25 : percent > 200 ? 200 : ((percent + 12) / 25) * 25;
+}
+static inline float resot_look_value(float axis, int percent)
+{
+    return axis * ((float)resot_look_percent(percent) / 100.0f);
+}
+void resot_scale_look(float *axes);
 void resot_native_label(int page, int item, char *out, unsigned size);
 void resot_native_activate(int page, int item);
 void resot_native_reset_bindings(void);

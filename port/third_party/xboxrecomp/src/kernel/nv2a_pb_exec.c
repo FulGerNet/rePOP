@@ -30,6 +30,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#if !defined(_WIN32)
+#include <unistd.h>   /* RE-SoT: sysconf, CPU count for vmt_init */
+#endif
 #include "kernel.h"   /* XBOX_CONTIG_BASE / XBOX_CONTIG_SIZE */
 #include "xbox_memory_layout.h"   /* xbox_Nv2aFrameCounterFlip */
 #include "resot_runtime.h"        /* RE-SoT: per-target behaviour */
@@ -2206,9 +2209,145 @@ static int transform_vertex(uint32_t index, Nv2aVshOutput *out)
     float in[NV2A_VSH_INPUTS][4];
     uint32_t a;
 
+    /* RE-SoT: the interpreter never consumes unused input slots. Avoid
+     * fetching all sixteen attributes for each CPU-transformed vertex. */
+    uint32_t mask = nv2a_vsh_input_mask();
     for (a = 0; a < NV2A_VSH_INPUTS; a++)
-        fetch_attr(&s_gpu.attr[a], index, in[a]);   /* absent: 0,0,0,1 */
+        if (mask & (1u << a)) fetch_attr(&s_gpu.attr[a], index, in[a]);
     return nv2a_vsh_run((const float (*)[4])in, out);
+}
+
+/* RE-SoT: the interpreter on several cores. Every distinct vertex of a batch
+ * is independent: workers read guest memory (fetch_attr) and the decoded
+ * program and constants, and each writes only its own s_xf entries. Programs
+ * that write constants (CXT_WRITE) stay serial, as do small batches, where a
+ * dispatch would cost more than it saves. The interpreter is the fallback
+ * for programs vs_uber cannot run, and the path RESOT_NATIVE_CPU_VSH=1
+ * selects. RESOT_VSH_THREADS=<n> sets the worker count; 0 keeps everything
+ * on the executor thread. */
+#define VMT_MAX 7
+#define VMT_MIN 128                     /* distinct vertices worth dispatching */
+#define VMT_CHUNK 32
+/* Workers spin on a generation counter and sleep on `start` only after
+ * VMT_SPIN idle polls: on Android a semaphore wake per batch cost more than
+ * the threads saved (vertex 43-58 ms a frame with 6 workers, 17-49 ms on one
+ * thread; 2026-10-19 logs). */
+#define VMT_SPIN 200000
+static struct {
+    int workers;
+    HANDLE start;
+    const uint16_t *index;
+    const uint32_t *pos;
+    uint32_t count;
+    volatile LONG next, failed, gen, finished, sleepers;
+} s_vmt;
+static void vmt_pause(unsigned spins)
+{
+#if defined(_WIN32)
+    YieldProcessor();
+#elif defined(__aarch64__)
+    __asm__ __volatile__("yield");
+#endif
+    if ((spins & 1023) == 0) SwitchToThread();
+}
+static int transform_vertex(uint32_t index, Nv2aVshOutput *out);
+static void vmt_run(void)
+{
+    LONG c;
+    while ((uint32_t)(c = InterlockedExchangeAdd(&s_vmt.next, VMT_CHUNK)) < s_vmt.count) {
+        uint32_t i, end = (uint32_t)c + VMT_CHUNK;
+        if (end > s_vmt.count) end = s_vmt.count;
+        for (i = (uint32_t)c; i < end; i++)
+            if (!transform_vertex(s_vmt.index[i], &s_xf[s_vmt.pos[i]]))
+                InterlockedExchange(&s_vmt.failed, 1);
+    }
+}
+static DWORD WINAPI vmt_worker(LPVOID arg)
+{
+    LONG seen = 0;
+    (void)arg;
+    for (;;) {
+        unsigned spins = 0;
+        while (InterlockedCompareExchange(&s_vmt.gen, 0, 0) == seen) {
+            if (++spins < VMT_SPIN) { vmt_pause(spins); continue; }
+            InterlockedIncrement(&s_vmt.sleepers);
+            if (InterlockedCompareExchange(&s_vmt.gen, 0, 0) == seen)
+                WaitForSingleObject(s_vmt.start, INFINITE);
+            InterlockedDecrement(&s_vmt.sleepers);
+            spins = 0;
+        }
+        seen = InterlockedCompareExchange(&s_vmt.gen, 0, 0);
+        vmt_run();
+        InterlockedIncrement(&s_vmt.finished);
+    }
+    return 0;
+}
+static int vmt_init(void)
+{
+    static int state = -1;
+    if (state >= 0) return state;
+    {
+        const char *e = getenv("RESOT_VSH_THREADS");
+        int cores, n, k;
+#if defined(_WIN32)
+        SYSTEM_INFO si; GetSystemInfo(&si); cores = (int)si.dwNumberOfProcessors;
+#else
+        cores = (int)sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+        /* Leave the guest and render threads room. Off by default on
+         * Android: on a Snapdragon 8 Gen 3 the threads slowed the
+         * interpreter (semaphores) or stalled the executor (spinning). */
+#if defined(__ANDROID__)
+        n = e && *e ? atoi(e) : 0;
+#else
+        n = e && *e ? atoi(e) : cores - 2;
+#endif
+        if (n > VMT_MAX) n = VMT_MAX;
+        if (getenv("RECOMP_VSH_DUMP")) n = 0;   /* the dump keeps unguarded state */
+        state = 0;
+        if (n > 0) {
+            s_vmt.start = CreateSemaphoreA(NULL, 0, 0x7FFFFFFF, NULL);
+            for (k = 0; s_vmt.start && k < n; k++)
+                if (!CreateThread(NULL, 256 * 1024, vmt_worker, NULL, 0, NULL)) break;
+            s_vmt.workers = k;
+            state = k > 0;
+        }
+        fprintf(stderr, "[VSH] CPU vertex programs: %d worker thread(s) (%d cores)\n",
+                s_vmt.workers, cores);
+    }
+    return state;
+}
+/* Transform index[0..count) into s_xf[pos[i]]; 0 if no program ran. */
+static int vmt_transform(const uint16_t *index, const uint32_t *pos, uint32_t count)
+{
+    int k, ok;
+    if (count < VMT_MIN || !vmt_init()) {
+        uint32_t i;
+        for (i = 0; i < count; i++)
+            if (!transform_vertex(index[i], &s_xf[pos[i]])) return 0;
+        return 1;
+    }
+    nv2a_vsh_program_key(&ok);                  /* no FINAL, or writes c[] */
+    if (!ok) {
+        uint32_t i;
+        for (i = 0; i < count; i++)
+            if (!transform_vertex(index[i], &s_xf[pos[i]])) return 0;
+        return 1;
+    }
+    (void)nv2a_vsh_input_mask();                /* decode once, before the workers read it */
+    s_vmt.index = index; s_vmt.pos = pos; s_vmt.count = count;
+    InterlockedExchange(&s_vmt.next, 0); InterlockedExchange(&s_vmt.failed, 0);
+    InterlockedExchange(&s_vmt.finished, 0);
+    InterlockedIncrement(&s_vmt.gen);               /* publishes the batch */
+    k = (int)InterlockedCompareExchange(&s_vmt.sleepers, 0, 0);
+    if (k > 0) ReleaseSemaphore(s_vmt.start, k, NULL);
+    vmt_run();
+    {
+        unsigned spins = 0;
+        while (InterlockedCompareExchange(&s_vmt.finished, 0, 0) < s_vmt.workers)
+            vmt_pause(++spins);
+    }
+    return !s_vmt.failed;
 }
 
 static void raster_batch_program(void)
@@ -2231,31 +2370,34 @@ static void raster_batch_program(void)
      * title's meshes), and the interpreter was the executor's largest cost. */
     {
         static uint32_t stamp[65536], batch_id;
-        static uint16_t first[65536];
-#if defined(_WIN32)
+        static uint32_t first[65536];
+        /* RE-SoT: distinct vertices first, transformed together (vmt_transform),
+         * then the repeats copied from their first occurrence. */
+        static uint16_t uniq[NV_MAX_INDICES];
+        static uint32_t upos[NV_MAX_INDICES];
+        uint32_t nu = 0;
         LARGE_INTEGER t0, t1;
         QueryPerformanceCounter(&t0);
-#endif
         if (++batch_id == 0) {
             memset(stamp, 0, sizeof stamp);
             batch_id = 1;
         }
         for (i = 0; i < n; i++) {
             uint16_t ix = s_gpu.idx[i];
-            if (stamp[ix] == batch_id) {
-                s_xf[i] = s_xf[first[ix]];
+            if (stamp[ix] == batch_id)
                 continue;
-            }
-            if (!transform_vertex(ix, &s_xf[i]))
-                return;                                /* no program loaded */
             stamp[ix] = batch_id;
-            first[ix] = (uint16_t)i;
-            s_hw_stat_verts++;
+            first[ix] = i;
+            uniq[nu] = ix; upos[nu] = i; nu++;
         }
-#if defined(_WIN32)
+        if (!vmt_transform(uniq, upos, nu))
+            return;                                    /* no program loaded */
+        for (i = 0; i < n; i++)
+            if (first[s_gpu.idx[i]] != i)
+                s_xf[i] = s_xf[first[s_gpu.idx[i]]];
+        s_hw_stat_verts += nu;
         QueryPerformanceCounter(&t1);
         s_hw_stat_vsh_ticks += (uint64_t)(t1.QuadPart - t0.QuadPart);
-#endif
     }
     s_gpu.batches_program++;
     s_gpu.verts_program += n;

@@ -388,6 +388,117 @@ static const char s_hw_hlsl_vsp_head[] =
 static const char s_hw_hlsl_vsp_tail[] =
 "  return vs_finish(R[12], o[3], o[4], vsh_fog(o[5].x), o[9], o[10], o[11], o[12]); }\n";
 
+/* RE-SoT: the native SDL GPU encoders have no shader compiler at run time
+ * (Android least of all), so they cannot translate each program as above.
+ * vs_uber is compiled once, offline, and interprets the program instead:
+ * nv2a_vsh_pack_gpu's words in VUP, the constants in VUC, the vertex's
+ * inputs in eight slots. Every vertex of a draw runs the same instructions,
+ * so the loop is uniform. Semantics follow nv2a_vsh_run line for line.
+ * No local array is indexed at run time: the first version's R[13], o[13]
+ * and v[8] made Adreno keep the registers in slow private memory (Android
+ * present waited 40-90 ms a frame on the GPU, 2026-10-19 logs). Registers
+ * are named variables chosen by uniform selects instead. */
+static const char s_hw_hlsl_uber[] =
+"cbuffer VUC : register(b1) { float4 uc[192]; };\n"
+"cbuffer VUP : register(b2) { uint4 uins[136]; };\n"
+"struct UI { float4 a0:TEXCOORD0; float4 a1:TEXCOORD1; float4 a2:TEXCOORD2; float4 a3:TEXCOORD3;\n"
+"            float4 a4:TEXCOORD4; float4 a5:TEXCOORD5; float4 a6:TEXCOORD6; float4 a7:TEXCOORD7; };\n"
+"static const float UB_INF = asfloat(0x7F800000);\n"
+"#define UB_RP float4 R0, float4 R1, float4 R2, float4 R3, float4 R4, float4 R5, float4 R6, float4 R7, float4 R8, float4 R9, float4 R10, float4 R11, float4 P\n"
+"#define UB_RW inout float4 R0, inout float4 R1, inout float4 R2, inout float4 R3, inout float4 R4, inout float4 R5, inout float4 R6, inout float4 R7, inout float4 R8, inout float4 R9, inout float4 R10, inout float4 R11, inout float4 P\n"
+"#define UB_RA R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, P\n"
+"#define UB_VP float4 v0, float4 v1, float4 v2, float4 v3, float4 v4, float4 v5, float4 v6, float4 v7\n"
+"#define UB_VA v0, v1, v2, v3, v4, v5, v6, v7\n"
+"float ub_c(float4 x, uint i) { return i == 0 ? x.x : (i == 1 ? x.y : (i == 2 ? x.z : x.w)); }\n"
+"float4 ub_temp(uint r, UB_RP) {\n"
+"  if (r < 6) { if (r < 3) return r == 0 ? R0 : (r == 1 ? R1 : R2);\n"
+"               return r == 3 ? R3 : (r == 4 ? R4 : R5); }\n"
+"  if (r < 9) return r == 6 ? R6 : (r == 7 ? R7 : R8);\n"
+"  if (r < 12) return r == 9 ? R9 : (r == 10 ? R10 : R11);\n"
+"  return r == 12 ? P : R0; }\n"
+"float4 ub_in(uint i, UB_VP) {\n"
+"  if (i < 4) return i == 0 ? v0 : (i == 1 ? v1 : (i == 2 ? v2 : v3));\n"
+"  return i == 4 ? v4 : (i == 5 ? v5 : (i == 6 ? v6 : v7)); }\n"
+"float4 ub_src(uint s, UB_VP, UB_RP, int a0, uint ci, bool rel, uint vin) {\n"
+"  uint mux = s & 3, swz = (s >> 6) & 255; float4 x;\n"
+"  if (mux == 1) x = ub_temp((s >> 2) & 15, UB_RA);\n"
+"  else if (mux == 2) x = ub_in(vin, UB_VA);\n"
+"  else { int k = int(ci) + (rel ? a0 : 0); x = uc[(k < 0 || k >= 192) ? 0 : k]; }\n"
+"  float4 r = float4(ub_c(x, swz >> 6), ub_c(x, (swz >> 4) & 3), ub_c(x, (swz >> 2) & 3), ub_c(x, swz & 3));\n"
+"  return (s & 0x4000) ? -r : r; }\n"
+"float4 ub_wm(float4 d, float4 s, uint m) {\n"
+"  return float4((m & 8) ? s.x : d.x, (m & 4) ? s.y : d.y, (m & 2) ? s.z : d.z, (m & 1) ? s.w : d.w); }\n"
+"float ub_lt(float a, float b) { return a < b ? 1.0 : 0.0; }\n"
+"float ub_ge(float a, float b) { return a >= b ? 1.0 : 0.0; }\n"
+"float ub_fog(float d) {\n"
+"  if (fogp.w < 0.5) return 1.0;\n"
+"  float f; uint mode = (uint)fogp.z;\n"
+"  if (mode == 0x800 || mode == 0x802) f = fogp.x + exp2(d * fogp.y * 16.0) - 1.5;\n"
+"  else if (mode == 0x801 || mode == 0x803) f = fogp.x + exp2(-d * d * fogp.y * fogp.y * 32.0) - 1.5;\n"
+"  else f = fogp.x + d * fogp.y - 1.0;\n"
+"  if (mode == 0x802 || mode == 0x803 || mode == 0x804) f = abs(f);\n"
+"  if (f != f) f = 1.0;\n"
+"  return saturate(f); }\n"
+"void ub_wt(uint t, float4 s, uint m, UB_RW) {\n"
+"  if (t < 6) { if (t == 0) R0 = ub_wm(R0, s, m); else if (t == 1) R1 = ub_wm(R1, s, m);\n"
+"    else if (t == 2) R2 = ub_wm(R2, s, m); else if (t == 3) R3 = ub_wm(R3, s, m);\n"
+"    else if (t == 4) R4 = ub_wm(R4, s, m); else R5 = ub_wm(R5, s, m); }\n"
+"  else if (t < 12) { if (t == 6) R6 = ub_wm(R6, s, m); else if (t == 7) R7 = ub_wm(R7, s, m);\n"
+"    else if (t == 8) R8 = ub_wm(R8, s, m); else if (t == 9) R9 = ub_wm(R9, s, m);\n"
+"    else if (t == 10) R10 = ub_wm(R10, s, m); else R11 = ub_wm(R11, s, m); }\n"
+"  else if (t == 12) P = ub_wm(P, s, m); }\n"
+"VO vs_uber(UI i) {\n"
+"  float4 v0 = i.a0, v1 = i.a1, v2 = i.a2, v3 = i.a3, v4 = i.a4, v5 = i.a5, v6 = i.a6, v7 = i.a7;\n"
+"  float4 R0 = 0, R1 = 0, R2 = 0, R3 = 0, R4 = 0, R5 = 0, R6 = 0, R7 = 0, R8 = 0, R9 = 0, R10 = 0, R11 = 0, P = 0;\n"
+"  float4 O3 = float4(0, 0, 0, 1), O4 = O3, O5 = 0, O9 = O3, O10 = O3, O11 = O3, O12 = O3;\n"
+"  int a0 = 0; uint k;\n"
+"  [loop] for (k = 0; k < 136; k++) {\n"
+"    uint4 d = uins[k];\n"
+"    uint mac = d.x & 15, ilu = (d.x >> 4) & 7, mm = (d.x >> 7) & 15, im = (d.x >> 11) & 15;\n"
+"    uint td = (d.x >> 15) & 15, om = (d.x >> 19) & 15, oa = d.y & 255;\n"
+"    bool rel = (d.x & 0x2000000) != 0;\n"
+"    uint ci = (d.y >> 8) & 255, vin = (d.y >> 16) & 7;\n"
+"    float4 a = ub_src(d.z & 0xFFFF, UB_VA, UB_RA, a0, ci, rel, vin);\n"
+"    float4 b = ub_src(d.z >> 16, UB_VA, UB_RA, a0, ci, rel, vin);\n"
+"    float4 cc = ub_src(d.w & 0xFFFF, UB_VA, UB_RA, a0, ci, rel, vin);\n"
+"    float4 m = a, l = cc; float x = cc.x;\n"
+"    if (mac == 2) m = a * b;\n"
+"    else if (mac == 3) m = a + cc;\n"
+"    else if (mac == 4) m = a * b + cc;\n"
+"    else if (mac == 5) m = dot(a.xyz, b.xyz).xxxx;\n"
+"    else if (mac == 6) m = (dot(a.xyz, b.xyz) + b.w).xxxx;\n"
+"    else if (mac == 7) m = dot(a, b).xxxx;\n"
+"    else if (mac == 8) m = float4(1.0, a.y * b.y, a.z, b.w);\n"
+"    else if (mac == 9) m = float4(a.x < b.x ? a.x : b.x, a.y < b.y ? a.y : b.y, a.z < b.z ? a.z : b.z, a.w < b.w ? a.w : b.w);\n"
+"    else if (mac == 10) m = float4(a.x >= b.x ? a.x : b.x, a.y >= b.y ? a.y : b.y, a.z >= b.z ? a.z : b.z, a.w >= b.w ? a.w : b.w);\n"
+"    else if (mac == 11) m = float4(ub_lt(a.x, b.x), ub_lt(a.y, b.y), ub_lt(a.z, b.z), ub_lt(a.w, b.w));\n"
+"    else if (mac == 12) m = float4(ub_ge(a.x, b.x), ub_ge(a.y, b.y), ub_ge(a.z, b.z), ub_ge(a.w, b.w));\n"
+"    else if (mac == 13) a0 = (int)floor(a.x + 0.001);\n"
+"    if (ilu == 2) l = (x == 0.0 ? UB_INF : 1.0 / x).xxxx;\n"
+"    else if (ilu == 3) { float f = 1.0 / x;\n"
+"      if (abs(f) < 5.42101e-20) f = f < 0.0 ? -5.42101e-20 : 5.42101e-20;\n"
+"      if (abs(f) > 1.884467e19) f = f < 0.0 ? -1.884467e19 : 1.884467e19;\n"
+"      l = f.xxxx; }\n"
+"    else if (ilu == 4) l = (1.0 / sqrt(abs(x))).xxxx;\n"
+"    else if (ilu == 5) l = float4(exp2(floor(x)), x - floor(x), exp2(x), 1.0);\n"
+"    else if (ilu == 6) { float ax = abs(x);\n"
+"      if (ax == 0.0) l = float4(-UB_INF, 1.0, -UB_INF, 1.0);\n"
+"      else { float e = floor(log2(ax)); l = float4(e, ax / exp2(e), log2(ax), 1.0); } }\n"
+"    else if (ilu == 7) { float nl = max(cc.x, 0.0), nh = max(cc.y, 0.0);\n"
+"      float pw = clamp(cc.w, -127.9961, 127.9961);\n"
+"      l = float4(1.0, nl, cc.x > 0.0 ? pow(nh, pw) : 0.0, 1.0); }\n"
+"    if (mac != 0 && mac != 13 && mm != 0 && td <= 12) ub_wt(td, m, mm, UB_RA);\n"
+"    if (ilu != 0 && im != 0) { uint it = mac != 0 ? 1 : td; ub_wt(it, l, im, UB_RA); }\n"
+"    if (om != 0 && (d.x & 0x1000000) != 0) {\n"
+"      float4 src = (d.x & 0x800000) != 0 ? l : m;\n"
+"      if (oa == 0) P = ub_wm(P, src, om); else if (oa == 3) O3 = ub_wm(O3, src, om);\n"
+"      else if (oa == 4) O4 = ub_wm(O4, src, om); else if (oa == 5) O5 = ub_wm(O5, src, om);\n"
+"      else if (oa == 9) O9 = ub_wm(O9, src, om); else if (oa == 10) O10 = ub_wm(O10, src, om);\n"
+"      else if (oa == 11) O11 = ub_wm(O11, src, om); else if (oa == 12) O12 = ub_wm(O12, src, om); }\n"
+"    if ((d.x & 0x4000000) != 0) break;\n"
+"  }\n"
+"  return vs_finish(P, O3, O4, ub_fog(O5.x), O9, O10, O11, O12); }\n";
+
 static const char s_hw_hlsl[] =
 "struct VI { float4 pos:POSITION; float4 d0:COLOR0; float4 d1:COLOR1; float4 fog:FOG;\n"
 "            float4 t0:TEXCOORD0; float4 t1:TEXCOORD1; float4 t2:TEXCOORD2; float4 t3:TEXCOORD3; };\n"
@@ -444,35 +555,64 @@ static const char s_hw_hlsl[] =
 "    return float4(0, 0, 0, 0); }\n"
 "  return float4(0, 0, 0, 0); }\n"
 "float2 proj_uv(float4 tc, float4 sc) { float q = tc.w != 0.0 ? tc.w : 1.0; return tc.xy / q * sc.xy; }\n"
+/* RE-SoT: combiner registers are named variables (Q1-Q15; R0 reads zero)
+ * chosen by the draw's uniform control words, not an indexed R[16]. Faster
+ * on the desktop GPU (Vulkan menu 145-152 FPS, was 42-77; 2026-10-19). */
+"#define RC_P float4 Q1, float4 Q2, float4 Q3, float4 Q4, float4 Q5, float4 Q6, float4 Q7, float4 Q8, float4 Q9, float4 Q10, float4 Q11, float4 Q12, float4 Q13, float4 Q14, float4 Q15\n"
+"#define RC_W inout float4 Q1, inout float4 Q2, inout float4 Q3, inout float4 Q4, inout float4 Q5, inout float4 Q6, inout float4 Q7, inout float4 Q8, inout float4 Q9, inout float4 Q10, inout float4 Q11, inout float4 Q12, inout float4 Q13, inout float4 Q14, inout float4 Q15\n"
+"#define RC_A Q1, Q2, Q3, Q4, Q5, Q6, Q7, Q8, Q9, Q10, Q11, Q12, Q13, Q14, Q15\n"
+"float4 rc_r(uint i, RC_P) {\n"
+"  if (i < 8) { if (i < 4) return i == 0 ? float4(0, 0, 0, 0) : (i == 1 ? Q1 : (i == 2 ? Q2 : Q3));\n"
+"               return i == 4 ? Q4 : (i == 5 ? Q5 : (i == 6 ? Q6 : Q7)); }\n"
+"  if (i < 12) return i == 8 ? Q8 : (i == 9 ? Q9 : (i == 10 ? Q10 : Q11));\n"
+"  return i == 12 ? Q12 : (i == 13 ? Q13 : (i == 14 ? Q14 : Q15)); }\n"
+"float4 rc_m(float4 r, float4 v, uint m) {\n"
+"  return float4((m & 1) ? v.x : r.x, (m & 2) ? v.y : r.y, (m & 4) ? v.z : r.z, (m & 8) ? v.w : r.w); }\n"
+"void rc_w(uint d, float4 v, uint m, RC_W) {\n"
+"  if (d < 8) { if (d == 1) Q1 = rc_m(Q1, v, m); else if (d == 2) Q2 = rc_m(Q2, v, m);\n"
+"    else if (d == 3) Q3 = rc_m(Q3, v, m); else if (d == 4) Q4 = rc_m(Q4, v, m);\n"
+"    else if (d == 5) Q5 = rc_m(Q5, v, m); else if (d == 6) Q6 = rc_m(Q6, v, m);\n"
+"    else if (d == 7) Q7 = rc_m(Q7, v, m); }\n"
+"  else if (d < 12) { if (d == 8) Q8 = rc_m(Q8, v, m); else if (d == 9) Q9 = rc_m(Q9, v, m);\n"
+"    else if (d == 10) Q10 = rc_m(Q10, v, m); else Q11 = rc_m(Q11, v, m); }\n"
+"  else { if (d == 12) Q12 = rc_m(Q12, v, m); else if (d == 13) Q13 = rc_m(Q13, v, m);\n"
+"    else if (d == 14) Q14 = rc_m(Q14, v, m); else Q15 = rc_m(Q15, v, m); } }\n"
 "float4 ps_main(VO i) : SV_Target {\n"
-"  float4 s0 = tscale[0].w > 0.5 ? cx0.Sample(sm0, i.t0.xyz) : tx0.Sample(sm0, proj_uv(i.t0, tscale[0]));\n"
-"  float4 s1 = tscale[1].w > 0.5 ? cx1.Sample(sm1, i.t1.xyz) : tx1.Sample(sm1, proj_uv(i.t1, tscale[1]));\n"
-"  float4 s2 = tscale[2].w > 0.5 ? cx2.Sample(sm2, i.t2.xyz) : tx2.Sample(sm2, proj_uv(i.t2, tscale[2]));\n"
-"  float4 s3 = tscale[3].w > 0.5 ? cx3.Sample(sm3, i.t3.xyz) : tx3.Sample(sm3, proj_uv(i.t3, tscale[3]));\n"
+"  float4 s0 = float4(1, 1, 1, 1);\n"
+"  [branch] if (tscale[0].z > 0.5) { if (tscale[0].w > 0.5) s0 = cx0.Sample(sm0, i.t0.xyz);\n"
+"    else s0 = tx0.Sample(sm0, proj_uv(i.t0, tscale[0])); }\n"
+"  float4 s1 = float4(1, 1, 1, 1);\n"
+"  [branch] if (tscale[1].z > 0.5) { if (tscale[1].w > 0.5) s1 = cx1.Sample(sm1, i.t1.xyz);\n"
+"    else s1 = tx1.Sample(sm1, proj_uv(i.t1, tscale[1])); }\n"
+"  float4 s2 = float4(1, 1, 1, 1);\n"
+"  [branch] if (tscale[2].z > 0.5) { if (tscale[2].w > 0.5) s2 = cx2.Sample(sm2, i.t2.xyz);\n"
+"    else s2 = tx2.Sample(sm2, proj_uv(i.t2, tscale[2])); }\n"
+"  float4 s3 = float4(1, 1, 1, 1);\n"
+"  [branch] if (tscale[3].z > 0.5) { if (tscale[3].w > 0.5) s3 = cx3.Sample(sm3, i.t3.xyz);\n"
+"    else s3 = tx3.Sample(sm3, proj_uv(i.t3, tscale[3])); }\n"
 "  bool keep = true; uint sp = ctl.y; uint cpm = atest.w;\n"
-"  float4 R[16];\n"
-"  for (int k = 0; k < 16; k++) R[k] = float4(0, 0, 0, 0);\n"
-"  R[8]  = stage_tex(sp & 31, i.t0, s0, tscale[0].z, keep, cpm);\n"
-"  R[9]  = stage_tex((sp >> 5) & 31, i.t1, s1, tscale[1].z, keep, cpm >> 4);\n"
-"  R[10] = stage_tex((sp >> 10) & 31, i.t2, s2, tscale[2].z, keep, cpm >> 8);\n"
-"  R[11] = stage_tex((sp >> 15) & 31, i.t3, s3, tscale[3].z, keep, cpm >> 12);\n"
+"  float4 Q1 = 0, Q2 = 0, Q3 = 0, Q4 = 0, Q5 = 0, Q6 = 0, Q7 = 0, Q12 = 0, Q13 = 0, Q14 = 0, Q15 = 0;\n"
+"  float4 Q8  = stage_tex(sp & 31, i.t0, s0, tscale[0].z, keep, cpm);\n"
+"  float4 Q9  = stage_tex((sp >> 5) & 31, i.t1, s1, tscale[1].z, keep, cpm >> 4);\n"
+"  float4 Q10 = stage_tex((sp >> 10) & 31, i.t2, s2, tscale[2].z, keep, cpm >> 8);\n"
+"  float4 Q11 = stage_tex((sp >> 15) & 31, i.t3, s3, tscale[3].z, keep, cpm >> 12);\n"
 "  if (!keep) discard;\n"
 "  float4 o;\n"
 "  if (misc.x == 0) {\n"
 "    o = i.d0; if (tscale[0].z > 0.5) o *= s0;\n"
 "  } else {\n"
-"    R[3] = float4(fogc.rgb, i.fog.x); R[4] = i.d0; R[5] = i.d1;\n"
-"    R[12].a = (sp & 31) ? R[8].a : 1.0;\n"
+"    Q3 = float4(fogc.rgb, i.fog.x); Q4 = i.d0; Q5 = i.d1;\n"
+"    Q12.a = (sp & 31) ? Q8.a : 1.0;\n"
 "    uint n = min(ctl.x & 0xFF, 8u); uint flags = ctl.x >> 8;\n"
 "    [loop] for (uint s = 0; s < n; s++) {\n"
 "      uint icw = cw[s].x, aicw = cw[s].y, ocw = cw[s].z, aocw = cw[s].w;\n"
 "      uint fl = ocw >> 12, afl = aocw >> 12;\n"
-"      R[1] = fac0[(flags & 0x010) ? s : 0]; R[2] = fac1[(flags & 0x100) ? s : 0];\n"
-"      bool mux = (flags & 1) ? (R[12].a >= 0.5) : ((uint(R[12].a * 255.0) & 1) != 0);\n"
-"      float3 A = rd_rgb(R[(icw >> 24) & 15], icw >> 24), B = rd_rgb(R[(icw >> 16) & 15], icw >> 16);\n"
-"      float3 C = rd_rgb(R[(icw >> 8) & 15], icw >> 8), D = rd_rgb(R[icw & 15], icw);\n"
-"      float aA = rd_a(R[(aicw >> 24) & 15], aicw >> 24), aB = rd_a(R[(aicw >> 16) & 15], aicw >> 16);\n"
-"      float aC = rd_a(R[(aicw >> 8) & 15], aicw >> 8), aD = rd_a(R[aicw & 15], aicw);\n"
+"      Q1 = fac0[(flags & 0x010) ? s : 0]; Q2 = fac1[(flags & 0x100) ? s : 0];\n"
+"      bool mux = (flags & 1) ? (Q12.a >= 0.5) : ((uint(Q12.a * 255.0) & 1) != 0);\n"
+"      float3 A = rd_rgb(rc_r((icw >> 24) & 15, RC_A), icw >> 24), B = rd_rgb(rc_r((icw >> 16) & 15, RC_A), icw >> 16);\n"
+"      float3 C = rd_rgb(rc_r((icw >> 8) & 15, RC_A), icw >> 8), D = rd_rgb(rc_r(icw & 15, RC_A), icw);\n"
+"      float aA = rd_a(rc_r((aicw >> 24) & 15, RC_A), aicw >> 24), aB = rd_a(rc_r((aicw >> 16) & 15, RC_A), aicw >> 16);\n"
+"      float aC = rd_a(rc_r((aicw >> 8) & 15, RC_A), aicw >> 8), aD = rd_a(rc_r(aicw & 15, RC_A), aicw);\n"
 "      float3 pab = (fl & 2) ? dot(A, B).xxx : A * B;\n"
 "      float3 pcd = (fl & 1) ? dot(C, D).xxx : C * D;\n"
 "      float3 sum = (fl & 4) ? (mux ? pcd : pab) : pab + pcd;\n"
@@ -482,27 +622,26 @@ static const char s_hw_hlsl[] =
 "      float aab = map_out3(qab.xxx, afl & 0x38).x, acd = map_out3(qcd.xxx, afl & 0x38).x;\n"
 "      float ams = map_out3(qsum.xxx, afl & 0x38).x;\n"
 "      uint d;\n"
-"      d = (ocw >> 4) & 15; if (d) { R[d].rgb = ab; if (fl & 0x80) R[d].a = ab.b; }\n"
-"      d = ocw & 15;        if (d) { R[d].rgb = cd; if (fl & 0x40) R[d].a = cd.b; }\n"
-"      d = (ocw >> 8) & 15; if (d) { R[d].rgb = ms; }\n"
-"      d = (aocw >> 4) & 15; if (d) R[d].a = aab;\n"
-"      d = aocw & 15;        if (d) R[d].a = acd;\n"
-"      d = (aocw >> 8) & 15; if (d) R[d].a = ams;\n"
-"      R[0] = float4(0, 0, 0, 0);\n"
+"      d = (ocw >> 4) & 15; if (d) rc_w(d, float4(ab, ab.b), (fl & 0x80) ? 15u : 7u, RC_A);\n"
+"      d = ocw & 15;        if (d) rc_w(d, float4(cd, cd.b), (fl & 0x40) ? 15u : 7u, RC_A);\n"
+"      d = (ocw >> 8) & 15; if (d) rc_w(d, float4(ms, 0.0), 7u, RC_A);\n"
+"      d = (aocw >> 4) & 15; if (d) rc_w(d, aab.xxxx, 8u, RC_A);\n"
+"      d = aocw & 15;        if (d) rc_w(d, acd.xxxx, 8u, RC_A);\n"
+"      d = (aocw >> 8) & 15; if (d) rc_w(d, ams.xxxx, 8u, RC_A);\n"
 "    }\n"
 "    if (ctl.z != 0 || ctl.w != 0) {\n"
 "      uint f0 = ctl.z, f1 = ctl.w, ff = f1 & 0xFF;\n"
-"      R[1] = finc0; R[2] = finc1;\n"
-"      float3 a = (ff & 0x40) ? 1.0 - R[5].rgb : R[5].rgb;\n"
-"      float3 b = (ff & 0x20) ? 1.0 - R[12].rgb : R[12].rgb;\n"
-"      R[14] = float4((ff & 0x80) ? saturate(a + b) : a + b, 0);\n"
-"      float3 E = rd_rgb(R[(f1 >> 24) & 15], f1 >> 24), F = rd_rgb(R[(f1 >> 16) & 15], f1 >> 16);\n"
-"      R[15] = float4(E * F, 0);\n"
-"      float3 A = rd_rgb(R[(f0 >> 24) & 15], f0 >> 24), B = rd_rgb(R[(f0 >> 16) & 15], f0 >> 16);\n"
-"      float3 C = rd_rgb(R[(f0 >> 8) & 15], f0 >> 8), D = rd_rgb(R[f0 & 15], f0);\n"
+"      Q1 = finc0; Q2 = finc1;\n"
+"      float3 a = (ff & 0x40) ? 1.0 - Q5.rgb : Q5.rgb;\n"
+"      float3 b = (ff & 0x20) ? 1.0 - Q12.rgb : Q12.rgb;\n"
+"      Q14 = float4((ff & 0x80) ? saturate(a + b) : a + b, 0);\n"
+"      float3 E = rd_rgb(rc_r((f1 >> 24) & 15, RC_A), f1 >> 24), F = rd_rgb(rc_r((f1 >> 16) & 15, RC_A), f1 >> 16);\n"
+"      Q15 = float4(E * F, 0);\n"
+"      float3 A = rd_rgb(rc_r((f0 >> 24) & 15, RC_A), f0 >> 24), B = rd_rgb(rc_r((f0 >> 16) & 15, RC_A), f0 >> 16);\n"
+"      float3 C = rd_rgb(rc_r((f0 >> 8) & 15, RC_A), f0 >> 8), D = rd_rgb(rc_r(f0 & 15, RC_A), f0);\n"
 "      o.rgb = D + C * (1.0 - A) + B * A;\n"
-"      o.a = rd_a(R[(f1 >> 8) & 15], f1 >> 8);\n"
-"    } else o = R[12];\n"
+"      o.a = rd_a(rc_r((f1 >> 8) & 15, RC_A), f1 >> 8);\n"
+"    } else o = Q12;\n"
 "  }\n"
 "  o = saturate(o);\n"
 "  if (atest.x != 0) {\n"
@@ -513,6 +652,7 @@ static const char s_hw_hlsl[] =
 "    else if (f == 0x206) ok = v >= r;\n"
 "    if (!ok) discard; }\n"
 "  return o; }\n";
+
 
 #if RESOT_HW_D3D11
 /* RE-SoT: compiled shaders are kept on disk (shadercache beside the exe, or
@@ -660,9 +800,26 @@ static ID3DBlob *hw_compile(const char *entry, const char *target)
 
 /* Host pixels across a guest width, on a surface rendered `sc` times the
  * guest resolution. */
-static uint32_t hw_px(uint32_t guest_x, uint32_t sc)
+/* RE-SoT: shared live internal scale. The encoded percentage retains the
+ * legacy integer environment scale until the host supplies its INI option. */
+#define HW_PERCENT_SCALE 0x10000u
+#include "nv2a_native_scale.h" /* RE-SoT: tested fractional rounding on both hosts. */
+static volatile LONG s_render_percent;
+void xbox_SetRenderScalePercent(int percent)
 {
-    return (uint32_t)((float)guest_x * (float)sc * s_hw.widen + 0.5f);
+    if (percent!=50 && percent!=75 && percent!=100 && percent!=150 &&
+        percent!=225 && percent!=300) percent=100;
+    InterlockedExchange(&s_render_percent,percent);
+}
+static uint32_t hw_py(uint32_t y,uint32_t sc)
+{
+    return sc & HW_PERCENT_SCALE ? resot_internal_extent(y,sc & 0xffffu) : y*sc;
+}
+static uint32_t hw_px(uint32_t x,uint32_t sc)
+{
+    if (sc & HW_PERCENT_SCALE)
+        return hw_py((uint32_t)((float)x*s_hw.widen+0.5f),sc);
+    return (uint32_t)((float)x*(float)sc*s_hw.widen+0.5f);
 }
 
 /* RE-SoT: how much finer than the guest a surface is rendered. The display
@@ -674,6 +831,9 @@ static uint32_t hw_px(uint32_t guest_x, uint32_t sc)
  * They stay at the guest's own resolution (RECOMP_HW_FX_SCALE to change). */
 static uint32_t hw_surface_scale(uint32_t w)
 {
+    /* RE-SoT: effect and shadow surfaces retain their guest resolution. */
+    int percent=(int)InterlockedCompareExchange(&s_render_percent,0,0);
+    if(w>=640 && percent) return HW_PERCENT_SCALE | (uint32_t)percent;
     return w >= 640 ? (uint32_t)s_hw.scale : (uint32_t)s_hw.fx_scale;
 }
 
@@ -982,7 +1142,7 @@ static HwSurface *hw_surface(void)
     for (i = 0; i < HW_MAX_SURFACES; i++) {
         HwSurface *c = &s_hw.surf[i];
         if (c->tex && c->offset == off && c->w == w) {
-            if (c->h >= h)
+            if (c->h >= h && c->sc == hw_surface_scale(w))
                 return c;
             s = c;                      /* same surface, taller than thought */
             break;
@@ -1003,7 +1163,7 @@ static HwSurface *hw_surface(void)
     }
     memset(&td, 0, sizeof td);
     td.Width = hw_px(w, hw_surface_scale(w));
-    td.Height = h * hw_surface_scale(w);
+    td.Height = hw_py(h,hw_surface_scale(w));
     td.MipLevels = 1; td.ArraySize = 1;
     td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     td.SampleDesc.Count = 1;
@@ -1035,7 +1195,7 @@ static HwDepth *hw_depth(const HwSurface *s)
         return NULL;
     for (i = 0; i < HW_MAX_DEPTHS; i++)
         if (s_hw.depth[i].tex && s_hw.depth[i].offset == off
-            && s_hw.depth[i].w == s->w && s_hw.depth[i].h == s->h)
+            && s_hw.depth[i].w == hw_px(s->w,s->sc) && s_hw.depth[i].h == hw_py(s->h,s->sc))
             return &s_hw.depth[i];
     for (i = 0; i < HW_MAX_DEPTHS && !d; i++)
         if (!s_hw.depth[i].tex)
@@ -1048,7 +1208,7 @@ static HwDepth *hw_depth(const HwSurface *s)
     }
     memset(&td, 0, sizeof td);
     td.Width = hw_px(s->w, s->sc);
-    td.Height = s->h * s->sc;
+    td.Height = hw_py(s->h,s->sc);
     td.MipLevels = 1; td.ArraySize = 1;
     td.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
     td.SampleDesc.Count = 1;
@@ -1057,7 +1217,7 @@ static HwDepth *hw_depth(const HwSurface *s)
         return NULL;
     ID3D11Device_CreateDepthStencilView(s_hw.dev, (ID3D11Resource *)d->tex, NULL, &d->dsv);
     ID3D11DeviceContext_ClearDepthStencilView(s_hw.ctx, d->dsv, D3D11_CLEAR_DEPTH, 1.0f, 0);
-    d->offset = off; d->w = s->w; d->h = s->h;
+    d->offset = off; d->w = td.Width; d->h = td.Height;
     return d;
 }
 
@@ -1378,13 +1538,13 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     ID3D11DeviceContext_OMSetRenderTargets(s_hw.ctx, 1, &s->rtv, d ? d->dsv : NULL);
     vp.TopLeftX = 0; vp.TopLeftY = 0;
     vp.Width = (float)hw_px(s->w, s->sc);
-    vp.Height = (float)(s->h * s->sc);
+    vp.Height = (float)(hw_py(s->h,s->sc));
     vp.MinDepth = 0; vp.MaxDepth = 1;
     ID3D11DeviceContext_RSSetViewports(s_hw.ctx, 1, &vp);
     sc.left = (LONG)hw_px(s_gpu.clip_x, s->sc);
-    sc.top = (LONG)(s_gpu.clip_y * s->sc);
+    sc.top = (LONG)(hw_py(s_gpu.clip_y,s->sc));
     sc.right = (LONG)hw_px(s_gpu.clip_x + s_gpu.clip_w, s->sc);
-    sc.bottom = (LONG)((s_gpu.clip_y + s_gpu.clip_h) * s->sc);
+    sc.bottom = (LONG)(hw_py(s_gpu.clip_y+s_gpu.clip_h,s->sc));
     ID3D11DeviceContext_RSSetScissorRects(s_hw.ctx, 1, &sc);
 
     {
@@ -1512,7 +1672,7 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
 #if RESOT_RUNTIME_RETAIL
     /* RE-SoT: normalize supersampled/widened host pixels to guest pixels. */
     {
-        double pixel_scale = ((double)hw_px(s->w, s->sc) / s->w) * s->sc;
+        double pixel_scale = ((double)hw_px(s->w, s->sc) / s->w) * ((double)hw_py(s->h,s->sc)/s->h);
         hw_visibility_poll();
         if (!nv_hw_vis_draw(&s_hw_visibility, s_hw.dev, s_hw.ctx, pixel_scale)) {
             fprintf(stderr, "[HW] fatal visibility query creation/allocation failure\n");
@@ -2149,9 +2309,12 @@ static int hw_reuse_match(const HwReuse *e, uint64_t key, uint32_t content,
 /* Draw the current batch with its vertex program running on the GPU: the
  * distinct vertices of the batch go up as raw attributes, the primitive as an
  * index list. Returns 0 when the batch has to take the interpreter path. */
+static int ng_draw_program_batch(void);
 static int hw_draw_program_batch(void)
 {
-    if (ng_active()) return 0; /* RE-SoT: native encoder takes CPU-transformed vertices. */
+    /* RE-SoT: the native encoders run the program in vs_uber, or return 0
+     * for the CPU interpreter (no FINAL, constant writes, >8 inputs). */
+    if (ng_active()) return ng_draw_program_batch();
 #if RESOT_HW_D3D11
     static uint32_t stamp[65536], batch_id;
     static uint16_t remap[65536];
@@ -2596,13 +2759,13 @@ static void hw_clear(uint32_t param)
             ID3D11DeviceContext_OMSetRenderTargets(s_hw.ctx, 1, &s->rtv, NULL);
             vp.TopLeftX = 0; vp.TopLeftY = 0;
             vp.Width = (float)hw_px(s->w, s->sc);
-            vp.Height = (float)(s->h * s->sc);
+            vp.Height = (float)(hw_py(s->h,s->sc));
             vp.MinDepth = 0; vp.MaxDepth = 1;
             ID3D11DeviceContext_RSSetViewports(s_hw.ctx, 1, &vp);
             sc.left = (LONG)hw_px(x0, s->sc);
-            sc.top = (LONG)(y0 * s->sc);
+            sc.top = (LONG)(hw_py(y0,s->sc));
             sc.right = (LONG)hw_px(x1, s->sc);
-            sc.bottom = (LONG)(y1 * s->sc);
+            sc.bottom = (LONG)(hw_py(y1,s->sc));
             ID3D11DeviceContext_RSSetScissorRects(s_hw.ctx, 1, &sc);
             ID3D11DeviceContext_RSSetState(s_hw.ctx, s_hw.rs[0]);
             ID3D11DeviceContext_OMSetBlendState(s_hw.ctx, bs, bf, 0xFFFFFFFFu);
@@ -2976,10 +3139,17 @@ void nv2a_hw_idle_present(void)
 {
     if (ng_active()) {
         if (!s_hw.ok) return;
+        /* RE-SoT: Bink uses PVIDEO without guest flips. The generic 100-ms
+         * idle repaint limit reduced native movies to 10 Hz. Service a live
+         * overlay at the presentation thread's cadence (also on Android). */
+        const uint32_t *movie_pixels;
+        uint32_t movie_w, movie_h, movie_rect[4], movie_serial;
+        DWORD interval = xbox_FramebufferOverlayGet(&movie_pixels,&movie_w,&movie_h,
+                                                    movie_rect,&movie_serial) ? 0 : 100;
         EnterCriticalSection(&s_hw.lock); ng_visibility_poll(); LeaveCriticalSection(&s_hw.lock);
-        if (GetTickCount()-s_hw.last_flip_ms < 100) return;
+        if (GetTickCount()-s_hw.last_flip_ms < interval) return;
         EnterCriticalSection(&s_hw.lock);
-        if (!s_hw.pending_present && GetTickCount()-s_hw.last_flip_ms >= 100) { ng_compose(); ng_present(0); }
+        if (!s_hw.pending_present && GetTickCount()-s_hw.last_flip_ms >= interval) { ng_compose(); ng_present(0); }
         LeaveCriticalSection(&s_hw.lock);
         return;
     }

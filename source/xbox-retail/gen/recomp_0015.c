@@ -26739,12 +26739,12 @@ loc_000DBDCE: ;
 }
 
 /**
- * sub_000DBDE0
+ * sub_000DBDE0_gen
  * Original: 0x000DBDE0 - 0x000DBEA5 (197 bytes, 54 insns)
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_000DBDE0(void)
+void sub_000DBDE0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;

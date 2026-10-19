@@ -9,6 +9,10 @@
 #include <string.h>
 #if defined(_WIN32)
 #include <windows.h>
+#elif defined(__ANDROID__)
+#include "kernel.h"
+#include "xbox_memory_layout.h"
+#include "guest_vmem.h"
 #endif
 static int resot_guest_read_word(ptrdiff_t offset, uint64_t va, uint32_t *value)
 {
@@ -25,6 +29,23 @@ static int resot_guest_read_word(ptrdiff_t offset, uint64_t va, uint32_t *value)
             !(info.Protect & readable) ||
             address+4 > (uintptr_t)info.BaseAddress+info.RegionSize) return 0;
         memcpy(value,(const void *)address,sizeof *value);
+        return 1;
+    }
+#elif defined(__ANDROID__)
+    {
+        /* Android owns these RAM mappings for the process lifetime. Extended
+         * heap pages require the guest page table: the host reserves 4 GB,
+         * so VirtualQuery's mapping registry cannot prove readability. */
+        uint32_t info[7], a = (uint32_t)va;
+        size_t ram = g_xbox_map_size ? g_xbox_map_size : g_xbox_total_ram;
+        int readable = (a >= 0x10000u && a < ram && 4 <= ram-a) ||
+            (a >= XBOX_CONTIG_BASE && a-XBOX_CONTIG_BASE < XBOX_CONTIG_SIZE &&
+             4 <= XBOX_CONTIG_SIZE-(a-XBOX_CONTIG_BASE));
+        if (!readable && guest_vmem_query(a,info))
+            readable = info[4] == 0x1000u && (info[5] & (0x02u|0x04u|0x08u|0x20u|0x40u|0x80u)) &&
+                !(info[5] & 0x101u) && (uint64_t)a+4 <= (uint64_t)info[0]+info[3];
+        if (!readable) return 0;
+        memcpy(value,(const void *)((uintptr_t)offset+a),sizeof *value);
         return 1;
     }
 #else

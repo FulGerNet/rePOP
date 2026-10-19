@@ -344,9 +344,6 @@ int SDL_main(int argc, char **argv)
 #if defined(RESOT_DEFAULT_EXT_VMA) && RESOT_DEFAULT_EXT_VMA
     set_default("RECOMP_EXT_VMA", "1");
 #endif
-#ifdef RESOT_DEFAULT_ASPECT
-    set_default("RECOMP_HW_ASPECT", RESOT_DEFAULT_ASPECT);
-#endif
 #ifdef RESOT_PROJECTED_UI
     set_default("RECOMP_HW_PROJECTED_UI", "1");
 #endif
@@ -355,12 +352,36 @@ int SDL_main(int argc, char **argv)
         __android_log_print(ANDROID_LOG_ERROR, TAG, "SDL_Init: %s", SDL_GetError());
         return 1;
     }
+    {
+        extern void resot_android_driver_init(int, char **);
+        resot_android_driver_init(argc,argv);
+    }
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     s_window = SDL_CreateWindow("reSOT - " RESOT_TARGET_NAME, 0, 0,
                                 SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!s_window) {
         __android_log_print(ANDROID_LOG_ERROR, TAG, "SDL_CreateWindow: %s", SDL_GetError());
         return 1;
+    }
+    /* Use the landscape drawable, including the device's ultrawide sides,
+     * before either target's projection hooks or the renderer cache Hor+.
+     * Keep an explicit environment override; Windows retains its 16:9 default. */
+    {
+        int width = 0, height = 0;
+        char aspect[48];
+        if (SDL_GetWindowSizeInPixels(s_window, &width, &height)
+            && height > 0 && width >= height
+            && (double)width / height >= 4.0 / 3.0
+            && (double)width / height <= 4.0) {
+            snprintf(aspect, sizeof aspect, "%d:%d", width, height);
+            set_default("RECOMP_HW_ASPECT", aspect);
+        }
+#ifdef RESOT_DEFAULT_ASPECT
+        else set_default("RECOMP_HW_ASPECT", RESOT_DEFAULT_ASPECT);
+#endif
+        fprintf(stderr, "[VIDEO] Android drawable %dx%d, Hor+ aspect %s\n",
+                width, height, getenv("RECOMP_HW_ASPECT")
+                    ? getenv("RECOMP_HW_ASPECT") : "4:3");
     }
     xbox_FramebufferAndroidSetWindow(s_window);
     {

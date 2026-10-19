@@ -13,6 +13,7 @@
  */
 
 #include "kernel.h"
+#include "resot_runtime.h" /* RE-SoT: Android retail storage bring-up. */
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
@@ -46,6 +47,16 @@ typedef struct {
 } path_rule;
 
 static const path_rule s_rules[] = {
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+    /* RE-SoT: retail resolves U:/T: to partition1. Store actual save files
+     * in ordinary folders, independently of the synthetic raw devices. */
+    { "\\Device\\Harddisk0\\Partition1\\UDATA", 1, NULL, "/UDATA" },
+    { "\\Device\\Harddisk0\\Partition1\\TDATA", 1, NULL, "/TDATA" },
+    { "U:\\", 1, NULL, "/UDATA" },
+    { "T:\\", 1, NULL, "/TDATA" },
+    { "\\??\\U:\\", 1, NULL, "/UDATA" },
+    { "\\??\\T:\\", 1, NULL, "/TDATA" },
+#endif
     { "\\Device\\CdRom0\\",                   0, NULL,         NULL          },
     { "\\Device\\Harddisk0\\Partition1\\",    0, NULL,         NULL          },
     /* The rest of the disk. Partition 0 is the whole raw device, 2 holds
@@ -563,6 +574,72 @@ static void mkdir_p(const char* path)
         xbox_log(XBOX_LOG_WARN, XBOX_LOG_PATH, "mkdir %s: %s", tmp, strerror(errno));
 }
 
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+/* RE-SoT: match the Windows raw devices for retail's XAPI utility-drive
+ * mount. Without Partition0's table and Partition5's backing file, startup
+ * returns to the dashboard before reaching the renderer. These are sparse
+ * emulated disks, not files extracted from the game. */
+static void android_partition_images(void)
+{
+    static const struct { const char *name; uint32_t start, size; } parts[] = {
+        { "XBOX_PART_X", 0x00000400, 0x00177000 },
+        { "XBOX_PART_Y", 0x00177400, 0x00177000 },
+        { "XBOX_PART_Z", 0x002EE400, 0x00177000 },
+        { "XBOX_PART_C", 0x00465400, 0x000FA000 },
+        { "XBOX_PART_E", 0x0055F400, 0x00465400 },
+    };
+    static const uint32_t sectors[] = {
+        0, 0x00465400, 0x000FA000, 0x00177000, 0x00177000, 0x00177000
+    };
+    char path[MAX_PATH];
+    unsigned char sector[512] = {0};
+    memcpy(sector, "****PARTINFO****", 16);
+    for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); ++i) {
+        unsigned char *e = sector + 48 + i * 32;
+        uint32_t flags = 0x80000000u;
+        memset(e, ' ', 16);
+        memcpy(e, parts[i].name, strlen(parts[i].name));
+        memcpy(e + 16, &flags, 4);
+        memcpy(e + 20, &parts[i].start, 4);
+        memcpy(e + 24, &parts[i].size, 4);
+    }
+    mkdir_p(s_save_dir);
+    for (int p = 0; p <= 5; ++p) {
+        FILE *f;
+        int ok;
+        /* RE-SoT: raw device compatibility is separate from visible saves. */
+        snprintf(path, sizeof path, "%s/.devices", s_save_dir);
+        mkdir_p(path);
+        snprintf(path, sizeof path, "%s/.devices/Partition%d.img", s_save_dir, p);
+        f = fopen(path, "r+b");
+        if (!f && errno == ENOENT) f = fopen(path, "w+b");
+        if (!f) {
+            fprintf(stderr, "  [DISK] cannot open %s: %s\n", path, strerror(errno));
+            continue;
+        }
+        if (p == 0)
+            ok = fseek(f, 0x800, SEEK_SET) == 0 &&
+                 fwrite(sector, 1, sizeof sector, f) == sizeof sector;
+        else
+            ok = ftruncate(fileno(f), (off_t)sectors[p] * 512) == 0;
+        if (fclose(f) != 0) ok = 0;
+        fprintf(stderr, "  [DISK] Partition%d backing %s\n", p, ok ? "ready" : "FAILED");
+    }
+}
+
+static int android_partition_path(const char *path, char *out, size_t size)
+{
+    int n = match_prefix(path, "\\Device\\Harddisk0\\Partition");
+    const char *rest;
+    if (!n || path[n] < '0' || path[n] > '5') return 0;
+    rest = path + n + 1;
+    if (*rest == '\\' || *rest == '/') ++rest;
+    if (*rest) return 0; /* Paths inside a partition still use directories. */
+    /* RE-SoT: profiles and saves are folders; only bare devices use images. */
+    return snprintf(out, size, "%s/.devices/Partition%c.img", s_save_dir, path[n]) < (int)size;
+}
+#endif
+
 void xbox_path_init(const char* game_dir, const char* save_dir)
 {
     if (game_dir) {
@@ -592,6 +669,10 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
     strip_trailing_slash(s_game_dir);
     strip_trailing_slash(s_save_dir);
 
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+    /* RE-SoT: create device backing before the first guest file request. */
+    android_partition_images();
+#endif
     s_initialized = TRUE;
     xbox_log(XBOX_LOG_INFO, XBOX_LOG_PATH, "Path init: game=%s, save=%s",
              s_game_dir, s_save_dir);
@@ -610,6 +691,13 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
     if (!s_initialized)
         xbox_path_init(NULL, NULL);
 
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+    /* RE-SoT: bare devices must support offset reads and size queries. */
+    if (android_partition_path(xbox_path, host_path_buf, buf_size)) {
+        fprintf(stderr, "  [PATH] %s -> partition image\n", xbox_path);
+        return TRUE;
+    }
+#endif
     {
         char linked[512];
         if (resolve_symlink(xbox_path, linked, sizeof(linked)))
@@ -635,6 +723,13 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
 
 translate:
     {
+#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
+        /* RE-SoT: retain the requested path alongside the bridge's status,
+         * including storage failures beyond the kernel-call log budget. */
+        /* RE-SoT: avoid synchronous log I/O for every file lookup per frame. */
+        static unsigned path_logs;
+        if (path_logs++ < 64) fprintf(stderr, "  [PATH] %s\n", xbox_path);
+#endif
         char remainder_posix[MAX_PATH];
         snprintf(remainder_posix, sizeof(remainder_posix), "%s", remainder);
 
