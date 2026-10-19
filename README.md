@@ -46,8 +46,9 @@ The goal is both games fully playable from the user's own disc files, with
 the generated code readable enough to be replaced by hand-written source
 function by function. Retail and the remaining accuracy and validation work are still ahead.
 
-reSOT does not contain the game. You supply the files from discs you own;
-the C that is generated from them stays on your machine.
+reSOT does not contain the game. You supply the files from discs you own.
+The lifted C in `source/<target>/gen` is published with the project
+([AGENTS.md](AGENTS.md)); game data, executables and extracted assets are not.
 
 ## How it works
 
@@ -63,7 +64,7 @@ default.xbe ──► disassemble ──► find functions ──► lift to C �
                                                        │
             ┌──────────────────────────────────────────┘
             ▼
-   lifted game + XDK code          (source/<target>/gen, generated, never committed)
+   lifted game + XDK code          (source/<target>/gen/<folder>, generated)
             │ kernel calls, GPU pushbuffer, USB, overlay registers
             ▼
    runtime (port/third_party/xboxrecomp/src, built for this target)
@@ -155,7 +156,8 @@ In short, on Windows:
 reSOT/
   source/                one folder per Xbox executable (the game side)
     xbox-demo/           target.h (addresses of that XBE), seed_functions.json,
-                         target_hooks.c, gen/ (lifted C: generated, ignored)
+                         target_hooks.c, gen/ (lifted C by folder: main, engine,
+                         render, sound, ai, scripts, xdk/..., see gen/README.md)
     xbox-retail/         the same for the retail build
   port/                  what replaces the console
     windows/src/         Windows host: entry point, launcher (title screen, ISO install), crash report, profiler
@@ -164,7 +166,7 @@ reSOT/
     game/                hand-written overrides the lifted code calls
     third_party/xboxrecomp/      recompiler (tools/) and Xbox runtime (src/) for both targets, patched; changes marked RE-SoT
     third_party/extract-xiso/    extract-xiso 2.7.1, unchanged: the launcher's ISO installation
-  tools/                 recomp.ps1, build-android.ps1, run.ps1, shortcut.ps1, seed-scan.py, xbe-dis.py, check-hlsl.py
+  tools/                 recomp.ps1, build-android.ps1, run.ps1, shortcut.ps1, seed-scan.py, sort-functions.py, xbe-dis.py, check-hlsl.py
   docs/                  RECOMP.md, VALIDATION.md, LICENSING.md, history/, media/ (logo, screenshots)
   research/              analysis databases and Ghidra notes (ignored)
   Assets/                your game files (ignored)
@@ -174,7 +176,8 @@ reSOT/
 ## Contributing
 
 Read [AGENTS.md](AGENTS.md) first: it is short and it is the rule set. In
-brief: never commit game files or generated code; fix behaviour in
+brief: never commit game files, executables or extracted assets, and never
+edit `source/<target>/gen` by hand (`tools/recomp.ps1` writes it); fix behaviour in
 `port/`, the target's `target.h`, hooks and seed list, or the runtime; record
 the XBE address that justifies every target-specific change; and write down
 what you actually observed in `docs/VALIDATION.md`.

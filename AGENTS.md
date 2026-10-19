@@ -10,13 +10,13 @@ replaces the console, and the tools. Start with [README.md](README.md).
 
 | Path | Contents |
 | --- | --- |
-| `source/<target>/` | One Xbox executable: `target.h` (its XBE facts, each with its address), `seed_functions.json`, `target_hooks.c` (entry hooks with that XBE's addresses), `gen/` (the lifted C: generated, published) |
+| `source/<target>/` | One Xbox executable: `target.h` (its XBE facts, each with its address), `seed_functions.json`, `target_hooks.c` (entry hooks with that XBE's addresses), `gen/` (the lifted C: generated, published, one folder per kind of code, see `gen/README.md`) |
 | `port/windows/src/` | The Windows host: entry point, window, crash report, thread dump, profiler (`main.c`); launcher: title screen, demo/retail detection, ISO installation (`launcher.c`); `port/windows/res/`: icon, version resource, launcher face |
 | `port/android/` | The Android app (com.fulger.resot, one APK for both targets): native host (`src/`: SDL_main, AArch64 MMIO traps, input, audio, options, launcher JNI), `CMakeLists.txt` (NDK), Gradle project, Java launcher, game activity, touch controls, ISO installer (`app/`) |
 | `port/game/` | Hand-written code the lifted game calls, shared by the targets: manual overrides and indirect-call diagnostics (`recomp_manual.c`) |
 | `port/third_party/xboxrecomp/` | The vendored recompiler (`tools/`) and Xbox runtime (`src/`: kernel, NV2A on Direct3D 11, APU, USB, input, video), shared by both targets; per-target behaviour under `#if RESOT_RUNTIME_DEMO` / `RESOT_RUNTIME_RETAIL`; local changes marked `RE-SoT` |
 | `port/third_party/extract-xiso/` | extract-xiso 2.7.1, unchanged, built into the executables for the launcher's ISO installation |
-| `tools/` | `recomp.ps1` (lift and build), `build-android.ps1` and `setup-android.ps1` (the APK), `run.ps1`, `shortcut.ps1`, `seed-scan.py`, `xbe-dis.py`, `check-hlsl.py` |
+| `tools/` | `recomp.ps1` (lift and build), `build-android.ps1` and `setup-android.ps1` (the APK), `run.ps1`, `shortcut.ps1`, `seed-scan.py`, `sort-functions.py` (the folders of `gen/`), `xbe-dis.py`, `check-hlsl.py` |
 | `docs/` | `RECOMP.md`, `VALIDATION.md`, `LICENSING.md`, `history/`, `media/` (logo and the README's screenshots) |
 | `Assets/`, `research/` | The user's game files and the analysis that quotes them (ignored) |
 | `bin/`, `build*/`, `logs/` | Outputs (ignored) |

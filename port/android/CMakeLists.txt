@@ -101,7 +101,7 @@ set(HOST_SOURCES
 
 function(resot_android_game id lib runtime_define)
     set(dir "${RESOT_ROOT}/source/${id}")
-    file(GLOB gen CONFIGURE_DEPENDS "${dir}/gen/*.c")
+    file(GLOB_RECURSE gen CONFIGURE_DEPENDS "${dir}/gen/*.c")
     if(NOT gen)
         message(WARNING "reSOT: ${id} left out of the APK (no lifted sources; run tools/recomp.ps1 -Target ${id})")
         return()

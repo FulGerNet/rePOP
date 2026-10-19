@@ -180,11 +180,12 @@ py -3 -m tools.recomp game_files/default.xbe --all --split 1000
 | `--func ADDR` | Recompile a single function (hex address) |
 | `--output-dir DIR` | Output directory (default: `tools/recomp/output/`) |
 | `--verbose` | Show per-function progress |
+| `--folders JSON` | RE-SoT: with `--split`, write each function to the folder the file assigns it, `gen/<folder>/<leaf>_NNNN.c`, plus `gen/README.md` (reSOT's `tools/sort-functions.py` writes the file) |
 
 **Output files:**
 | File | Contents |
 |------|----------|
-| `gen/recomp_0000.c` ... `recomp_NNNN.c` | Recompiled function bodies (split by --split) |
+| `gen/recomp_0000.c` ... `recomp_NNNN.c` | Recompiled function bodies (split by --split; with `--folders`, `gen/<folder>/<leaf>_NNNN.c` instead) |
 | `gen/recomp_dispatch.c` | Binary-search dispatch table (ICALL resolution) |
 | `gen/recomp_funcs.h` | Forward declarations for all recompiled functions |
 | `gen/recomp_stubs.c` | Stub functions for unresolvable targets |

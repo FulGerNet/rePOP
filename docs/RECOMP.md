@@ -8,7 +8,7 @@ per target is small and lives in `source/<target>/`:
 | `target.h` | Entry point, Direct3D fence layout, diagnostic addresses, each with the XBE address it came from |
 | `seed_functions.json` | Functions that are only reached through stored pointers |
 | `target_hooks.c` | Entry hooks (`sub_XXXXXXXX_enter`, run before that routine's first instruction), with this XBE's addresses; handed to the lifter and built into this target only |
-| `gen/` | The lifted C (generated; ignored by Git) |
+| `gen/` | The lifted C, one folder per kind of code (generated, published; see [Folders](#folders)) |
 
 ## Native host GPU encoders (experimental)
 
@@ -149,9 +149,12 @@ changes need only `-BuildOnly`.
 2. `tools.disasm --seed-functions`: disassembly and function detection.
 3. `tools.func_id`, `tools.abi_analysis`: library classification, calling
    conventions.
-4. `tools.recomp --all --split 250`: one C function per x86 function,
-   operating on global guest registers and a guest stack in mapped memory.
-5. CMake + MSVC x64: `bin/sot-<id>.exe`.
+4. `tools/sort-functions.py` (reSOT's): the folder each function goes to,
+   `research/<id>/recomp/folders.json` (see [Folders](#folders)).
+5. `tools.recomp --all --split 250 --folders folders.json`: one C function per
+   x86 function, operating on global guest registers and a guest stack in
+   mapped memory, written to `gen/<folder>/<leaf>_NNNN.c`.
+6. CMake + MSVC x64: `bin/sot-<id>.exe`.
 
 The executable still reads the user's `default.xbe` at start-up for its data
 sections (`.rdata`, `.data`, library tables). Its code sections are not
@@ -196,6 +199,78 @@ stub, and the stream reader returned whatever was on the stack.
 - when callee-saved registers go wrong, build with `-AbiCheck` and run with
   `run.ps1 -Abi`: the innermost `[ABI] ... esp(epilogue never ran)` line
   before the fault names the function.
+
+### Folders
+
+The lifted functions are named by address (`sub_XXXXXXXX`), so the folder
+each one goes to under `gen/` comes from evidence in the XBE.
+`tools/sort-functions.py` writes `research/<id>/recomp/folders.json`; the
+lifter's `--folders` (an RE-SoT change in `tools/recomp/translator.py`) writes
+`gen/<folder>/<leaf>_NNNN.c`, 250 functions per file in address order, adds a
+`Folder:` line with the evidence to each function's comment and lists the
+folders in `gen/README.md`. `recomp_funcs.h`, `recomp_dispatch.c` and
+`recomp_stubs_unresolved.c` stay at the top of `gen/`. Both CMake files glob
+`gen/` recursively.
+
+The evidence, strongest first; each function gets the first that applies:
+
+| Evidence | Meaning |
+| --- | --- |
+| `section` | The XDK and RAD libraries have sections of their own: `D3D`, `D3DX`, `XGRPH`, `DSOUND`, `WMADEC`, `DOLBY`, `XPP`, `XONLINE`, `XNET`, `BINK*` |
+| `table` | Listed in a compiled AI table of `(key, function)` pairs: the demo's at `.data` `0x00340610` |
+| `source` | Passes a source path to an assert or error report (`\VssPop\Libraries\ENGine\Sources\OBJects\OBJload.c`, `JadeGDIInterface.cpp`) |
+| `string` | Uses a string only one part of the program uses (the C runtime's `1#QNAN`, XAPI's `\Device\Cdrom0`, `VIDEO_MainCall`, ...) |
+| `funclet` | After the C runtime at the end of `.text`, not called directly, and shaped like MSVC's unwind funclets and frame handlers (`lea ecx,[ebp-N]` or `mov eax,imm32`, then `jmp`), which the linker puts there with the global initializers |
+| `match` | Retail only: the same code as a demo function (bytes equal once address operands are masked, at least 32 bytes, unique in both builds); the line names the demo function and the evidence behind it, and is only as strong as that |
+| `between` | Between two functions of the same folder in the same section, with nothing placed elsewhere in between: an object file's functions stay together in the link order |
+| `library` | Inside a stretch of the link order that belongs to one library (Jade engine, AI interpreter, Dare, Base, Microsoft runtime) when nothing says which part: that library's folder (`engine/`, `ai/`, `sound/`, `base/`, `xdk/`). One placement of another library with the same library on both sides counts as inlined code, not a boundary |
+
+What none of these reaches goes to `unsorted/`. `between` and `library` are
+inferences from the link order, not observations about the function: a
+helper the linker kept in whichever object emitted it first (STL templates,
+inline functions) lands with that object. Jade's retail asserts are compiled
+out, so most of retail's placements in the engine come from `match`.
+
+Folders (`gen/README.md` lists them per target):
+
+| Folder | Contents |
+| --- | --- |
+| `main/` | Start-up, main loop, full-screen videos (Jade MainXbox) |
+| `engine/` | Jade engine code no evidence assigns to one module |
+| `objects/`, `world/`, `collision/`, `text/` | Jade ENGine modules (OBJects and MoDiFier; WORld, GRId, DynamicLoading; COLlision; TEXT) |
+| `render/` | Jade GraphicDK and its Xbox renderer |
+| `files/` | BIG file archive, disk access |
+| `ai/` | AI interpreter and the functions it exposes to scripts |
+| `scripts/` | The game's AI models compiled to C (AI2C) |
+| `sound/` | Ubisoft Dare and Jade's glue to it |
+| `memory/`, `base/` | Ubisoft Base: allocators, the rest |
+| `bink/` | RAD Bink |
+| `compiler/` | C++ unwind funclets, frame handlers, global set-up |
+| `xdk/` | Microsoft libraries: `libc/`, `libcpmt/`, `xapi/`, `d3d8/`, `d3dx8/`, `xgraphics/`, `dsound/`, `wmadec/`, `dolby/`, `xpp/`, `xonline/`, `xnet/`; `xdk/` itself for runtime code no evidence assigns to one of them |
+| `unsorted/` | No evidence |
+
+Counts from the run of 2026-10-19 (functions in `functions.json`; the lifter
+emits a few more, which go to the folder whose function contains them):
+
+| Folder | Demo | Retail |
+| --- | ---: | ---: |
+| `scripts/` | 1,817 | 2,946 |
+| `engine/` | 1,793 | 2,210 |
+| `ai/` | 1,627 | 1,683 |
+| `sound/` | 1,355 | 1,120 |
+| `render/` | 661 | 600 |
+| `main/`, `objects/`, `world/`, `collision/`, `text/`, `files/` | 375 | 347 |
+| `memory/`, `base/` | 339 | 252 |
+| `bink/` | 266 | 256 |
+| `compiler/` | 363 | 426 |
+| `xdk/...` | 2,446 | 4,210 |
+| `unsorted/` | 159 | 358 |
+| by evidence | section 2,035, table 717, source 626, string 41, funclet 84, between 4,396, library 3,143 | section 2,924, table 919, source 562, string 35, funclet 92, match 2,300, between 6,634, library 584 |
+
+The retail run needs the demo's analysis (`research/xbox-demo/recomp`) for
+`match`; `recomp.ps1 -Target xbox-retail` stops if it is missing. Changing
+the rules in `sort-functions.py` moves functions between files, not their
+code: a relift with `-SkipAnalysis` is enough.
 
 ## Runtime
 

@@ -7,6 +7,30 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-19: generated C sorted into folders, both targets
+
+`source/<target>/gen` is now one folder per kind of code
+(`docs/RECOMP.md`, Folders) instead of `recomp_NNNN.c` in address order.
+Run: `recomp.ps1 -Target xbox-demo -SkipAnalysis`, then `recomp.ps1 -Target
+xbox-retail -SkipAnalysis` (same analysis as before, new
+`tools/sort-functions.py` and the lifter's `--folders`), `build-android.ps1`;
+all three succeeded. The lifter's tests `test_split_folders` and
+`test_manual_call_dispatch` pass (run as modules; no pytest here).
+
+Compared with the gen of the previous commit by function: demo 11,213 and
+retail 14,418 functions, the same names and, apart from the new `Folder:`
+comment line, the same code; `recomp_funcs.h`, `recomp_dispatch.c`,
+`recomp_stubs_unresolved.c` and `recomp_types.h` byte-identical. 159 demo and
+358 retail functions have no evidence (`unsorted/`). Short runs after the
+change: `run.ps1 -Target xbox-demo -Seconds 40 -Windowed` and the same for
+xbox-retail: both were still drawing frames at 40 s (demo 177, retail 203
+draws per frame, demo audio not silent) with no unresolved call or fault in
+the log; the screen was not looked at.
+
+Not checked: whether each folder placement is right beyond the evidence
+recorded on it (`between` and `library` are link-order inferences); play
+past the menus; Android at runtime.
+
 ## 2026-10-19: Android back on GPU vertex programs; vertex threads off there
 
 **Log** (`C:/Users/Admin/Desktop/logs/xbox-retail-err.txt`, 11:36-11:37; no

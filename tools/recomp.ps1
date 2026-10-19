@@ -10,10 +10,10 @@
 # that target only (RESOT_RUNTIME_DEMO or RESOT_RUNTIME_RETAIL, CMakeLists.txt).
 #
 # Pipeline (the toolkit's tools/): parse Assets/<target>/default.xbe, detect
-# functions, recover calling conventions, lift every executable section to C
-# under source/<target>/gen. The generated C is derived from the user's own XBE:
-# it is ignored by Git and must never be committed. Analysis databases go to
-# research/<target>/recomp.
+# functions, recover calling conventions, sort them into folders by what they
+# do (tools/sort-functions.py), lift every executable section to C under
+# source/<target>/gen/<folder>. The generated C is published (AGENTS.md); game
+# data never is. Analysis databases go to research/<target>/recomp.
 param(
     [ValidateSet('xbox-demo', 'xbox-retail')]
     [string]$Target = 'xbox-demo',
@@ -99,8 +99,20 @@ if (-not $BuildOnly) {
         Invoke-Tool @('-m', 'tools.abi_analysis', $xbe, '--disasm-dir', "$out\disasm",
             '--func-id-dir', "$out\func_id", '--output-dir', "$out\abi")
     }
+    # Sort the functions into folders by what they do (gen/<folder>/). The
+    # retail build also takes the placement of code it shares with the demo,
+    # so the demo's analysis must be there (run this script for xbox-demo first).
+    $sort = @("$root\tools\sort-functions.py", $xbe, '--recomp', $out, '-o', "$out\folders.json")
+    if ($Target -eq 'xbox-retail') {
+        $demoOut = "$root\research\xbox-demo\recomp"
+        if (-not (Test-Path "$demoOut\disasm\functions.json")) {
+            throw "Missing $($demoOut): run tools\recomp.ps1 -Target xbox-demo first (the retail folders use it)"
+        }
+        $sort += @('--match', "$root\Assets\xbox-demo\default.xbe", $demoOut)
+    }
+    Invoke-Native 'python' $sort
     Invoke-Tool @('-m', 'tools.recomp', $xbe, '--game-name', "PoP SoT $Target", '--all', '--split', "$Split",
-        '--gen-dir', "$src\gen", '--disasm-dir', "$out\disasm",
+        '--gen-dir', "$src\gen", '--folders', "$out\folders.json", '--disasm-dir', "$out\disasm",
         '--func-id-dir', "$out\func_id", '--abi-dir', "$out\abi",
         '--exclude-manual', $manual)
 }

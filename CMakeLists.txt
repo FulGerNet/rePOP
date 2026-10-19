@@ -62,7 +62,7 @@ endif()
 
 function(resot_add_target id exe_name)
     set(dir "${CMAKE_CURRENT_SOURCE_DIR}/source/${id}")
-    file(GLOB gen CONFIGURE_DEPENDS "${dir}/gen/*.c")
+    file(GLOB_RECURSE gen CONFIGURE_DEPENDS "${dir}/gen/*.c")
     if(NOT gen)
         message(STATUS "reSOT: ${id} skipped (no lifted sources; run tools/recomp.ps1 -Target ${id})")
         return()
