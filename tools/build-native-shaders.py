@@ -18,12 +18,39 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dxc", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--test-border", action="store_true", help="Include the GPU border contract probe")
     args = parser.parse_args()
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     text = check.source(None).read_text(encoding="utf-8")
     hlsl = (check.embedded(text, "s_hw_hlsl_vs_common") + check.embedded(text, "s_hw_hlsl")
-            + check.embedded(text, "s_hw_hlsl_uber"))
+            + check.embedded(text, "s_hw_hlsl_uber") + check.embedded(text, "s_hw_hlsl_simple"))
+    # RE-SoT: native interpreter operands are pure reads, but each entails
+    # register selection/swizzling. MOV/ARL need only A, MUL needs A/B,
+    # ADD needs A/C; ILU alone needs C. Keep D3D11's reference unchanged.
+    # Invalid MAC opcodes retain its default m=A behavior as well.
+    for operand, condition, packed in (
+        ("a", "mac != 0 || (om != 0 && (d.x & 0x800000) == 0)", "d.z & 0xFFFF"),
+        ("b", "mac == 2 || (mac >= 4 && mac <= 12)", "d.z >> 16"),
+        ("cc", "ilu != 0 || mac == 3 || mac == 4 || (om != 0 && (d.x & 0x800000) != 0)", "d.w & 0xFFFF"),
+    ):
+        original = f"float4 {operand} = ub_src({packed}, UB_VA, UB_RA, a0, ci, rel, vin);"
+        replacement = (f"float4 {operand} = 0; [branch] if ({condition}) "
+                       f"{operand} = ub_src({packed}, UB_VA, UB_RA, a0, ci, rel, vin);")
+        if original not in hlsl:
+            raise RuntimeError(f"Native operand optimization lost its anchor: {operand}")
+        hlsl = hlsl.replace(original, replacement, 1)
+    # RE-SoT: an identity swizzle needs no component selections. A scalar
+    # broadcast branch was also measured but regressed the phone's menu.
+    anchor = "  float4 r = float4(ub_c(x, swz >> 6),"
+    if anchor not in hlsl:
+        raise RuntimeError("Native identity optimization lost its anchor")
+    hlsl = hlsl.replace(anchor,
+        "  [branch] if (swz == 27) return (s & 0x4000) ? -x : x;\n" + anchor, 1)
+    # RE-SoT: instruction opcodes are uniform across the draw. Preserve
+    # their branches so mobile drivers need not predicate unused ALU work.
+    hlsl = hlsl.replace("    if (mac == 2) m =", "    [branch] if (mac == 2) m =", 1)
+    hlsl = hlsl.replace("    if (ilu == 2) l =", "    [branch] if (ilu == 2) l =", 1)
     # SDL's explicit resource layout, shared by its native D3D12/Vulkan drivers.
     hlsl = hlsl.replace("VSC : register(b0)", "VSC : register(b0, space1)")
     hlsl = hlsl.replace("VUC : register(b1)", "VUC : register(b1, space1)")
@@ -49,10 +76,19 @@ def main():
     hlsl = re.sub(r"(Texture(?:2D|Cube)|SamplerState) (\w+) : register\(([ts])(\d+), space2\)",
                   lambda m: (f"[[vk::combinedImageSampler]][[vk::binding({m[4]}, 2)]] "
                              + m[0]), hlsl)
+    # Test-only entry exercises the exact border helper embedded in ps_main.
+    # Production hosts do not carry an extra diagnostic shader.
+    if args.test_border:
+        hlsl += "\nfloat4 ps_border_probe(BO i) : SV_Target { return guest_border(float4(0,0,0,1), i.uv*4.0-1.5, border_info[0], border[0]); }\n"
+        hlsl += "\nVO vs_combiner_probe(uint id : SV_VertexID) { BO b=vs_blit(id); VO o=(VO)0; o.pos=b.pos; o.d0=float4(0.23,0.51,0.81,0.67); o.fog=float4(0.37,0,0,0); o.t0=float4(b.uv*1.5-0.25,0,1); return o; }\n"
+        hlsl += "\nfloat4 ps_combiner_compare(VO i) : SV_Target { return saturate(abs(ps_main(i)-(atest.x!=0?ps_simple_alpha(i):ps_simple(i)))*255.0); }\n"
     src = output / "nv2a-native.hlsl"
     src.write_text(hlsl, encoding="ascii")
     header = ["/* RE-SoT: generated host shaders; tools/build-native-shaders.py. */\n"]
-    for entry, old_profile in check.ENTRIES + [("vs_uber", "vs_4_0")]:
+    entries = check.ENTRIES + [("vs_uber", "vs_4_0"), ("ps_simple", "ps_4_0"), ("ps_simple_alpha", "ps_4_0")]
+    if args.test_border:
+        entries += [("ps_border_probe", "ps_4_0"), ("vs_combiner_probe", "vs_4_0"), ("ps_combiner_compare", "ps_4_0")]
+    for entry, old_profile in entries:
         for fmt in ("dxil", "spirv"):
             binary = output / f"{entry}.{fmt}"
             cmd = [args.dxc, str(src), "-E", entry, "-T", old_profile.replace("4_0", "6_0"),

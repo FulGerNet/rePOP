@@ -133,6 +133,12 @@ static volatile LONG s_frame_draws;
  * The optional provider keeps target addresses out of the shared runtime.
  * Register it before starting the window; it writes a bounded scene name. */
 static volatile LONG s_debug_panel;
+/* RE-SoT: Android touch controls hide their FPS button while this panel
+ * occupies the same corner. Read the real state, including keyboard F5. */
+int xbox_FramebufferFpsVisible(void)
+{
+    return InterlockedCompareExchange(&s_debug_panel, 0, 0) != 0;
+}
 static void (*s_wow_provider)(char *, size_t);
 
 /* RE-SoT: report the backend that initialized successfully, including a

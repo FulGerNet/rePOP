@@ -1,12 +1,13 @@
 /* RE-SoT: explicit GPU encoder shared by SDL GPU's native D3D12 and Vulkan
  * drivers. No D3D11 device, command context, 11On12 or DXVK is used here.
- * Vertex programs initially use the existing NV2A CPU interpreter; triangles,
+ * RE-SoT: supported vertex programs use vs_uber, with CPU fallback; triangles,
  * register combiners, blending, depth tests and render targets run on the GPU.
  * SDL owns native resource barriers, command submission and resource retirement.
  * Included after the common NV2A/D3D11 helpers, not a standalone translation unit. */
 #include <SDL3/SDL.h>
 #include "nv2a_native_shaders.h"
 #include "nv2a_native_scale.h" /* RE-SoT: Android percentage scales. */
+#include "nv2a_native_simple.h" /* RE-SoT: exact mobile combiner whitelist. */
 #include "nv2a_hw_native_visibility.inc"
 static NgVisibility s_ng_visibility; /* RE-SoT: retail-only counting, shared native drivers. */
 #if defined(__ANDROID__)
@@ -42,6 +43,7 @@ typedef struct NgPipeline {
     NgPipelineKey key;
     SDL_GPUGraphicsPipeline *gpu;
     struct NgPipeline *next;
+    struct NgPipeline *bucket_next; /* RE-SoT: indexed lookup, retain list for destruction. */
 } NgPipeline;
 #define NG_DRAW_QUEUE 1024
 /* RE-SoT: immutable state snapshots keep deferred native draws in guest order. */
@@ -71,6 +73,8 @@ static struct {
     SDL_GPUDevice *device;
     SDL_GPUCommandBuffer *cmd;
     SDL_GPUShader *vs, *blit_vs, *ps, *blit_ps, *solid_ps, *panel_ps;
+    SDL_GPUShader *simple_ps, *simple_alpha_ps; /* RE-SoT: opaque one-stage combiner, no discard. */
+    uint64_t simple_draws, guest_draws; /* RE-SoT: observe fast-path coverage on-device. */
     SDL_GPUBuffer *vertices;
     SDL_GPUTexture *white, *white_cube, *composed;
     uint32_t compose_w, compose_h, vertex_offset;
@@ -79,6 +83,7 @@ static struct {
     NgDepth depths[HW_MAX_DEPTHS];
     NgTexture textures[HW_MAX_TEXTURES];
     NgPipeline *pipelines;
+    NgPipeline *pipeline_buckets[256]; /* RE-SoT: avoid scanning all PSOs per draw. */
     SDL_GPUTextureFormat depth_format;
     uint8_t *queued_vertices;
     NgDraw *queued;
@@ -299,6 +304,8 @@ static void ng_shutdown(void)
         if (s_ng.vs) SDL_ReleaseGPUShader(s_ng.device,s_ng.vs);
         if (s_ng.blit_vs) SDL_ReleaseGPUShader(s_ng.device,s_ng.blit_vs);
         if (s_ng.ps) SDL_ReleaseGPUShader(s_ng.device,s_ng.ps);
+        if (s_ng.simple_ps) SDL_ReleaseGPUShader(s_ng.device,s_ng.simple_ps); /* RE-SoT */
+        if (s_ng.simple_alpha_ps) SDL_ReleaseGPUShader(s_ng.device,s_ng.simple_alpha_ps); /* RE-SoT */
         if (s_ng.blit_ps) SDL_ReleaseGPUShader(s_ng.device,s_ng.blit_ps);
         if (s_ng.solid_ps) SDL_ReleaseGPUShader(s_ng.device,s_ng.solid_ps);
         if (s_ng.panel_ps) SDL_ReleaseGPUShader(s_ng.device,s_ng.panel_ps);
@@ -406,6 +413,8 @@ static int ng_init(const char *backend)
     s_ng.vs = NG_SHADER(vs_main, 1, 0, 1);
     s_ng.blit_vs = NG_SHADER(vs_blit, 1, 0, 0);
     s_ng.ps = NG_SHADER(ps_main, 0, 8, 1);
+    s_ng.simple_alpha_ps = NG_SHADER(ps_simple_alpha, 0, 1, 1); /* RE-SoT: foliage specialization. */
+    s_ng.simple_ps = NG_SHADER(ps_simple, 0, 1, 1); /* RE-SoT: native mobile specialization. */
     s_ng.blit_ps = NG_SHADER(ps_blit, 0, 1, 0);
     s_ng.solid_ps = NG_SHADER(ps_solid, 0, 0, 1);
     s_ng.panel_ps = NG_SHADER(ps_debug, 0, 1, 0);
@@ -571,7 +580,8 @@ static SDL_GPUTexture *ng_texture(int stage, NgSurface *target)
     const Texture *t = &s_gpu.texs[stage];
     NgSurface *best = NULL;
     NgTexture *c = NULL, *victim = NULL;
-    uint32_t i, slot, hash, layers, face, x, y, *px, levels = 1;
+    uint32_t i, slot, hash, layers, face, *px, levels = 1;
+    int reuse_image = 0; /* RE-SoT: SDL cycling preserves earlier sampled versions. */
     if (!t->valid || !t->width || !t->height || t->width > 4096 || t->height > 4096) return NULL;
     for (i = 0; !t->cube && i < HW_MAX_SURFACES; i++) {
         NgSurface *s = &s_ng.surfaces[i];
@@ -593,27 +603,35 @@ static SDL_GPUTexture *ng_texture(int stage, NgSurface *target)
     if (c && c->checked == s_hw.frame) { c->used = s_hw.frame; return c->image; }
     hash = hw_tex_hash(t);
     if (c && c->hash == hash) { c->checked = c->used = s_hw.frame; return c->image; }
+#if RESOT_RUNTIME_RETAIL || RESOT_RUNTIME_DEMO
+    /* RE-SoT: content changes do not require a new 2D resource. Flush its
+     * readers, then cycle storage on upload; SDL retires the old backing
+     * allocation after those draws. Demo menu independently has repeated
+     * uploads (android-demo-simple-trace.txt); both native backends pass
+     * test_texture_cycle's earlier-image readback. Keep cube faces on the
+     * existing path; the cache match above checks dimensions and format. */
+    reuse_image = c && !t->cube;
+#endif
     if (!c) c = victim;
-    /* Recreate changed textures: never overwrite an image sampled earlier in
-     * this command buffer. SDL retires the old image after its last GPU use. */
+    /* RE-SoT: flush readers before cycling or recreating. SDL retires the
+     * old backing image after its last encoded GPU use. */
     if (c->image) ng_flush_draws(); /* RE-SoT: retire a sampled version only after encoding its draws. */
-    if (c->image) SDL_ReleaseGPUTexture(s_ng.device, c->image);
+    if (c->image && !reuse_image) SDL_ReleaseGPUTexture(s_ng.device, c->image);
     layers = t->cube ? 6 : 1;
     if (t->levels > 1 && tex_size_from_format(t->color)) {
         uint32_t extent = t->width > t->height ? t->width : t->height;
         while ((extent >>= 1) != 0) levels++;
     }
-    c->image = ng_image(t->width, t->height, t->cube, levels,
+    if (!reuse_image) c->image = ng_image(t->width, t->height, t->cube, levels,
         SDL_GPU_TEXTUREUSAGE_SAMPLER | (levels > 1 ? SDL_GPU_TEXTUREUSAGE_COLOR_TARGET : 0),
         SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
     px = (uint32_t *)malloc((size_t)t->width*t->height*layers*4);
     if (!px) ng_fail("decode texture allocation");
-    for (face = 0; face < layers; face++) for (y = 0; y < t->height; y++) for (x = 0; x < t->width; x++) {
-        uint32_t argb = ~0u;
-        sample_tex(t, t->cube ? face*tex_face_stride(t) : 0, x, y, &argb);
-        px[((size_t)face*t->height+y)*t->width+x] = argb;
-    }
-    ng_upload(c->image, px, t->width, t->height, layers, levels > 1);
+    /* RE-SoT: same bulk P8/ARGB conversion as D3D11, including Android. */
+    for (face = 0; face < layers; face++)
+        hw_decode_texture(t, t->cube ? face*tex_face_stride(t) : 0,
+            px + (size_t)face*t->width*t->height);
+    ng_upload_cycle(c->image, px, t->width, t->height, layers, levels > 1, reuse_image);
     free(px); c->guest = *t; c->hash = hash; c->checked = c->used = s_hw.frame;
     return c->image;
 }
@@ -663,14 +681,20 @@ static SDL_GPUGraphicsPipeline *ng_pipeline(const NgPipelineKey *key)
     SDL_GPUColorTargetDescription color = {0};
     SDL_GPUVertexAttribute attrs[8] = {0};
     SDL_GPUVertexBufferDescription vb = {0};
-    uint32_t i;
-    for (p = s_ng.pipelines; p; p = p->next) if (!memcmp(&p->key, key, sizeof *key)) return p->gpu;
+    uint32_t i, bucket = 2166136261u;
+    /* RE-SoT: retail scenes issue hundreds/thousands of draws and accumulate
+     * many pipelines. Hash the entire initialized key, retaining full-key
+     * comparison so collisions never substitute a different pipeline. */
+    for (i = 0; i < sizeof *key; i++) bucket = (bucket ^ ((const uint8_t *)key)[i])*16777619u;
+    bucket &= 255;
+    for (p = s_ng.pipeline_buckets[bucket]; p; p = p->bucket_next)
+        if (!memcmp(&p->key, key, sizeof *key)) return p->gpu;
     /* RE-SoT: shader 4 is a guest draw whose program runs in vs_uber; it
      * keeps the 128-byte, eight-float4 vertex of shader 0 (input slots). */
-    ci.vertex_shader = key->shader == 0 ? s_ng.vs : key->shader == 4 ? s_ng.uber_vs : s_ng.blit_vs;
-    ci.fragment_shader = key->shader == 0 || key->shader == 4 ? s_ng.ps : key->shader == 1 ? s_ng.blit_ps :
+    ci.vertex_shader = key->shader == 0 || key->shader == 6 || key->shader == 8 ? s_ng.vs : key->shader == 4 || key->shader == 5 || key->shader == 7 ? s_ng.uber_vs : s_ng.blit_vs;
+    ci.fragment_shader = key->shader == 7 || key->shader == 8 ? s_ng.simple_alpha_ps : key->shader == 5 || key->shader == 6 ? s_ng.simple_ps : key->shader == 0 || key->shader == 4 ? s_ng.ps : key->shader == 1 ? s_ng.blit_ps :
                          key->shader == 2 ? s_ng.solid_ps : s_ng.panel_ps;
-    if (!key->shader || key->shader == 4) {
+    if (!key->shader || key->shader >= 4) { /* RE-SoT: guest shader input layout, including simple variants. */
         vb.pitch = sizeof(HwVertex); vb.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
         ci.vertex_input_state.vertex_buffer_descriptions = &vb; ci.vertex_input_state.num_vertex_buffers = 1;
         for (i = 0; i < 8; i++) { attrs[i].location = i; attrs[i].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4; attrs[i].offset = i*16; }
@@ -718,6 +742,7 @@ static SDL_GPUGraphicsPipeline *ng_pipeline(const NgPipelineKey *key)
     }
     if (!p->gpu) ng_fail("create pipeline");
     p->next = s_ng.pipelines; s_ng.pipelines = p;
+    p->bucket_next = s_ng.pipeline_buckets[bucket]; s_ng.pipeline_buckets[bucket] = p;
     return p->gpu;
 }
 
@@ -748,6 +773,7 @@ static void ng_constants(NgSurface *s, NgVsConst *vc, HwPsConst *pc, SDL_GPUText
     for (i = 0; i < 4; i++) {
         const Texture *t = &s_gpu.texs[i];
         uint32_t mode = (s_gpu.rc.stage_program >> (5*i))&31;
+        hw_border_constants(pc, i, t); /* RE-SoT: same guest border as D3D11. */
         SDL_GPUTexture *image = NULL;
         if ((s_gpu.rc_seen ? mode >= 1 && mode <= 3 : i == 0) && t->valid) image = ng_texture(i, s);
         pc->tscale[i][0] = pc->tscale[i][1] = 1;
@@ -817,6 +843,7 @@ static void ng_flush_draws(void)
         NgDraw *draw = &s_ng.queued[i];
         SDL_GPUGraphicsPipeline *pipeline = ng_pipeline(&draw->key);
         SDL_GPUBufferBinding vb = {s_ng.vertices,s_ng.vertex_offset};
+        uint32_t sampler_count = draw->key.shader >= 5 ? 1 : 8; /* RE-SoT */
         int new_samplers;
         /* RE-SoT: SDL 3.4.18's D3D12 descriptor writer checks only the
          * current index, not index+table size, against its 2048-sampler heap.
@@ -827,8 +854,8 @@ static void ng_flush_draws(void)
          * change, so draws that share them do not count; Vulkan has no limit. */
         new_samplers = !pass || last_color != draw->color || last_depth != draw->depth ||
             pipeline != bound_pipeline ||
-            memcmp(bound_textures->textures,draw->textures,sizeof draw->textures);
-        if (new_samplers && ng_sampler_budget(8)) {
+            memcmp(bound_textures->textures,draw->textures,sampler_count*sizeof draw->textures[0]);
+        if (new_samplers && ng_sampler_budget(sampler_count)) {
             if (pass) {
                 if (query) s_ng_visibility.api->end(s_ng.cmd,query->query);
                 SDL_EndGPURenderPass(pass);
@@ -870,10 +897,10 @@ static void ng_flush_draws(void)
         }
         SDL_SetGPUViewport(pass,&draw->vp); SDL_SetGPUScissor(pass,&draw->sc);
         SDL_SetGPUBlendConstants(pass,draw->blend);
-        if (!bound_textures || memcmp(bound_textures->textures,draw->textures,sizeof draw->textures)) {
-            SDL_BindGPUFragmentSamplers(pass,0,draw->textures,8);
+        if (!bound_textures || memcmp(bound_textures->textures,draw->textures,sampler_count*sizeof draw->textures[0])) {
+            SDL_BindGPUFragmentSamplers(pass,0,draw->textures,sampler_count);
             bound_textures = draw;
-            s_ng.command_samplers += 8;
+            s_ng.command_samplers += sampler_count;
         }
         /* RE-SoT: CPU-transformed vs_main reads only the 64-byte header,
          * not the translated-program register arrays following it. */
@@ -915,6 +942,7 @@ static void ng_flush_draws(void)
 }
 static void ng_queue_alloc(void);
 static void ng_draw_state(NgSurface *s, SDL_GPUTexture *depth, NgDraw *out);
+static int ng_simple_combiner(void); /* RE-SoT: shared by GPU and CPU vertex paths. */
 static void ng_draw(const HwVertex *vertices, uint32_t count)
 {
     NgSurface *s = ng_surface();
@@ -928,6 +956,8 @@ static void ng_draw(const HwVertex *vertices, uint32_t count)
     depth = ng_depth(s);
     ng_constants(s,&draw.vc,&draw.pc,draw.textures);
     ng_draw_state(s,depth,&draw);
+    { int simple = ng_simple_combiner(); draw.key.shader = simple ? (simple == 2 ? 8 : 6) : 0; } /* RE-SoT: same fragment specialization on fallback vertices. */
+    s_ng.guest_draws++; if (draw.key.shader >= 5) s_ng.simple_draws++;
     draw.offset = s_ng.queued_bytes; draw.count = count;
     memcpy(s_ng.queued_vertices+s_ng.queued_bytes,vertices,bytes);
     s_ng.queued_bytes += bytes;
@@ -969,6 +999,27 @@ static void ng_draw_state(NgSurface *s, SDL_GPUTexture *depth, NgDraw *out)
     out->color = s->color; out->depth = depth;
     hw_color4(s_gpu.blend_color,(float *)&out->blend);
     out->pixel_scale = ((double)ng_px(s->w,s->sc)/s->w)*ng_py(s->h,s->sc)/s->h;
+}
+
+/* RE-SoT: demo evidence (demo-hud-after-err.txt and
+ * hourglass-ftrace-visible2.txt) has the same exact one-stage states as
+ * retail: 08040000/18140000 -> 00010C00/00000C00, final 130C0300/00001C80.
+ * Enable the state whitelist for both checked XBEs; never infer an address
+ * or accept additional combiner states from the other target. A switch
+ * permits same-build A/B tests at identical resolution and pacing. */
+static int ng_simple_combiner(void)
+{
+#if RESOT_RUNTIME_RETAIL || RESOT_RUNTIME_DEMO
+    static int enabled = -1;
+    if (enabled < 0) { const char *e = getenv("RESOT_NATIVE_SIMPLE"); enabled = !(e && *e == '0'); }
+    int eligible = enabled && s_ng.simple_ps && s_ng.simple_alpha_ps && s_gpu.rc_seen && resot_native_simple(
+        s_gpu.rc.control,s_gpu.rc.stage_program,s_gpu.rc.color_icw[0],s_gpu.rc.alpha_icw[0],
+        s_gpu.rc.color_ocw[0],s_gpu.rc.alpha_ocw[0],s_gpu.rc.final0,s_gpu.rc.final1,
+        s_gpu.alpha_test,s_gpu.alpha_func,s_gpu.texs[0].cube);
+    return eligible ? (s_gpu.alpha_test && s_gpu.alpha_func != 0x207 ? 2 : 1) : 0;
+#else
+    return 0;
+#endif
 }
 
 /* RE-SoT: the batch's vertex program runs on the GPU (vs_uber): its distinct
@@ -1045,7 +1096,8 @@ static int ng_draw_program_batch(void)
     draw = &local;
     ng_constants(s,&draw->vc,&draw->pc,draw->textures);
     ng_draw_state(s,depth,draw);
-    draw->key.shader = 4;
+    { int simple = ng_simple_combiner(); draw->key.shader = simple ? (simple == 2 ? 7 : 5) : 4; } /* RE-SoT: exact opaque fragment specialization. */
+    s_ng.guest_draws++; if (draw->key.shader >= 5) s_ng.simple_draws++;
     draw->vc.fogp[0] = s_gpu.fog_param[0]; draw->vc.fogp[1] = s_gpu.fog_param[1];
     draw->vc.fogp[2] = (float)s_gpu.fog_mode; draw->vc.fogp[3] = s_gpu.fog_enable ? 1.0f : 0.0f;
 
@@ -1356,6 +1408,8 @@ static void ng_flip(void)
                 s_ng.active == 12 ? "D3D12" : "Vulkan",frames*1000.0/(now-last_log),
                 frames ? (double)(s_hw.draws-last_draws)/frames : 0,(unsigned long long)s_hw.draws,
                 s_ng.gpu_vsh ? "GPU" : "CPU");
+        fprintf(stderr,"[HW native] simple combiners: %llu/%llu guest draws\n",
+            (unsigned long long)s_ng.simple_draws,(unsigned long long)s_ng.guest_draws); /* RE-SoT: verify coverage, not assumed speedup. */
         /* RE-SoT: expose the existing F6 timings on Android as well, where
          * there is no diagnostics panel. Avoid inferring CPU/GPU bottlenecks
          * from FPS alone. Values are the latest half-second sample. */

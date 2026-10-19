@@ -40,6 +40,7 @@ public final class TouchControls extends View implements InputManager.InputDevic
     private static native void nativeState(int lx, int ly, int rx, int ry, int lt, int rt, int buttons);
     private static native int nativeRumble();
     private static native void nativeToggleFps();
+    private static native boolean nativeFpsVisible();
 
     // SDL_GamepadButton bits; the triggers are SDL axes 4 and 5.
     private static final int SOUTH = 0, EAST = 1, WEST = 2, NORTH = 3, BACK = 4, START = 6,
@@ -380,7 +381,7 @@ public final class TouchControls extends View implements InputManager.InputDevic
             disc(canvas, logicalW / 2 - 90, toolbarY(), 28, false);
             label(canvas, "RESET", logicalW / 2 - 90, toolbarY(), 12);
             label(canvas, "DRAG THE CONTROLS, THEN SAVE", logicalW / 2, toolbarY() + 56, 15);
-        } else {
+        } else if (!nativeFpsVisible()) { // Keep hit() active at this location while the button is hidden.
             disc(canvas, 36, toolbarY(), 22, false);
             label(canvas, "FPS", 36, toolbarY(), 11);
         }

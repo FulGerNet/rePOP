@@ -178,6 +178,7 @@ typedef struct {
     float    finc0[4], finc1[4], fogc[4];
     float    tscale[4][4];
     uint32_t misc[4];
+    float    border[4][4], border_info[4][4]; /* RE-SoT: native SDL has no custom border sampler. */
 } HwPsConst;
 
 static struct {
@@ -522,7 +523,7 @@ static const char s_hw_hlsl[] =
 "cbuffer PSC : register(b0) {\n"
 "  uint4 cw[8]; float4 fac0[8]; float4 fac1[8];\n"
 "  uint4 ctl; uint4 atest; float4 finc0; float4 finc1; float4 fogc;\n"
-"  float4 tscale[4]; uint4 misc; };\n"
+"  float4 tscale[4]; uint4 misc; float4 border[4]; float4 border_info[4]; };\n"
 "float4 ps_solid(VO i) : SV_Target { return finc0; }\n"
 "float map_in(float x, uint b) {\n"
 "  float p = max(x, 0.0); uint m = (b >> 5) & 7;\n"
@@ -556,6 +557,17 @@ static const char s_hw_hlsl[] =
 "    return float4(0, 0, 0, 0); }\n"
 "  return float4(0, 0, 0, 0); }\n"
 "float2 proj_uv(float4 tc, float4 sc) { float q = tc.w != 0.0 ? tc.w : 1.0; return tc.xy / q * sc.xy; }\n"
+/* RE-SoT: retail light maps request white CLAMP_TO_BORDER. A zero border
+ * multiplies the underlying surface to black outside the light-map atlas.
+ * Both backends sample clamp-to-edge, then blend the guest border per tap
+ * (bilinear at mip zero; nearest has a hard edge), including mixed U/V. */
+"float4 guest_border(float4 sampled, float2 uv, float4 info, float4 color) {\n"
+"  float2 weight = float2(1, 1);\n"
+"  if (info.z > 0) weight.x = saturate(min(uv.x * info.x + 0.5, (1.0 - uv.x) * info.x + 0.5));\n"
+"  else if (info.z < 0) weight.x = uv.x >= 0.0 && uv.x < 1.0 ? 1.0 : 0.0;\n"
+"  if (info.w > 0) weight.y = saturate(min(uv.y * info.y + 0.5, (1.0 - uv.y) * info.y + 0.5));\n"
+"  else if (info.w < 0) weight.y = uv.y >= 0.0 && uv.y < 1.0 ? 1.0 : 0.0;\n"
+"  return lerp(color, sampled, weight.x * weight.y); }\n"
 /* RE-SoT: combiner registers are named variables (Q1-Q15; R0 reads zero)
  * chosen by the draw's uniform control words, not an indexed R[16]. Faster
  * on the desktop GPU (Vulkan menu 145-152 FPS, was 42-77; 2026-10-19). */
@@ -591,6 +603,10 @@ static const char s_hw_hlsl[] =
 "  float4 s3 = float4(1, 1, 1, 1);\n"
 "  [branch] if (tscale[3].z > 0.5) { if (tscale[3].w > 0.5) s3 = cx3.Sample(sm3, i.t3.xyz);\n"
 "    else s3 = tx3.Sample(sm3, proj_uv(i.t3, tscale[3])); }\n"
+"  if (border_info[0].z != 0 || border_info[0].w != 0) s0 = guest_border(s0, proj_uv(i.t0, tscale[0]), border_info[0], border[0]);\n"
+"  if (border_info[1].z != 0 || border_info[1].w != 0) s1 = guest_border(s1, proj_uv(i.t1, tscale[1]), border_info[1], border[1]);\n"
+"  if (border_info[2].z != 0 || border_info[2].w != 0) s2 = guest_border(s2, proj_uv(i.t2, tscale[2]), border_info[2], border[2]);\n"
+"  if (border_info[3].z != 0 || border_info[3].w != 0) s3 = guest_border(s3, proj_uv(i.t3, tscale[3]), border_info[3], border[3]);\n"
 "  bool keep = true; uint sp = ctl.y; uint cpm = atest.w;\n"
 "  float4 Q1 = 0, Q2 = 0, Q3 = 0, Q4 = 0, Q5 = 0, Q6 = 0, Q7 = 0, Q12 = 0, Q13 = 0, Q14 = 0, Q15 = 0;\n"
 "  float4 Q8  = stage_tex(sp & 31, i.t0, s0, tscale[0].z, keep, cpm);\n"
@@ -653,6 +669,37 @@ static const char s_hw_hlsl[] =
 "    else if (f == 0x206) ok = v >= r;\n"
 "    if (!ok) discard; }\n"
 "  return o; }\n";
+
+/* RE-SoT: native mobile fast path for the observed one-stage texture *
+ * diffuse/constant combiners. No register interpreter and no discard, so
+ * opaque geometry can use early depth rejection on tile GPUs. Eligibility
+ * is checked against every relevant combiner word in ng_simple_combiner.
+ * A separate alpha entry handles foliage; cubes and other programs retain
+ * the generic shader. */
+static const char s_hw_hlsl_simple[] =
+"float4 ps_simple(VO i) : SV_Target {\n"
+"  float2 uv = proj_uv(i.t0, tscale[0]);\n"
+"  float4 texel = float4(1,1,1,1);\n"
+"  [branch] if (tscale[0].z > 0.5) texel = tx0.Sample(sm0, uv);\n"
+/* RE-SoT: diffuse-only draws ignore texture and stale sampler borders. */
+"  if (ctl.y != 0 && (border_info[0].z != 0 || border_info[0].w != 0))\n"
+"    texel = guest_border(texel, uv, border_info[0], border[0]);\n"
+"  float3 factor = cw[0].x == 0x08010000 ? fac0[0].rgb : i.d0.rgb;\n"
+"  float alpha = cw[0].y == 0x18110000 ? fac0[0].a : i.d0.a;\n"
+"  float scale = cw[0].z == 0x00010C00 ? 2.0 : 1.0;\n"
+"  float4 o = float4(saturate(texel.rgb * factor * scale), saturate(texel.a * alpha));\n"
+"  if (ctl.z == 0x130C0300) o.rgb = lerp(fogc.rgb, o.rgb, saturate(i.fog.x));\n"
+"  return saturate(o); }\n"
+/* RE-SoT: keep alpha-tested foliage on a separate entry; the opaque entry
+ * stays discard-free. Alpha comparisons match ps_main's 8-bit rounding. */
+"float4 ps_simple_alpha(VO i) : SV_Target {\n"
+"  float4 o = ps_simple(i);\n"
+"  int v = int(o.a * 255.0 + 0.5), r = int(atest.z & 0xFF); uint f = atest.y; bool ok = true;\n"
+"  if (f == 0x200) ok = false; else if (f == 0x201) ok = v < r;\n"
+"  else if (f == 0x202) ok = v == r; else if (f == 0x203) ok = v <= r;\n"
+"  else if (f == 0x204) ok = v > r; else if (f == 0x205) ok = v != r;\n"
+"  else if (f == 0x206) ok = v >= r;\n"
+"  if (!ok) discard; return o; }\n";
 
 
 #if RESOT_HW_D3D11
@@ -1263,14 +1310,55 @@ static int hw_mem_ok(uint32_t va, uint32_t bytes)
     return 0;
 }
 
+/* RE-SoT: retain sample_tex as the format fallback and scalar reference.
+ * Demo's demo-hud-after-err.txt independently records P8 (0x0B) textures,
+ * also covered by the bulk/scalar Morton comparison for rectangular sizes.
+ * This is a format conversion, with no target-specific guest addresses. */
+#include "nv2a_texture_upload.h"
+static void hw_decode_texture(const Texture *t, uint32_t face, uint32_t *px)
+{
+    uint32_t x, y;
+#if RESOT_RUNTIME_RETAIL || RESOT_RUNTIME_DEMO
+    const uint8_t *mem = (const uint8_t *)xbox_GetMemoryOffset();
+    if (resot_decode_swizzled(px, mem+t->offset+face, t->width, t->height,
+            t->color, t->palette ? (const uint32_t *)(mem+t->palette) : NULL))
+        return;
+#endif
+    for (y = 0; y < t->height; y++) for (x = 0; x < t->width; x++) {
+        uint32_t argb = 0xFFFFFFFFu;
+        if (!sample_tex(t,face,x,y,&argb)) argb = 0xFFFFFFFFu;
+        px[(size_t)y*t->width+x] = argb;
+    }
+}
+
+/* RE-SoT: state observed on retail's P8 light-map passes; retain the
+ * existing demo policy until independently traced in that executable. */
+static void hw_color4(uint32_t argb, float out[4]); /* RE-SoT: shared constant conversion below. */
+static void hw_border_constants(HwPsConst *pc, unsigned stage, const Texture *t)
+{
+#if RESOT_RUNTIME_RETAIL
+    if (t->valid && !t->cube && (t->addr_u == 4 || t->addr_v == 4)) {
+        unsigned mag = (t->filter >> 24)&15, min = (t->filter >> 16)&255;
+        float linear = mag == 2 || (min >= 2 && min <= 6) ? 1.0f : -1.0f;
+        hw_color4(t->border_color, pc->border[stage]);
+        pc->border_info[stage][0] = (float)t->width;
+        pc->border_info[stage][1] = (float)t->height;
+        pc->border_info[stage][2] = t->addr_u == 4 ? linear : 0;
+        pc->border_info[stage][3] = t->addr_v == 4 ? linear : 0;
+    }
+#endif
+}
+
 #if RESOT_HW_D3D11
 static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
 {
     const Texture *t = &s_gpu.texs[stage];
     HwTexture *c = NULL, *victim = NULL;
-    uint32_t i, slot, hash, x, y, face, face_stride, *px;
+    uint32_t i, slot, hash, face, face_stride, *px;
     D3D11_TEXTURE2D_DESC td;
     int mips;
+    LARGE_INTEGER upload_start, upload_end, upload_frequency; /* RE-SoT: slow upload evidence. */
+    int cache_reason;
 
     if (!t->valid || t->width > 4096 || t->height > 4096)
         return NULL;
@@ -1324,6 +1412,10 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
         c->checked_frame = c->used_frame = s_hw.frame;
         return c->srv;
     }
+    /* RE-SoT: distinguish streamed/animated data from cache collisions in
+     * gameplay logs before changing cache size or invalidation policy. */
+    cache_reason = c ? 0 : victim->srv ? 2 : 1;
+    QueryPerformanceCounter(&upload_start);
     if (!c) {
         c = victim;
         if (c->srv) {
@@ -1339,13 +1431,7 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
     /* RE-SoT: NV2A stores each face with its mip chain and 128-byte alignment. */
     face_stride = t->cube ? tex_face_stride(t) : 0;
     for (face = 0; face < (t->cube ? 6u : 1u); face++)
-    for (y = 0; y < t->height; y++)
-        for (x = 0; x < t->width; x++) {
-            uint32_t argb = 0xFFFFFFFFu;
-            if (!sample_tex(t, face * face_stride, x, y, &argb))
-                argb = 0xFFFFFFFFu;
-            px[((size_t)face * t->height + y) * t->width + x] = argb;
-        }
+        hw_decode_texture(t, face * face_stride, px + (size_t)face*t->width*t->height);
     mips = t->levels > 1 && tex_size_from_format(t->color);
     if (!c->tex) {
         memset(&td, 0, sizeof td);
@@ -1383,6 +1469,13 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
         fprintf(stderr, "  [HW-CUBE] stage=%d offset=%08X size=%ux%u stride=%u levels=%u\n",
             stage, t->offset, t->width, t->height, face_stride, t->levels);
     s_hw.tex_uploads++;
+    QueryPerformanceCounter(&upload_end); QueryPerformanceFrequency(&upload_frequency);
+    if (s_ftrace == 2 || upload_end.QuadPart - upload_start.QuadPart > upload_frequency.QuadPart / 500) {
+        fprintf(stderr, "  [HW-TEX-UPLOAD] %08X %ux%u fmt=%02X reason=%s %.3f ms\n",
+            t->offset, t->width, t->height, t->color,
+            cache_reason == 0 ? "changed" : cache_reason == 1 ? "new" : "evicted",
+            (double)(upload_end.QuadPart-upload_start.QuadPart)*1000.0/upload_frequency.QuadPart);
+    }
     return c->srv;
 }
 
@@ -1395,6 +1488,10 @@ static ID3D11SamplerState *hw_sampler(const Texture *t)
     uint32_t u = t->addr_u < 6 ? t->addr_u : 3, v = t->addr_v < 6 ? t->addr_v : 3;
     uint32_t mag = (t->filter >> 24) & 0xF, min = (t->filter >> 16) & 0xFF;
     int lin = mag == 2 || min == 2 || min == 4 || min == 6 || min == 3 || min == 5;
+#if RESOT_RUNTIME_RETAIL
+    /* RE-SoT: guest_border supplies the programmed border, also on Vulkan. */
+    if (!t->cube) { if (u == 4) u = 3; if (v == 4) v = 3; }
+#endif
 
     if (!s_hw.samp[u][v][lin]) {
         D3D11_SAMPLER_DESC sm;
@@ -1578,6 +1675,11 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     for (st = 0; st < 4; st++) {
         const Texture *t = &s_gpu.texs[st];
         uint32_t mode = (s_gpu.rc.stage_program >> (st * 5)) & 0x1F;
+        hw_border_constants(&pc, st, t); /* RE-SoT: white light-map borders. */
+        /* RE-SoT: distinguish a bad palette from an unimplemented border. */
+        if (s_ftrace == 2 && mode)
+            fprintf(stderr, "[HW-TEX-STATE] stage=%d palette=%08X address=%u/%u border=%08X\n",
+                st, t->palette, t->addr_u, t->addr_v, t->border_color);
         srv[st] = NULL;
         if ((s_gpu.rc_seen ? (mode >= 1 && mode <= 3) : st == 0) && t->valid)
             srv[st] = hw_texture(st, s);
@@ -1829,6 +1931,35 @@ static void hw_trace_end(void)
             s_gpu.alpha_test, s_gpu.alpha_func, s_gpu.alpha_ref, s_gpu.color_mask,
             s_gpu.zeta_offset ? "yes" : "no", s_gpu.fog_enable, s_gpu.fog_mode,
             s_gpu.fog_param[0], s_gpu.fog_param[1]);
+    /* RE-SoT: an opt-in pixel history identifies the draw that creates a
+     * reported black patch. Read only one pixel, and only during a trace. */
+    {
+        const char *probe = getenv("RECOMP_HW_TRACE_PIXEL");
+        unsigned x, y;
+        HwSurface *s = s_hw.biggest;
+        if (probe && s && sscanf(probe, "%u,%u", &x, &y) == 2) {
+            D3D11_TEXTURE2D_DESC td;
+            ID3D11Texture2D *read = NULL;
+            D3D11_MAPPED_SUBRESOURCE map;
+            D3D11_BOX box = {x, y, 0, x + 1, y + 1, 1};
+            ID3D11Texture2D_GetDesc(s->tex, &td);
+            if (x < td.Width && y < td.Height) {
+                td.Width = td.Height = td.MipLevels = td.ArraySize = 1;
+                td.Usage = D3D11_USAGE_STAGING; td.BindFlags = td.MiscFlags = 0;
+                td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                if (SUCCEEDED(ID3D11Device_CreateTexture2D(s_hw.dev, &td, NULL, &read))) {
+                    ID3D11DeviceContext_CopySubresourceRegion(s_hw.ctx, (ID3D11Resource *)read,
+                        0, 0, 0, 0, (ID3D11Resource *)s->tex, 0, &box);
+                    if (SUCCEEDED(ID3D11DeviceContext_Map(s_hw.ctx, (ID3D11Resource *)read,
+                            0, D3D11_MAP_READ, 0, &map))) {
+                        fprintf(stderr, "[FTRACE]     probe %u,%u = %08X\n", x, y, *(const uint32_t *)map.pData);
+                        ID3D11DeviceContext_Unmap(s_hw.ctx, (ID3D11Resource *)read, 0);
+                    }
+                    ID3D11Texture2D_Release(read);
+                }
+            }
+        }
+    }
 }
 
 #endif /* RESOT_HW_D3D11 */
@@ -2111,7 +2242,16 @@ static void hw_classify_screen(float left, float right, float top, float bottom)
         && !s_hw.batch_projected_screen
         && left >= 320.0f - 320.0f / s_hw.widen - 0.5f
         && right <= 320.0f + 320.0f / s_hw.widen + 0.5f
-        && (bottom <= 192.0f || top >= 288.0f))
+        && (bottom <= 192.0f || top >= 288.0f
+#if RESOT_RUNTIME_RETAIL
+            /* RE-SoT: the forming sand-tank outline in the user's retail
+             * garden capture is near x=126, y=199 (640x480 coordinates).
+             * It falls below the original HUD band. Include small pieces
+             * in that left column, without shifting central menu panels. */
+            || (right <= 160.0f && bottom <= 240.0f
+                && right - left <= 32.0f && bottom - top <= 32.0f)
+#endif
+            ))
         s_hw.batch_hud = right < 320.0f ? -1 : left > 320.0f ? 1 : 0;
     /* RE-SoT: retail only. Its title logo is flat 2D drawn through the
      * narrowed projection (vsh FE9274D1, x=92.531..476.531 y=48.531..168.531
@@ -2440,7 +2580,7 @@ static int hw_draw_program_batch(void)
                 if (o0.fog[0] > fhi) fhi = o0.fog[0];
                 if (o0.d0[3] < alo) alo = o0.d0[3];
                 if (o0.d0[3] > ahi) ahi = o0.d0[3];
-                if (n <= 4)
+                if (n <= 4 || k < 3) /* RE-SoT: projected light-map coordinates on mesh draws. */
                     fprintf(stderr, "[FTRACE]     vtx %u pos %g %g t0 %g %g t1 %g %g"
                                     " t2 %g %g t3 %g %g\n", k, o0.pos[0], o0.pos[1],
                             o0.tex[0][0], o0.tex[0][1], o0.tex[1][0], o0.tex[1][1],

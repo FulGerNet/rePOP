@@ -341,6 +341,10 @@ int SDL_main(int argc, char **argv)
     set_default("RECOMP_APU_DSP_ACK", "gp+0x810");
     set_default("RECOMP_HEAP_RECLAIM", "1");
     set_default("RESOT_RENDERER", "vulkan");
+    /* Opt-in developer frame capture: avoid a per-frame filesystem probe
+     * in ordinary runs. The second file triggers the existing one-frame trace. */
+    if (access("frame-trace-enable", F_OK) == 0)
+        set_default("RECOMP_FRAME_TRACE", "frame-trace.flag");
 #if defined(RESOT_DEFAULT_EXT_VMA) && RESOT_DEFAULT_EXT_VMA
     set_default("RECOMP_EXT_VMA", "1");
 #endif

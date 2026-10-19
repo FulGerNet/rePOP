@@ -28,6 +28,7 @@
 extern void xbox_FramebufferHostKey(int vk, int down);
 extern void xbox_FramebufferHostMouse(int dx, int dy);
 extern void xbox_FramebufferToggleDebugPanel(void);
+extern int xbox_FramebufferFpsVisible(void);
 extern int  xbox_FramebufferKeyDown(int vk);
 extern int  usb_gamepad_report(int pad, uint8_t *out, int max);
 
@@ -61,6 +62,12 @@ JNIEXPORT void JNICALL Java_com_fulger_resot_TouchControls_nativeToggleFps(JNIEn
 {
     (void)env; (void)cls;
     xbox_FramebufferToggleDebugPanel();
+}
+
+JNIEXPORT jboolean JNICALL Java_com_fulger_resot_TouchControls_nativeFpsVisible(JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return xbox_FramebufferFpsVisible() ? JNI_TRUE : JNI_FALSE;
 }
 
 /* ── physical gamepads (SDL thread opens them) ─────────────── */

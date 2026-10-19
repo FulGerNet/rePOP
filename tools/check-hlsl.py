@@ -79,6 +79,10 @@ def check(dll, target):
     failed += compile_entry(dll, program, "vs_prog", "vs_4_0")
     # The native encoders' offline program interpreter (build-native-shaders.py).
     failed += compile_entry(dll, common + embedded(text, "s_hw_hlsl_uber"), "vs_uber", "vs_4_0")
+    failed += compile_entry(dll, common + embedded(text, "s_hw_hlsl")
+                            + embedded(text, "s_hw_hlsl_simple"), "ps_simple", "ps_4_0")
+    failed += compile_entry(dll, common + embedded(text, "s_hw_hlsl")
+                            + embedded(text, "s_hw_hlsl_simple"), "ps_simple_alpha", "ps_4_0")
     return failed
 
 

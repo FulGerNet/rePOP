@@ -63,6 +63,109 @@ static int test_vertex_ring(SDL_GPUDevice *device)
     puts("vertex ring append/wrap preserves queued uploads and readbacks");
     return 0;
 }
+/* RE-SoT: changing a cached texture reuses the SDL image with cycle=true.
+ * Earlier GPU work must keep the old backing image, even within one command
+ * buffer. This exercises the same upload/cycle sequence on both drivers. */
+static int test_texture_cycle(SDL_GPUDevice *device)
+{
+    SDL_GPUTextureCreateInfo info = {0};
+    SDL_GPUTransferBufferCreateInfo ti = {SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,64,0};
+    SDL_GPUTexture *texture;
+    SDL_GPUTransferBuffer *upload, *download;
+    SDL_GPUCommandBuffer *cmd;
+    SDL_GPUFence *fence;
+    const Uint32 *pixels;
+    int run, i;
+    info.type=SDL_GPU_TEXTURETYPE_2D; info.format=SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM;
+    info.usage=SDL_GPU_TEXTUREUSAGE_SAMPLER; info.width=info.height=4;
+    info.layer_count_or_depth=info.num_levels=1; info.sample_count=SDL_GPU_SAMPLECOUNT_1;
+    texture=SDL_CreateGPUTexture(device,&info); REQUIRE(texture);
+    upload=SDL_CreateGPUTransferBuffer(device,&ti); REQUIRE(upload);
+    ti.usage=SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD; ti.size=192;
+    download=SDL_CreateGPUTransferBuffer(device,&ti); REQUIRE(download);
+    cmd=SDL_AcquireGPUCommandBuffer(device); REQUIRE(cmd);
+    for (run=0;run<3;run++) {
+        SDL_GPUTextureTransferInfo src={upload,0,4,4}, dst={download,(Uint32)run*64,4,4};
+        SDL_GPUTextureRegion region={0};
+        SDL_GPUCopyPass *copy;
+        Uint32 *mapped=SDL_MapGPUTransferBuffer(device,upload,true); REQUIRE(mapped);
+        for (i=0;i<16;i++) mapped[i]=0xFF000000u+(Uint32)(run*100+i);
+        SDL_UnmapGPUTransferBuffer(device,upload);
+        region.texture=texture; region.w=region.h=4; region.d=1;
+        copy=SDL_BeginGPUCopyPass(cmd); REQUIRE(copy);
+        SDL_UploadToGPUTexture(copy,&src,&region,true);
+        SDL_DownloadFromGPUTexture(copy,&region,&dst);
+        SDL_EndGPUCopyPass(copy);
+    }
+    fence=SDL_SubmitGPUCommandBufferAndAcquireFence(cmd); REQUIRE(fence);
+    REQUIRE(SDL_WaitForGPUFences(device,true,&fence,1));
+    pixels=SDL_MapGPUTransferBuffer(device,download,false); REQUIRE(pixels);
+    for (run=0;run<3;run++) for (i=0;i<16;i++) REQUIRE(pixels[run*16+i]==0xFF000000u+(Uint32)(run*100+i));
+    SDL_UnmapGPUTransferBuffer(device,download); SDL_ReleaseGPUFence(device,fence);
+    SDL_ReleaseGPUTexture(device,texture);
+    SDL_ReleaseGPUTransferBuffer(device,upload); SDL_ReleaseGPUTransferBuffer(device,download);
+    puts("texture cycling preserves earlier image readbacks");
+    return 0;
+}
+/* RE-SoT: real GPU readback of the production HLSL border helper: white
+ * outside a multiplicative light map, black inside, and the half-texel
+ * blend at the boundary. The same probe runs through DXIL and SPIR-V. */
+static int test_texture_border(SDL_GPUDevice *device, SDL_GPUShader *vs,
+    SDL_GPUTexture *target, SDL_GPUTransferBuffer *download, int dx)
+{
+    SDL_GPUShaderCreateInfo si={0};
+    SDL_GPUGraphicsPipelineCreateInfo pi={0};
+    SDL_GPUColorTargetDescription color={0};
+    SDL_GPUShader *ps;
+    SDL_GPUGraphicsPipeline *pipeline;
+    int run;
+    si.format=dx ? SDL_GPU_SHADERFORMAT_DXIL : SDL_GPU_SHADERFORMAT_SPIRV;
+    si.code=dx ? ng_ps_border_probe_dxil : ng_ps_border_probe_spirv;
+    si.code_size=dx ? sizeof ng_ps_border_probe_dxil : sizeof ng_ps_border_probe_spirv;
+    si.entrypoint="ps_border_probe"; si.stage=SDL_GPU_SHADERSTAGE_FRAGMENT; si.num_uniform_buffers=1;
+    ps=SDL_CreateGPUShader(device,&si); REQUIRE(ps);
+    pi.vertex_shader=vs; pi.fragment_shader=ps; pi.primitive_type=SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+    pi.rasterizer_state.fill_mode=SDL_GPU_FILLMODE_FILL; pi.multisample_state.sample_count=SDL_GPU_SAMPLECOUNT_1;
+    color.format=SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM;
+    pi.target_info.color_target_descriptions=&color; pi.target_info.num_color_targets=1;
+    pipeline=SDL_CreateGPUGraphicsPipeline(device,&pi); REQUIRE(pipeline);
+    for (run=0;run<3;run++) {
+        float pc[168]={0}; /* Full HwPsConst, including borders and border_info. */
+        SDL_GPUCommandBuffer *cmd=SDL_AcquireGPUCommandBuffer(device);
+        SDL_GPUColorTargetInfo ct={0};
+        SDL_GPUTextureRegion src={0};
+        SDL_GPUTextureTransferInfo dst={download,0,128,128};
+        SDL_GPUCopyPass *copy;
+        SDL_GPURenderPass *pass;
+        SDL_GPUFence *fence;
+        const Uint32 *pixels;
+        unsigned outside, center, edge;
+        REQUIRE(cmd);
+        pc[136]=pc[137]=pc[138]=pc[139]=1; /* white ARGB border */
+        pc[152]=pc[153]=4; pc[154]=run==1 ? -1.0f : 1.0f;
+        pc[155]=run==2 ? 0.0f : pc[154]; /* Mixed border-U / clamp-V. */
+        ct.texture=target; ct.load_op=SDL_GPU_LOADOP_CLEAR; ct.store_op=SDL_GPU_STOREOP_STORE;
+        pass=SDL_BeginGPURenderPass(cmd,&ct,1,NULL); REQUIRE(pass);
+        SDL_BindGPUGraphicsPipeline(pass,pipeline);
+        SDL_PushGPUFragmentUniformData(cmd,0,pc,sizeof pc);
+        SDL_DrawGPUPrimitives(pass,3,1,0,0); SDL_EndGPURenderPass(pass);
+        src.texture=target; src.w=src.h=128; src.d=1;
+        copy=SDL_BeginGPUCopyPass(cmd); REQUIRE(copy);
+        SDL_DownloadFromGPUTexture(copy,&src,&dst); SDL_EndGPUCopyPass(copy);
+        fence=SDL_SubmitGPUCommandBufferAndAcquireFence(cmd); REQUIRE(fence);
+        REQUIRE(SDL_WaitForGPUFences(device,true,&fence,1));
+        pixels=SDL_MapGPUTransferBuffer(device,download,false); REQUIRE(pixels);
+        outside=pixels[64*128]&255; center=pixels[64*128+64]&255; edge=pixels[64*128+48]&255;
+        REQUIRE(outside==255 && center==0);
+        if (run==1) REQUIRE(edge==0); else REQUIRE(edge>=110 && edge<=113);
+        if (run==2) REQUIRE((pixels[64]&255)==0); /* V outside is ignored. */
+        SDL_UnmapGPUTransferBuffer(device,download); SDL_ReleaseGPUFence(device,fence);
+    }
+    SDL_ReleaseGPUGraphicsPipeline(device,pipeline); SDL_ReleaseGPUShader(device,ps);
+    puts("light-map borders: outside, inside, bilinear edge, nearest and mixed axes passed");
+    return 0;
+}
+#include "test_simple_combiner.inc" /* RE-SoT: native shader differential readbacks. */
 int main(int argc, char **argv)
 {
     const char *backend = argc > 1 ? argv[1] : "direct3d12";
@@ -91,6 +194,7 @@ int main(int argc, char **argv)
     REQUIRE(device);
     REQUIRE(!strcmp(SDL_GetGPUDeviceDriver(device),backend));
     REQUIRE(!test_vertex_ring(device));
+    REQUIRE(!test_texture_cycle(device)); /* RE-SoT: cached image lifetime. */
     query_library = SDL_LoadObject("SDL3.dll"); REQUIRE(query_library);
     get_api = (ResotGetGpuQueryAPI)SDL_LoadFunction(query_library,dx ? "RESOT_GetD3D12QueryAPI" : "RESOT_GetVulkanQueryAPI");
     REQUIRE(get_api);
@@ -130,6 +234,8 @@ int main(int argc, char **argv)
     image.format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT; image.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
     depth = SDL_CreateGPUTexture(device,&image); REQUIRE(depth);
     transfer = SDL_CreateGPUTransferBuffer(device,&transfer_info); REQUIRE(transfer);
+    REQUIRE(!test_texture_border(device,vs,target,transfer,dx)); /* RE-SoT: actual shader on both GPUs. */
+    REQUIRE(!test_simple_combiner(device,target,transfer,dx)); /* RE-SoT: specialization matches full interpreter. */
     for (frame = 0; frame < 4; frame++) {
         SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(device);
         SDL_GPUColorTargetInfo ct = {0};

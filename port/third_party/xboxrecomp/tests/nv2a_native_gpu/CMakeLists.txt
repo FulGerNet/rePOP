@@ -9,6 +9,7 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/shaders/nv2a_native_shade
     COMMAND "${Python3_EXECUTABLE}" "${RESOT_ROOT}/tools/build-native-shaders.py"
             --dxc "${RESOT_ROOT}/build/deps/dxc/bin/x64/dxc.exe"
             --output "${CMAKE_CURRENT_BINARY_DIR}/shaders"
+            --test-border
     DEPENDS "${RESOT_ROOT}/tools/build-native-shaders.py"
             "${RESOT_ROOT}/port/third_party/xboxrecomp/src/kernel/nv2a_hw_d3d11.inc"
     VERBATIM)
@@ -31,3 +32,5 @@ add_executable(native_scale_smoke test_native_scale.c)
 add_test(NAME shared_internal_scale COMMAND native_scale_smoke)
 add_executable(save_access_smoke test_save_access.c)
 add_test(NAME retail_save_random_write COMMAND save_access_smoke)
+add_executable(texture_upload_smoke test_texture_upload.c)
+add_test(NAME retail_bulk_texture_upload COMMAND texture_upload_smoke)

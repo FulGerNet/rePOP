@@ -7,6 +7,250 @@ against a console or an emulator yet.
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
 
+## 2026-10-19: Android demo optimization parity and device measurements
+
+Connected SM8635, system Vulkan, 480p (InternalResolutionPercent=100),
+FPSLimit=0, VSync=0, PostProcessing=0. `adb pull` preserved the options as
+`logs/android-demo-audit-options.ini`. Before this change, the running demo
+logged about 27.5 FPS, 176 draws/frame, 34,330 vertices, executor 7.03 ms,
+present 26.92 ms and zero simple-shader draws
+(`logs/android-demo-audit-baseline.txt`).
+
+Audit: shader operand reads/identity swizzles, bound-only texture sampling,
+pipeline lookup/cache, vertex staging reuse and GPU programs were already
+shared. The simple fragment whitelist, bulk P8/ARGB decode and cycling
+changed 2D texture images were retail-only. Demo evidence in
+`logs/demo-hud-after-err.txt`, `logs/hourglass-ftrace-visible2.txt`, then
+`logs/android-demo-simple-trace.txt` independently records the eligible
+single-stage words and P8 format 0x0B. Enabled these three paths for the
+demo. Retail-only light-map border policy and visibility queries are not
+inferred for the demo. No generated guest C, seeds or addresses changed.
+
+Commands: `python tools/check-hlsl.py`,
+`python tools/run-build-tool.py ctest --test-dir build/tests/native-gpu -C Release --output-on-failure`
+(6/6, including Vulkan/D3D12 shader comparisons, image cycling and scalar
+texture conversion), `tools/recomp.ps1 -Target xbox-demo -BuildOnly`,
+`tools/recomp.ps1 -Target xbox-retail -BuildOnly`, `tools/build-android.ps1`.
+Sandboxed builds initially failed on Gradle/MSBuild access; builds outside
+the sandbox passed. `adb install -r bin/reSOT-android.apk` retained data.
+
+With only the simple-shader enablement installed, steady demo title/menu
+windows measured 62.9–63.1 FPS, about 94% simple draws, executor 5.28–6.14 ms
+and present 7.85–9.04 ms (`logs/android-demo-simple-live.txt`). Screenshot
+`logs/android-audit-launcher-ready.png` shows the demo title garden and
+62.6 FPS. After Start/A, the game reached `01_GP01_E3_Long`; sampled moving
+scenes included 33.8–53.3 FPS windows at 312–706 draws/frame, executor
+7–16 ms and present about 8–11 ms (`logs/android-demo-simple-gameplay.txt`).
+This is not a matched-scene gameplay A/B test or a minimum-FPS guarantee.
+
+Later near-zero-FPS samples in `logs/android-demo-before-gather.txt` were
+collected while Android's home launcher was top-resumed, so are excluded
+from foreground comparisons. Thermals are not controlled; the vendor
+`socd` sensor reported status 3 despite global thermal status 0.
+Sustained 60 FPS gameplay and retail 60 FPS remain unachieved.
+
+A CPU gather experiment hoisted float-format/default decisions out of the
+per-vertex loop. A device frame capture compared 162 draws byte-for-byte
+against `fetch_attr` with no mismatch (`logs/android-demo-gather-check.txt`).
+It did not establish a performance gain: early menu windows stayed at
+62.7–63.1 FPS, with executor 6.25–6.61 ms, and later windows varied widely.
+The gather change and its temporary trace check were removed. Bulk decode
+and texture cycling remain enabled; no separate device speedup is claimed
+for them. Shader changes account for the measured menu improvement above.
+The final APK was rebuilt and installed with `adb install -r`; both Windows
+targets rebuilt successfully. Shader checks and the six native tests passed.
+The options SHA-256 before/after is identical
+(`logs/android-demo-final-options.ini`); the diagnostic flag files were
+removed. No data-clear or uninstall command was used.
+Final-build menu verification (`logs/android-demo-final-live.txt`) records
+58.8–59.2 FPS in its last three windows, still about 94% simple draws,
+executor 7.28–8.04 ms and present 6.34–6.93 ms. The earlier 63 FPS result
+is therefore an observed run, not a sustained minimum; sequential runs
+were not thermally controlled. The final APK contains the texture parity
+changes as well, so no isolated cause is assigned to this difference.
+
+## 2026-10-19: continued Android menu profiling, vertex operand reads
+
+Same connected SM8635 phone and 480p options as the preceding entry;
+`adb pull .../files/resot-options.ini logs/android-operands-options.ini`
+confirmed FPSLimit=0, VSync=0, PostProcessing=0 and internal resolution 100.
+`tools/build-native-shaders.py` now skips unused source reads in the native
+vertex interpreter and returns identity swizzles directly. D3D11's shader
+reference and guest code are unchanged. Sequential observations:
+
+- Operand reads: steady menu windows around 26.6-26.8 FPS
+  (`logs/android-operands-live.txt`).
+- Identity swizzles: 27.4-27.6 FPS in the later steady windows
+  (`logs/android-swizzle-final.txt`), compared with the preceding 24.7 FPS
+  result. These are timing-window averages, not frame minima.
+- Scalar broadcast shortcut: about 25.1-25.4 FPS; combined shortcuts about
+  26.0-26.4. Removed the broadcast shortcut. Explicit uniform ALU branch
+  hints subsequently measured about 27.5 FPS, without a distinct extra gain.
+
+The native simple whitelist also covers untextured diffuse*one passes.
+GPU readbacks compare 576 textured/diffuse states, including alpha tests
+and stale borders, against the generic shader on Vulkan and D3D12.
+`python tools/check-hlsl.py`, native GPU CTest (6/6), both Windows
+`recomp.ps1 -BuildOnly` targets and `build-android.ps1` passed.
+The GPU tests do not establish vertex-interpreter equivalence over every
+possible guest program; the retail menu was inspected on the phone.
+
+An opt-in Android frame capture (`frame-trace-enable` before launch,
+`frame-trace.flag` during the menu) produced `logs/android-menu-frame.txt`:
+one captured frame has 145 fogged textured single-stage draws, 24 other
+textured single-stage draws, 25 untextured single-stage draws, and several
+two/three/five/seven-stage effects. No per-draw GPU timestamps were collected.
+Both diagnostic files were removed before subsequent timing runs.
+
+A further constant-mask specialization passed 864 synthetic GPU comparisons,
+but its device run stalled on the title/loading screen, with zero new
+KickOffs and the guest repeatedly calling ordinals 294/277. Start did not
+resume it; the user confirmed the freeze. The change was removed and the
+previous APK variant rebuilt/reinstalled without clearing saves or options.
+This is a temporal association, not an established shader cause.
+Recovery was verified with `adb install -r bin/reSOT-android.apk` and a fresh
+launch: the animated garden/title returned, with 27.4/27.6 FPS windows and
+a later 28.5 FPS window in `logs/android-recovery-live.txt`; screenshot
+`logs/android-recovery.png`. Options are byte-identical to the earlier
+`android-perf-options-before.ini`. No saves were cleared. The trace contains
+an intervening 7.2 FPS transition window, so this is not a minimum-FPS claim.
+
+The 30 FPS minimum goal is still unmet. Around 27.5 FPS means 36.4 ms/frame:
+30 FPS needs 33.3 ms and 60 FPS needs 16.7 ms. Remaining vertex interpretation,
+complex fragment effects and pass transitions need GPU measurement before
+assigning their costs. Sequential tests were not thermally controlled;
+`logs/android-branch-thermal.txt` reports overall thermal status 0 alongside
+a vendor `socd` status 3, so clock/thermal effects are not excluded.
+Gameplay, Android demo performance and sustained minimum FPS are unverified.
+
+## 2026-10-19: Android retail menu, native combiner specialization and FPS touch toggle
+
+The supplied `C:/Users/Admin/Desktop/logs/xbox-retail-err.txt` (16:50:40,
+copied to `logs/android-retail-20261019-165040.txt`) shows 16.7-17.6 FPS at
+480p: executor 7.65-8.06 ms, present 50.15-50.38 ms, title 1.33-1.42 ms.
+The user changed internal resolution during this log: 240p/360p samples
+were about 26-27 FPS. Pipeline creation after the first of a shader family
+took 0.3-0.9 ms with the existing cache; this is not a repeated 700 ms
+compile stall. No visibility queries were active in the menu. These timings
+and resolution scaling point to GPU work/backpressure, rather than CPU
+texture conversion; present time is not itself a GPU timestamp.
+
+Online review: [SDL GPU performance considerations](https://wiki.libsdl.org/SDL3/CategoryGPU#performance-considerations),
+[Android Vulkan design guidelines](https://developer.android.com/ndk/guides/graphics/design-notes),
+and [Android GPU optimization tips](https://developer.android.com/games/optimize/optimization-tips).
+Relevant points: minimize pass transitions/resource churn, avoid oversized
+uniform data and expensive fragment work, retain discard only where required.
+The app already uses SDL's native Vulkan encoder; changing optional feature
+requirements increases compatibility, not a demonstrated FPS fix here.
+
+With the user's authorization, ADB tests ran on the connected 24069PC21G,
+SM8635 phone, system Vulkan. Existing APK and options were preserved in
+ignored `logs/android-perf-before.apk` and `android-perf-options-before.ini`.
+`adb install -r bin/reSOT-android.apk` updated the app without uninstalling
+or clearing saves. Main-menu tests kept InternalResolutionPercent=100,
+FPSLimit=0, VSync=0, PostProcessing=0. Screenshots confirmed the same Menu
+scene at 2712x1220 display resolution. Sequential observations (discarding
+the first two logged timing windows of each sampled run):
+
+| Variant | Timing windows sampled | Menu FPS range | Median |
+| --- | --- | --- | --- |
+| Existing generic pixel shader | 13 | 16.5-17.1 | 16.9 |
+| Opaque single-stage specialization | 7 | 20.1-22.0 | 21.9 |
+| Opaque + alpha-tested specialization | 7 | 24.6-24.8 | 24.7 |
+
+Logs: `logs/android-perf-baseline-live.txt`, `android-simple-live.txt`,
+`android-simple-alpha-live.txt`; summary `android-performance-comparison.json`.
+These are timing-window FPS, not frame percentiles. The tests were sequential,
+not thermally controlled; the baseline reported overall Thermal Status 0,
+but that does not exclude per-component clock throttling. The gain is an
+observation on this menu/device, not a 60 FPS or full-game claim.
+
+`nv2a_native_simple.h` recognizes exact one-stage combiner words, supported
+final fog/alpha expressions and alpha comparisons; cubes and other programs
+retain `ps_main`. `ps_simple` removes the combiner-register interpreter and
+discard for opaque geometry. `ps_simple_alpha` retains the original 8-bit
+alpha comparisons for foliage. Both GPU and fallback CPU vertex paths select
+the appropriate fragment shader; the specialized pipelines bind one sampler.
+About 80% of menu guest draws use these shaders. Vertex programs still use
+`vs_uber`; remaining GPU work and CPU overhead limit the frame rate.
+`RESOT_NATIVE_SIMPLE=0` disables specialization for developer A/B runs.
+Retail only; demo retains the generic fragment path.
+
+Checks: `python tools/check-hlsl.py`, both Windows `recomp.ps1 -BuildOnly`
+targets, `build-android.ps1`, and native GPU CTest (6/6) succeed. GPU tests
+compare the specialized formulas against the generic shader for 288
+combinations of texture/diffuse/constant factors, scaling, fog, borders and
+alpha-test state on D3D12 and Vulkan, with per-pixel readback. Android menu
+appearance was inspected; broader gameplay and other devices were not run.
+
+The Android FPS button now reads actual native panel state and does not draw
+while the panel is visible. Its hit area remains active at the same position.
+Windows retains F5 because it has no touch FPS button. The final APK was
+installed on the phone; the toggle was checked with screenshots and taps at
+the same point. Saves and graphics preferences were retained.
+
+## 2026-10-19: retail gameplay, black light-map borders, forming tank and upload stalls
+
+The user's 15:54-16:19 Windows D3D11 session (`bin/logs/xbox-retail-err.txt`,
+preserved as `logs/retail-gameplay-20261019-155444.txt`) reached the garden
+after a substantial part of the game, with no crash reported by the user.
+`python tools/analyze-frame-log.py logs/retail-gameplay-20261019-155444.txt`
+finds 302 timing windows: median 146.3 FPS, minimum 48.6, maximum 289;
+3 windows below 60 and 22 below 90. These include menus/loading and are
+window averages, **not** frame percentiles or 1% lows. Distinct slow cases:
+
+- 49.4 FPS: 757 draws, 10.4 uploads/frame, 14.0 ms draw calls within
+  17.1 ms executor; title 3.1 ms, present 0.1 ms.
+- 48.6 FPS: executor 5.0 ms, title 15.3 ms (not a renderer-only stall).
+- 65.4 FPS: executor 2.9 ms, present 11.5 ms.
+
+Diagnostic runs used `tools/run.ps1 -Target xbox-retail -Windowed -Seconds
+900 -Set @{RESOT_ASSET_DIR='<portable retail folder>';
+RECOMP_FRAME_TRACE='<absolute flag path>'; RECOMP_HW_TRACE_PIXEL='700,500';
+RECOMP_HW_GLOW_DUMP='<absolute dump prefix>'}`. The user loaded the garden
+and positioned the camera. An intermediate copy named
+`sot-xbox-retail-probe.exe` allowed relinking the normal executable. One
+overlapping launch failed to open game files with ERROR_SHARING_VIOLATION;
+both instances were closed before relaunching alone.
+
+The pixel history showed an ordinary textured surface becoming almost black
+in a second P8 light-map pass (`blend 0/SRC_COLOR`). The guest explicitly
+programmed address 4/4 and border `FFFFFFFF`; D3D11 used zero-initialized
+black border color and SDL substituted clamp-to-edge. Retail now decodes
+NV097 texture border color and applies it in the shared pixel shader, with
+nearest and base-level bilinear boundary coverage and independent U/V axes.
+The user confirmed the correction ("ottimo hai risolto"). No separate visit
+to `1201_ChambreSultan-Start` was performed after the fix.
+
+The forming sand-tank ring was below the old y<=192 HUD band, near y=199
+in 640x480 coordinates. The retail policy now includes small pieces in
+that left column. GPU readback `logs/retail-fixed_flip34507_after.bmp`
+shows the ring directly below the tank, rather than in the old centered
+4:3 position. Both D3D11 and native encoders share this classification.
+
+Slow-upload diagnostics identified new P8 512x512 textures taking
+16.2-16.7 ms and 256x512 taking 7.6 ms before the optimization. Bulk Morton
+walking now replaces per-texel address reconstruction for retail P8/ARGB/XRGB
+uploads in both encoders. The scalar-reference comparison covers square,
+nonsquare and one-dimensional images, two palettes, and XRGB alpha;
+512x512 P8 CPU conversion measured 0.120 ms over 200 iterations. This is
+conversion time alone, **not** a complete upload or a gameplay A/B result.
+Native D3D12/Vulkan also index pipeline lookups by the complete key and
+cycle matching changed 2D textures instead of recreating their SDL objects.
+
+Checks: `python tools/check-hlsl.py`; `tools/recomp.ps1 -Target xbox-retail
+-BuildOnly`; the same for xbox-demo; `tools/build-android.ps1` all succeed.
+`cmake --build build/tests/native-gpu --config Release --parallel` and
+`ctest --test-dir build/tests/native-gpu -C Release --output-on-failure`:
+6/6 pass. The real D3D12/Vulkan tests additionally read back white borders,
+interior, bilinear/nearest edges, mixed-axis addressing and three cycled
+texture versions. Shader probe entry is generated only for the tests.
+
+Not checked: Android on a device, native gameplay after these changes,
+matched-scene FPS before/after, complete removal of frame drops, all later
+black surfaces, border filtering across guest mip levels, console accuracy.
+Demo texture/HUD/border behavior retains its previous policy.
+
 ## 2026-10-19: generated C sorted into folders, both targets
 
 `source/<target>/gen` is now one folder per kind of code

@@ -25,6 +25,13 @@ No game data is packaged. The lifted C is built from `source/<target>/gen`,
 which `tools/recomp.ps1` produces from the user's own XBEs; like the Windows
 executables, the APK is a local build for the person who owns the discs.
 
+For developer frame captures, create `frame-trace-enable` in the app's
+external files folder before starting the game, then create `frame-trace.flag`
+there when the desired scene is visible. The existing frame tracer records
+one complete frame in `logs/xbox-retail-err.txt` (or the demo log). Remove
+both files and restart to disable capture and its per-frame file checks.
+Windows provides the same tracer through `RECOMP_FRAME_TRACE`.
+
 ## Game files
 
 The launcher keeps the games in the app's external files folder:
@@ -105,6 +112,29 @@ The INI key is `[Graphics] InternalResolutionPercent=100` (allowed values:
 target is used. Postprocess targets retain their guest resolution, movies
 retain their decoded size, and final presentation still fills the device.
 Lower internal resolutions reduce GPU pixel work only.
+The retail renderer shares the white light-map border correction, forming
+sand-tank HUD alignment and bulk P8/ARGB upload conversion with Windows
+(2026-10-19). Vulkan caches pipeline lookups and cycles changed 2D images.
+The APK builds and host Vulkan GPU tests pass; device gameplay after
+these changes remains under validation. See `docs/VALIDATION.md`.
+The native renderer for both targets now also uses smaller exact shaders for common
+single-stage combiners, with separate opaque and alpha-tested entries.
+On the connected SM8635 phone, the retail main menu at 480p improved from
+16.5-17.1 to about 24-25 FPS (2026-10-19); gameplay and other devices still
+need validation. Complex combiners and cube maps retain the full shader.
+The demo independently uses the same eligible states (device frame trace,
+2026-10-19). Enabling this path raised its 480p title/menu from about
+27.5 FPS to 62.9–63.1 FPS in steady five-second windows on the same phone;
+the first playable scenes still included 33.8–53.3 FPS windows. These are
+window averages, not a sustained 60 FPS gameplay claim. Bulk P8/ARGB
+conversion and cycling changed 2D textures are enabled for the demo too.
+Vertex operand/swizzle reductions, pipeline caching, pipeline lookup,
+staging-buffer reuse and GPU vertex programs were already shared.
+
+Tap **FPS** at the top left to show the panel. Its button becomes invisible
+while the panel is open; tapping the same spot closes the panel and restores
+the button. The invisible touch area remains active. Windows uses F5 and
+has no corresponding touch button.
 **Look sensitivity** is in **reSOT Options → Controls** in both games:
 25–200% in steps of 25, with 100% retaining the original speed. It applies
 to controller, keyboard/mouse and the touch camera, after the game's original

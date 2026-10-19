@@ -253,6 +253,7 @@ typedef struct {
     uint32_t palette;                   /* guest address of the CLUT, P8 */
     uint32_t levels;                    /* mip levels, from FORMAT       */
     uint32_t filter;                    /* SET_TEXTURE_FILTER            */
+    uint32_t border_color;             /* RE-SoT: SET_TEXTURE_BORDER_COLOR, ARGB. */
     int      cube;                      /* FORMAT: six faces, not one    */
     int      valid;
 } Texture;
@@ -3087,6 +3088,9 @@ static void tex_stage_method(uint32_t method, uint32_t param)
         break;
     case 0x1B14:                                  /* SET_TEXTURE_FILTER */
         t->filter = param;
+        break;
+    case 0x1B24: /* RE-SoT: preserve the guest border for projected light maps. */
+        t->border_color = param;
         break;
     default:
         break;

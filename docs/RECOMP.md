@@ -19,7 +19,8 @@ The pushbuffer executor still decodes the same NV2A methods. In
 by `tools/build-native-shaders.py` from the same combiner HLSL as D3D11.
 This replaces the former D3D11On12 and DXVK paths. D3D11 stays the default.
 
-The native frontend takes vertices from the existing NV2A interpreter,
+The native frontend runs supported vertex programs on the GPU through
+`vs_uber`, falling back to the existing NV2A interpreter where necessary,
 decodes/caches guest textures, retains GPU color/depth surfaces by guest
 address and shape, and snapshots each draw's constants, samplers, blend,
 depth, cull and scissor state. Runs of draws share one vertex upload and
@@ -47,8 +48,44 @@ applies the published additions and builds SDL3.dll with query ABI 1; the
 altered DLL, SDL licence and `SDL3-RESOT.txt` accompany player builds. DXC and
 its libraries are build tools. Delayed SDL loading preserves the D3D11
 fallback when it is absent. `RESOT_GPU_DEBUG=1` enables driver validation.
-Native GPU vertex-program translation, border-address sampling, full stencil
-and broader gameplay/performance validation remain unfinished. See the latest
+Retail texture borders now preserve the guest ARGB color in shared HLSL:
+nearest and base-level bilinear coverage, independent U/V address modes;
+cube maps retain their existing policy. The P8 light-map passes request white
+borders, so sampling outside their atlas must leave a multiplicative surface
+unchanged. D3D11's former black border made garden panels completely black.
+`RECOMP_HW_TRACE_PIXEL=x,y` reports a host-resolution pixel after every
+draw of an explicitly flagged D3D11 frame, to identify the responsible pass.
+`[HW-TEX-UPLOAD]` records new/changed/evicted slow texture uploads.
+
+Retail P8/ARGB/XRGB uploads use `nv2a_texture_upload.h` to walk Morton masks
+in bulk; other formats retain the scalar sampler. The native encoder hashes
+complete pipeline keys and reuses changed 2D images through SDL cycling,
+after flushing earlier readers. SDL preserves those readers' backing image.
+The forming sand-tank ring uses the same retail HUD translation in all APIs.
+
+Both targets' native draws select `ps_simple`/`ps_simple_alpha` through the
+exact whitelist in `nv2a_native_simple.h`. These implement one-stage
+texture/diffuse/constant combiners, including untextured diffuse passes
+observed in the Android retail menu, without the generic register interpreter;
+the opaque entry has no discard, and the foliage entry preserves the guest
+8-bit alpha comparison. Complex states and cubes retain `ps_main`. Both
+GPU and CPU vertex paths use the same selection. Their PSO keys distinguish
+the shader entries, and the specialized shaders bind only their one sampler.
+`RESOT_NATIVE_SIMPLE=0` restores the generic fragment path for developer
+A/B tests; periodic logs report actual specialization coverage.
+Demo states were independently checked in its frame traces before enabling
+the whitelist (2026-10-19); bulk P8/ARGB texture decoding and cycling changed
+2D images now apply to the demo as well. Border policy and visibility remain
+target-specific. The device demo title/menu reached about 63 FPS at 480p;
+this does not establish 60 FPS in gameplay or in retail.
+
+The native shader builder also skips unused vertex-interpreter operands
+(MOV/ARL A, MUL A/B, ADD A/C, ILU C), retaining reads required by output
+selection, and directly returns identity-swizzled sources. These are host
+shader transformations; guest programs, constants and seeds are unchanged.
+
+Specialized native GPU vertex-program translation, mip-aware border filtering,
+full stencil and broader gameplay/performance validation remain unfinished. See the latest
 entry in `VALIDATION.md` for observations, commands and remaining limits.
 
 ## Android host (arm64)
