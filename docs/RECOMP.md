@@ -350,7 +350,10 @@ the variable is not already set; an empty `RESOT_ASPECT` builds 4:3.
   second compression and moves by `320 * (1 - 1/widen)` (80 at 16:9) towards
   its side: its margin from the wide picture's edge is the 4:3 one. All
   pieces on a side move together, so frame, fill and pips stay aligned;
-  pieces across the centre keep the default rule. Traced: demo health
+  pieces across the centre keep the default rule, except on retail: there a
+  flat, depth-test-off batch inside the projected 4:3 frame that is not a
+  side piece also skips the second compression, without a shift (the title
+  logo, x=92.531..476.531 y=48.531..168.531 at 16:9). Traced: demo health
   frame/sand x=118.931..280.211 y=38.931..115.731, retail health bar
   x=107.531..250.892 y=36.531..68.531 (both at 16:9, top left). The bounds
   come from frame traces, not texture heap addresses; the frame trace prints

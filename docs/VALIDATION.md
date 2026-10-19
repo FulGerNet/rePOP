@@ -31,6 +31,30 @@ Not checked: whether each folder placement is right beyond the evidence
 recorded on it (`between` and `library` are link-order inferences); play
 past the menus; Android at runtime.
 
+## 2026-10-19: xbox-retail, title logo squeezed at 16:9
+
+The user reported the retail title logo too narrow (more so on Android).
+Run: `tools/run.ps1 -Target xbox-retail -Seconds 60 -Windowed
+-SnapshotEvery 5 -Set @{RECOMP_PAD_SCRIPT='8000:a:300,12000:a:300,16000:a:300,20000:a:300,24000:a:300';
+RECOMP_FRAME_TRACE='logs\retail-logo-trace.flag'}`, flag created at 45 s
+on "Please press START". The logo is one flat batch through the same
+vertex program as the 3D (vsh FE9274D1), depth test off, at
+x=92.531..476.531 y=48.531..168.531: already narrowed by the Hor+
+projection (a 512-wide quad at x=16.7..528.7 in 4:3), then squeezed again
+by the w == 1 rule. Retail only, `hw_classify_screen` now leaves such a
+batch (inside the projected 4:3 frame, not a side HUD piece) at its
+projected size, in the D3D11 and the native D3D12/Vulkan encoders.
+
+Builds: `recomp.ps1 -Target xbox-retail -BuildOnly`, `recomp.ps1 -Target
+xbox-demo -BuildOnly`, `build-android.ps1`: all succeeded. The same run
+after the change: the logo is 4/3 wider at the same height and place
+(`logs/retail-logo-0045.png` before, `logs/retail-logo-after-0045.png`
+after, readbacks rescaled to 1280x720); in the traced frame no other
+main-view batch matched the rule. Not checked: Android at runtime, the
+main menu and other retail menus, the "Saving profile" box, the pause
+menu and HUD after the change, a console comparison, the demo (code
+under `RESOT_RUNTIME_RETAIL`, not run).
+
 ## 2026-10-19: Android back on GPU vertex programs; vertex threads off there
 
 **Log** (`C:/Users/Admin/Desktop/logs/xbox-retail-err.txt`, 11:36-11:37; no

@@ -729,6 +729,7 @@ static void ng_constants(NgSurface *s, NgVsConst *vc, HwPsConst *pc, SDL_GPUText
     vc->vp[0] = 2.0f/s->w; vc->vp[1] = 2.0f/s->h; vc->vp[2] = 1.0f/hw_zmax_bits();
     vc->ws[0] = main_view && !s_hw.batch_full_width ? 1.0f/s_hw.widen : 1;
     if (main_view && s_hw.batch_projected_screen) vc->ws[0] = s_hw.widen;
+    if (main_view && s_hw.batch_projected_2d) vc->ws[0] = 1; /* RE-SoT: hw_classify_screen */
     vc->ws[1] = (float)s->w; vc->ws[2] = 1;
     if (main_view && s_hw.batch_hud) { vc->ws[0] = 1; vc->ws[3] = hw_hud_shift(); }
     for (i = 0; i < 8; i++) {
@@ -1011,6 +1012,7 @@ static int ng_draw_program_batch(void)
         if (i == 4 && hw_skip_postprocess(post, 4)) return 1;
     }
     s_hw.batch_full_width = s_hw.batch_projected_screen = s_hw.batch_hud = 0;
+    s_hw.batch_projected_2d = 0;
     if (s_hw.widen > 1.0f && s_gpu.clip_w == 640 && s_gpu.clip_h >= 448) {
         float in[NV2A_VSH_INPUTS][4], lo = 1e9f, hi = -1e9f, top = 1e9f, bottom = -1e9f;
         Nv2aVshOutput o;

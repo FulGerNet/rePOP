@@ -243,6 +243,7 @@ static struct {
     int batch_full_width;
     int batch_projected_screen;          /* RE-SoT: screen quad already narrowed by Hor+ */
     int batch_hud;                       /* RE-SoT: projected HUD: -1 left, +1 right, 0 none */
+    int batch_projected_2d;              /* RE-SoT: retail: projected 2D across the centre */
 } s_hw;
 
 /* RE-SoT: the projection hook already gives the HUD its 4:3 proportions,
@@ -1624,6 +1625,8 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
          * projection. Undo that narrowing, rather than narrowing them again. */
         if (main_view && s_hw.batch_projected_screen)
             hdr[8] = s_hw.widen;
+        if (main_view && s_hw.batch_projected_2d)
+            hdr[8] = 1.0f;                  /* RE-SoT: see hw_classify_screen */
         hdr[9] = (float)s->w; hdr[10] = 1.0f;
         if (main_view && s_hw.batch_hud) {
             /* RE-SoT: every piece on one side gets the same shift, so frame,
@@ -2110,6 +2113,20 @@ static void hw_classify_screen(float left, float right, float top, float bottom)
         && right <= 320.0f + 320.0f / s_hw.widen + 0.5f
         && (bottom <= 192.0f || top >= 288.0f))
         s_hw.batch_hud = right < 320.0f ? -1 : left > 320.0f ? 1 : 0;
+    /* RE-SoT: retail only. Its title logo is flat 2D drawn through the
+     * narrowed projection (vsh FE9274D1, x=92.531..476.531 y=48.531..168.531
+     * at 16:9, a 512-wide 4:3 quad at x=16.7..528.7), so it already has its
+     * 4:3 proportions; the default rule squeezed it a second time (2026-10-19).
+     * Flat, depth test off, inside the projected 4:3 frame and not a side
+     * HUD piece: no second squeeze, no shift. The demo was not checked. */
+    s_hw.batch_projected_2d = 0;
+#if RESOT_RUNTIME_RETAIL
+    if (projected_ui && s_hw.widen > 1.0f && !s_gpu.depth_test
+        && !s_hw.batch_projected_screen && !s_hw.batch_hud
+        && left >= 320.0f - 320.0f / s_hw.widen - 0.5f
+        && right <= 320.0f + 320.0f / s_hw.widen + 0.5f)
+        s_hw.batch_projected_2d = 1;
+#endif
 }
 
 /* RE-SoT: the demo's traced final glow pass (unpaused frame 1917) and
@@ -2368,6 +2385,7 @@ static int hw_draw_program_batch(void)
      * already narrowed by the target's projection. The full-height bounds
      * distinguish these from smaller UI widgets. */
     s_hw.batch_full_width = s_hw.batch_projected_screen = s_hw.batch_hud = 0;
+    s_hw.batch_projected_2d = 0;
     if (s_hw.widen > 1.0f && s_gpu.clip_w == 640 && s_gpu.clip_h >= 448) {
         float in[NV2A_VSH_INPUTS][4], lo = 1e9f, hi = -1e9f;
         float top = 1e9f, bottom = -1e9f;
@@ -2592,6 +2610,7 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
     {
         float lo = 1e9f, hi = -1e9f, top = 1e9f, bottom = -1e9f;
         s_hw.batch_full_width = s_hw.batch_projected_screen = s_hw.batch_hud = 0;
+        s_hw.batch_projected_2d = 0;
         for (i = 0; i < n; i++) {
             if (fabsf(v[i].pos[3] - 1.0f) > 0.0001f)
                 break;
