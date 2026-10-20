@@ -8,9 +8,13 @@ renderer (`port/third_party/xboxrecomp/src/kernel/nv2a_hw_native.inc`); there
 is no Direct3D 11 on Android.
 
 **State: device validation in progress.** User logs show both games running
-on Android. The 2026-10-19 demo log ends in an audio-service crash; the retail
-log shows severe frame-rate drops. Save/load persistence and the latest
-corrections still need device validation; see [VALIDATION.md](../../docs/VALIDATION.md).
+on Android. The demo audio-service crash's unsafe dispatch-lock timeout is
+removed (2026-10-20); wider crash validation remains incomplete. The user
+confirms system UI responsiveness after the scheduling changes, but demo
+menu performance still fluctuates at 40–57 FPS. Renewed ADB tests measured
+the subsequent retail performance build at about 29–31 FPS at 480p and
+36–38 FPS at 360p in the title screen. Save/load persistence and sustained 60 FPS
+remain under validation; see [VALIDATION.md](../../docs/VALIDATION.md).
 
 ## What is in the APK
 
@@ -68,13 +72,22 @@ and refuse it unless its SHA-256 is the one in `source/<target>/target.h`.
 ## Launcher
 
 The title screen is the Windows launcher's (`port/windows/src/launcher.c`),
-redrawn with Android's canvas in `LauncherView.java`: the same 1000 x 640
-layout, colours, logo, Atlantis MF face (when `port/windows/res/AtlantisMF.ttf`
-is present; see [LICENSING.md](../../docs/LICENSING.md)), drifting sand,
-Start Demo / Start Game with what is installed under each, Install from ISO
-and the extraction progress. Touch, a controller (d-pad, A, B) or a keyboard
-drives it. **Keep the two launchers alike**: a change to one belongs in the
-other.
+redrawn with Android's canvas in `LauncherView.java`: the same layout, the
+night-blue ground with its rosettes and eight-point stars, gold rules and
+twin diamonds, gold hexagonal buttons, logo, Atlantis MF face (when
+`port/windows/res/AtlantisMF.ttf` is present; see
+[LICENSING.md](../../docs/LICENSING.md)), drifting sand, Start Demo / Start
+Game with what is installed under each, Install from ISO and the extraction
+progress. Touch, a controller (d-pad, A, B) or a keyboard drives it.
+
+Unlike the fixed Windows window, it fills the whole screen: the system bars
+are hidden (a swipe from an edge shows them), it draws under a display
+cutout, and launcher.c's 1000 x 640 plane is scaled to the screen's height and
+widened to its shape, so the ground, the gold rules and the footer reach the
+edges of a 20:9 phone while the middle column stays centred; the footer
+links and the close button keep clear of the cutout. The Windows window's
+one-pixel gold edge is left out. **Keep the two launchers alike**: a change
+to one belongs in the other.
 
 ## Controls
 
@@ -130,6 +143,41 @@ window averages, not a sustained 60 FPS gameplay claim. Bulk P8/ARGB
 conversion and cycling changed 2D textures are enabled for the demo too.
 Vertex operand/swizzle reductions, pipeline caching, pipeline lookup,
 staging-buffer reuse and GPU vertex programs were already shared.
+
+The 2026-10-20 performance build packs a GPU vertex program's referenced
+inputs into a 16/32/64/128-byte vertex, rather than always transferring eight
+float4 values (128 bytes). Attribute conversion and the GPU program remain
+the same. Unused input locations alias an existing slot and are never read
+by that packed program. Unchanged viewport, scissor and blend constants are
+also retained within each render pass. These changes apply to demo and
+retail and to Windows' native Vulkan encoder; D3D12 retains its fixed input
+pitch because SDL 3.4.18 caches vertex-buffer views across pipeline changes.
+The state-command reduction applies to both native encoders; D3D11 is unchanged.
+No FPS improvement is claimed without a device measurement.
+
+The retail small-register vertex path also removes writes to unused outputs
+and unread temporaries, disabling MAC/ILU calculations with no remaining
+destination. Address-register updates and paired ILU destinations are preserved.
+This operates on runtime program copies, with the generic shader as fallback;
+the demo retains its existing shader selection. Host Vulkan/D3D12 pixel
+comparisons pass; power consumption is not measured.
+
+ADB retail checks later on 2026-10-20 found about 29-31 FPS at 480p,
+36-38 FPS in the 360p title windows, and up to 48-49 FPS at 240p
+(the 240p run used the preceding APK). These are animated title-screen window
+averages, with uncontrolled temperatures, not sustained gameplay results.
+The final APK removes empty instructions from eligible retail vertex programs
+and keeps original/remapped program snapshots distinct. Its 480p run showed
+no clear FPS gain from those changes. The `0101_Porte` opening cutscene was
+also reached. See the validation log for settings and limits.
+
+Android runtime workers start at normal Linux priority instead of inheriting
+very high priorities observed in the device samples. The frame limiter sleeps
+through its final remainder instead of polling. Native buffers are 16 MB for
+vertices and 2 MB for indices for both mobile targets; Windows D3D11 retains
+its larger demo reuse ring. SDL's standard two frames in flight is restored
+after the one-frame responsiveness experiment. Windows does not need Android's
+thread-priority normalization or mobile memory budget.
 
 Tap **FPS** at the top left to show the panel. Its button becomes invisible
 while the panel is open; tapping the same spot closes the panel and restores

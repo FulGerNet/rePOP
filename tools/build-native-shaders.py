@@ -82,16 +82,56 @@ def main():
         hlsl += "\nfloat4 ps_border_probe(BO i) : SV_Target { return guest_border(float4(0,0,0,1), i.uv*4.0-1.5, border_info[0], border[0]); }\n"
         hlsl += "\nVO vs_combiner_probe(uint id : SV_VertexID) { BO b=vs_blit(id); VO o=(VO)0; o.pos=b.pos; o.d0=float4(0.23,0.51,0.81,0.67); o.fog=float4(0.37,0,0,0); o.t0=float4(b.uv*1.5-0.25,0,1); return o; }\n"
         hlsl += "\nfloat4 ps_combiner_compare(VO i) : SV_Target { return saturate(abs(ps_main(i)-(atest.x!=0?ps_simple_alpha(i):ps_simple(i)))*255.0); }\n"
+        hlsl += "\nfloat4 ps_vertex_probe(VO i) : SV_Target { return float4(i.d0.x,i.fog.x,i.t0.x,i.t0.y); }\n"
     src = output / "nv2a-native.hlsl"
     src.write_text(hlsl, encoding="ascii")
+    small = hlsl
+    for register in range(4, 12):
+        small = small.replace(f", inout float4 R{register}", "")
+        small = small.replace(f", float4 R{register}", "")
+        small = small.replace(f", R{register} = 0", "")
+        small = re.sub(rf", R{register}\b", "", small)
+    small, reads = re.subn(
+        r"float4 ub_temp\(uint r, UB_RP\) \{.*?\n  return r == 12 \? P : R0; \}",
+        "float4 ub_temp(uint r, UB_RP) {\n"
+        "  if (r < 4) return r == 0 ? R0 : (r == 1 ? R1 : (r == 2 ? R2 : R3));\n"
+        "  return r == 12 ? P : R0; }", small, flags=re.S)
+    small, writes = re.subn(
+        r"void ub_wt\(uint t, float4 s, uint m, UB_RW\) \{.*?\n  else if \(t == 12\) P = ub_wm\(P, s, m\); \}",
+        "void ub_wt(uint t, float4 s, uint m, UB_RW) {\n"
+        "  if (t == 0) R0 = ub_wm(R0, s, m);\n"
+        "  else if (t == 1) R1 = ub_wm(R1, s, m);\n"
+        "  else if (t == 2) R2 = ub_wm(R2, s, m);\n"
+        "  else if (t == 3) R3 = ub_wm(R3, s, m);\n"
+        "  else if (t == 12) P = ub_wm(P, s, m); }", small, flags=re.S)
+    if reads != 1 or writes != 1 or re.search(r"\bR(?:[4-9]|10|11)\b", small):
+        raise RuntimeError("Small-register native shader anchors changed")
+    for slot in range(4, 8):
+        small = small.replace(f", float4 v{slot}", "")
+        small = small.replace(f", v{slot} = i.a{slot}", "")
+        small = re.sub(rf", v{slot}\b", "", small)
+    small, inputs = re.subn(
+        r"float4 ub_in\(uint i, UB_VP\) \{.*?\n  return i == 4 .*?; \}",
+        "float4 ub_in(uint i, UB_VP) {\n"
+        "  return i == 0 ? v0 : (i == 1 ? v1 : (i == 2 ? v2 : v3)); }",
+        small, flags=re.S)
+    if inputs != 1:
+        raise RuntimeError("Small-register input selector anchor changed")
+    for output_register in (4, 10, 11, 12):
+        small = small.replace(f", O{output_register} = O3", "")
+        small = small.replace(f" else if (oa == {output_register}) O{output_register} = ub_wm(O{output_register}, src, om);", "")
+        small = re.sub(rf"\bO{output_register}\b", "float4(0,0,0,1)", small)
+    small = small.replace("VO vs_uber(UI i)", "VO vs_uber_small(UI i)", 1)
+    small_src = output / "nv2a-native-small.hlsl"
+    small_src.write_text(small, encoding="ascii")
     header = ["/* RE-SoT: generated host shaders; tools/build-native-shaders.py. */\n"]
-    entries = check.ENTRIES + [("vs_uber", "vs_4_0"), ("ps_simple", "ps_4_0"), ("ps_simple_alpha", "ps_4_0")]
+    entries = check.ENTRIES + [("vs_uber", "vs_4_0"), ("vs_uber_small", "vs_4_0"), ("ps_simple", "ps_4_0"), ("ps_simple_alpha", "ps_4_0")]
     if args.test_border:
-        entries += [("ps_border_probe", "ps_4_0"), ("vs_combiner_probe", "vs_4_0"), ("ps_combiner_compare", "ps_4_0")]
+        entries += [("ps_border_probe", "ps_4_0"), ("vs_combiner_probe", "vs_4_0"), ("ps_combiner_compare", "ps_4_0"), ("ps_vertex_probe", "ps_4_0")]
     for entry, old_profile in entries:
         for fmt in ("dxil", "spirv"):
             binary = output / f"{entry}.{fmt}"
-            cmd = [args.dxc, str(src), "-E", entry, "-T", old_profile.replace("4_0", "6_0"),
+            cmd = [args.dxc, str(small_src if entry == "vs_uber_small" else src), "-E", entry, "-T", old_profile.replace("4_0", "6_0"),
                    "-O2", "-Ges", "-Wno-ignored-attributes", "-Fo", str(binary)]
             if fmt == "spirv":
                 cmd += ["-spirv", "-fspv-target-env=vulkan1.0", "-fvk-use-dx-layout"]

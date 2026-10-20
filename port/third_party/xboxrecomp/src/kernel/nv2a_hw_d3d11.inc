@@ -111,12 +111,14 @@ extern int   xbox_FramebufferOverlayGet(const uint32_t **px, uint32_t *w,
 #define HW_MAX_DEPTHS   16
 #define HW_MAX_TEXTURES 1024
 #define HW_MAX_VERTS    (NV_MAX_INDICES * 3)
-#if RESOT_RUNTIME_DEMO
+#if RESOT_RUNTIME_DEMO && !defined(__ANDROID__)
 /* RE-SoT: larger rings on the demo, so batches reused across frames (see
  * HwReuse) stay in them for many frames before a wrap discards them. */
 #define HW_VB_BYTES     (64u << 20)     /* vertex ring, appended NO_OVERWRITE */
 #define HW_IB_BYTES     (8u << 20)      /* index ring, likewise */
 #else
+/* RE-SoT: Android's native encoder does not use the D3D11 reuse cache.
+ * Keep both mobile targets at 16/2 MB rather than the demo's 64/8 MB. */
 #define HW_VB_BYTES     (16u << 20)     /* vertex ring, appended NO_OVERWRITE */
 #define HW_IB_BYTES     (2u << 20)      /* index ring, likewise */
 #endif

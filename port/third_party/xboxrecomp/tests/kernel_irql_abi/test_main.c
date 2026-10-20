@@ -3,6 +3,75 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "resot_runtime.h"
+
+#if RESOT_RUNTIME_DEMO
+/* RE-SoT: nested demo ISR ownership must restore even at the same IRQL. */
+extern int xbox_DispatchTryEnter(void);
+extern void xbox_DispatchLeave(void);
+extern int xbox_IrqlEnterInterrupt(int level);
+extern void xbox_IrqlLeaveInterrupt(int saved);
+static DWORD WINAPI probe_dispatch(void *unused) {
+    (void)unused;
+    int owned = xbox_DispatchTryEnter();
+    if (owned) xbox_DispatchLeave();
+    return owned;
+}
+static int dispatch_available(void) {
+    DWORD available = 0;
+    HANDLE thread = CreateThread(NULL,0,probe_dispatch,NULL,0,NULL);
+    if (!thread) return 0;
+    WaitForSingleObject(thread,INFINITE);
+    GetExitCodeThread(thread,&available);
+    CloseHandle(thread);
+    return available != 0;
+}
+static HANDLE dispatch_ready;
+static DWORD WINAPI hold_dispatch(void *unused) {
+    (void)unused;
+    if (!xbox_DispatchTryEnter()) return 1;
+    SetEvent(dispatch_ready);
+    Sleep(200);
+    xbox_DispatchLeave();
+    return 0;
+}
+static int dispatch_contention(void) {
+    dispatch_ready = CreateEventA(NULL,TRUE,FALSE,NULL);
+    HANDLE thread = CreateThread(NULL,0,hold_dispatch,NULL,0,NULL);
+    if (!thread || WaitForSingleObject(dispatch_ready,5000) != WAIT_OBJECT_0) return 1;
+    DWORD started = GetTickCount();
+    xbox_KfRaiseIrql(2);
+    DWORD waited = GetTickCount() - started;
+    xbox_KfLowerIrql(0);
+    WaitForSingleObject(thread,5000);
+    CloseHandle(thread);
+    CloseHandle(dispatch_ready);
+    if (waited < 150) {
+        fprintf(stderr,"FAIL dispatch lock bypassed after %lu ms\n",(unsigned long)waited);
+        return 1;
+    }
+    return 0;
+}
+static int interrupt_ownership(void) {
+    int outer = xbox_IrqlEnterInterrupt(2);
+    int inner = xbox_IrqlEnterInterrupt(16);
+    xbox_KfLowerIrql(0);
+    xbox_KfRaiseIrql(2);
+    xbox_IrqlLeaveInterrupt(inner);
+    int failed = !dispatch_available();
+    xbox_IrqlLeaveInterrupt(outer);
+    failed |= !dispatch_available();
+    xbox_KfRaiseIrql(2);
+    outer = xbox_IrqlEnterInterrupt(16);
+    xbox_KfLowerIrql(0);
+    xbox_IrqlLeaveInterrupt(outer);
+    failed |= dispatch_available();
+    xbox_KfLowerIrql(0);
+    failed |= !dispatch_available();
+    if (failed) fputs("FAIL nested interrupt dispatch ownership\n",stderr);
+    return failed;
+}
+#endif
 typedef void (*guest_fn)(void);
 extern guest_fn recomp_lookup_kernel(uint32_t);
 extern RECOMP_TLS uint32_t g_eax, g_ecx, g_esp;
@@ -40,6 +109,10 @@ int main(void) {
     failed|=call_irql(160,0x12340003,2,3);
     failed|=call_irql(161,0xFACE0002,0,2);
     failed|=call_irql(161,0xABCD0000,0,0);
+#if RESOT_RUNTIME_DEMO
+    failed|=interrupt_ownership();
+    failed|=dispatch_contention();
+#endif
     VirtualFree(memory,0,MEM_RELEASE);
     if(!failed) puts("PASS fastcall IRQL: CL arguments, old levels, nesting and stack canary");
     return failed;

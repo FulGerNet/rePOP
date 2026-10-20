@@ -13,11 +13,15 @@
  * which extract-xiso (port/third_party/extract-xiso, run in a child copy of
  * this executable) extracts into a folder beside the executable.
  *
- * Everything is drawn into one 32-bit back buffer in the style of the reSOT
- * logo: night blue, luminous blue edges, white-blue lettering on a blue glow,
- * and drifting golden sand. The title and buttons use the Atlantis MF face
- * when the build embedded it (port/windows/res/AtlantisMF.ttf), Palatino
- * Linotype otherwise.
+ * Everything is drawn into one 32-bit back buffer in the style of Ubisoft's
+ * Sands of Time announcement cards: a night-blue ground tiled with faint
+ * rosettes and eight-point stars, soft lights, gold rules across the screen
+ * ending in twin diamonds, cyan twin diamonds beside the headings, gold
+ * lettering, and buttons as long hexagonal plates, navy edged in gold, gold
+ * under the pointer; golden sand drifts over it. The title and buttons use
+ * the Atlantis MF face when the build embedded it
+ * (port/windows/res/AtlantisMF.ttf), Palatino Linotype otherwise.
+ * LauncherView.java draws the same screen on Android: keep them alike.
  */
 
 #define COBJMACROS
@@ -45,14 +49,28 @@
 #define WIN_H 640
 #define RES_FONT 201          /* port/windows/res/resot.rc */
 #define RES_LOGO 202
-#define LOGO_Y 30
-#define LOGO_SIZE 178
-#define TITLE_Y 206
-#define TITLE_H 96
-#define BTN_W 310
-#define BTN_H 64
-#define BTN_Y 382
-#define N_SAND 240
+/* The layout, on the 1000 x 640 plane LauncherView.java shares. */
+#define LOGO_Y 22
+#define LOGO_SIZE 132
+#define TEAL_X 150            /* the teal diamonds, left of the logo */
+#define TITLE_Y 150
+#define TITLE_H 84
+#define SUB_Y 248             /* THE SANDS OF TIME, its centre line */
+#define BADGE_Y 266
+#define BADGE_H 26
+#define BADGE_TEXT L"RECOMPILED FOR WINDOWS"
+#define HEAD_RULE_Y 320
+#define HEAD_Y 336            /* INSTALLED GAMES */
+#define BTN_W 300
+#define BTN_H 56
+#define BTN_GAP 64
+#define BTN_Y 368
+#define MESSAGE_Y 510
+#define FOOT_RULE_Y 560
+#define BAR_Y 420             /* installing: the progress bar */
+#define CANCEL_W 240
+#define CANCEL_Y 498
+#define N_SAND 160
 #define WM_APP_ASK_ISO   (WM_APP + 1)
 #define WM_APP_EXTRACTED (WM_APP + 2)
 
@@ -81,10 +99,11 @@ static struct {
     HDC logo_dc;
     HBITMAP logo_bmp;
     int logo_w, logo_h;
-    GlowText title, label_demo, label_game;
+    GlowText title, label_demo, label_game, label_cancel;
     HANDLE font_mem;
     int atlantis;
-    HFONT f_sub, f_text, f_small, f_label;
+    HFONT f_sub, f_text, f_small, f_label, f_badge;
+    int sub_w, head_w, badge_w;       /* widths of the spaced capitals */
     Button btn[BTN_COUNT];
     int hover, pressed, focus, tracking;
     Grain sand[N_SAND];
@@ -326,6 +345,14 @@ static void scan_installs(void)
 
 /* ── drawing into the back buffer ──────────────────────────── */
 
+/* The palette, shared with LauncherView.java: a night-blue ground with a
+ * tiled ornament, gold rules, plates and lettering, cyan jewels. */
+#define GOLD        200, 166, 102
+#define GOLD_LIGHT  246, 226, 166
+#define CYAN        80, 200, 250
+#define RGB3(c)     RGB3_(c)
+#define RGB3_(r, g, b) RGB(r, g, b)
+
 static uint32_t rnd(void)
 {
     L.rng ^= L.rng << 13; L.rng ^= L.rng >> 17; L.rng ^= L.rng << 5;
@@ -333,6 +360,7 @@ static uint32_t rnd(void)
 }
 static float frand(float lo, float hi) { return lo + (hi - lo) * (float)(rnd() & 0xFFFFFF) / 16777215.0f; }
 static int clampi(int v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
+static float clampf(float v) { return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v; }
 
 static void blend(int x, int y, int r, int g, int b, float a)
 {
@@ -366,52 +394,22 @@ static void fill(int x, int y, int w, int h, int r, int g, int b, float a)
         for (i = x; i < x + w; ++i) blend(i, j, r, g, b, a);
 }
 
-static void frame(int x, int y, int w, int h, int t, int r, int g, int b, float a)
+/* An anti-aliased segment `width` pixels wide. */
+static void seg(float x0, float y0, float x1, float y1, float width, int r, int g, int b, float a)
 {
-    fill(x, y, w, t, r, g, b, a);
-    fill(x, y + h - t, w, t, r, g, b, a);
-    fill(x, y + t, t, h - 2 * t, r, g, b, a);
-    fill(x + w - t, y + t, t, h - 2 * t, r, g, b, a);
-}
-
-/* A luminous line: a bright core and a soft halo above and below. */
-static void glow_hline(int x, int y, int w, int r, int g, int b, float a)
-{
-    int i, d;
-    for (i = 0; i < w; ++i) {
-        float edge = fminf(1.0f, fminf((float)i, (float)(w - 1 - i)) / 24.0f);
-        blend(x + i, y, r, g, b, a * edge);
-        for (d = 1; d <= 4; ++d) {
-            float k = a * edge * 0.22f * (5 - d) / 4.0f;
-            add(x + i, y - d, r * k, g * k, b * k);
-            add(x + i, y + d, r * k, g * k, b * k);
+    float dx = x1 - x0, dy = y1 - y0, len2 = dx * dx + dy * dy, pad = width / 2 + 1;
+    int xa = (int)floorf(fminf(x0, x1) - pad), xb = (int)ceilf(fmaxf(x0, x1) + pad);
+    int ya = (int)floorf(fminf(y0, y1) - pad), yb = (int)ceilf(fmaxf(y0, y1) + pad), i, j;
+    for (j = ya; j <= yb; ++j)
+        for (i = xa; i <= xb; ++i) {
+            float px = i + 0.5f - x0, py = j + 0.5f - y0;
+            float t = len2 > 0 ? clampf((px * dx + py * dy) / len2) : 0.0f;
+            px -= t * dx; py -= t * dy;
+            blend(i, j, r, g, b, a * clampf(width / 2 + 0.5f - sqrtf(px * px + py * py)));
         }
-    }
 }
 
-static void glow_vline(int x, int y, int h, int r, int g, int b, float a)
-{
-    int j, d;
-    for (j = 0; j < h; ++j) {
-        float edge = fminf(1.0f, fminf((float)j, (float)(h - 1 - j)) / 24.0f);
-        blend(x, y + j, r, g, b, a * edge);
-        for (d = 1; d <= 4; ++d) {
-            float k = a * edge * 0.22f * (5 - d) / 4.0f;
-            add(x - d, y + j, r * k, g * k, b * k);
-            add(x + d, y + j, r * k, g * k, b * k);
-        }
-    }
-}
-
-static void diamond(int cx, int cy, int s, int r, int g, int b, float a)
-{
-    int i, j;
-    for (j = -s; j <= s; ++j)
-        for (i = -s; i <= s; ++i)
-            if (abs(i) + abs(j) <= s) blend(cx + i, cy + j, r, g, b, a);
-}
-
-/* A soft dot, added (light): sand grains and highlights. */
+/* A soft dot, added (light): sand grains, highlights and bokeh. */
 static void glow(float x, float y, float radius, float r, float g, float b, float a)
 {
     int x0 = (int)floorf(x - radius - 1), x1 = (int)ceilf(x + radius + 1);
@@ -426,58 +424,146 @@ static void glow(float x, float y, float radius, float r, float g, float b, floa
         }
 }
 
-/* A blue jewel: the ornament of the frame and the dividers. */
-static void jewel(int cx, int cy, int s)
+static void diamond(float cx, float cy, float s, int r, int g, int b, float a)
 {
-    diamond(cx, cy, s + 2, 4, 10, 24, 1.0f);
-    diamond(cx, cy, s, 90, 170, 255, 1.0f);
-    diamond(cx, cy, s / 2, 230, 245, 255, 1.0f);
-    glow((float)cx, (float)cy, s * 2.6f, 60, 140, 255, 0.55f);
+    int i, j;
+    for (j = (int)floorf(cy - s - 1); j <= (int)ceilf(cy + s + 1); ++j)
+        for (i = (int)floorf(cx - s - 1); i <= (int)ceilf(cx + s + 1); ++i) {
+            float d = fabsf(i + 0.5f - cx) + fabsf(j + 0.5f - cy);
+            blend(i, j, r, g, b, a * clampf((s - d) * 0.7071f + 0.5f));
+        }
 }
 
-/* The static picture: night blue, a blue light behind the logo and the
- * title, faint scan lines, a vignette and the luminous double frame. */
+/* Two small diamonds side by side, from x rightwards: gold on the rules,
+ * cyan beside a heading. */
+static void twin(float x, float y, float s, int cyan)
+{
+    int k;
+    for (k = 0; k < 2; ++k) {
+        float cx = x + k * (2 * s + 3);
+        if (cyan) {
+            glow(cx, y, s * 2.6f, 30, 120, 200, 0.45f);
+            diamond(cx, y, s, CYAN, 1.0f);
+            diamond(cx, y, s * 0.45f, 210, 244, 255, 1.0f);
+        } else {
+            diamond(cx, y, s + 1, 40, 30, 14, 0.8f);
+            diamond(cx, y, s, 222, 190, 124, 1.0f);
+        }
+    }
+}
+
+/* A gold rule across the whole screen, engraved: a dark line under it. */
+static void gold_rule(int y)
+{
+    int x;
+    for (x = 0; x < WIN_W; ++x) {
+        blend(x, y, GOLD, 0.8f);
+        blend(x, y + 1, 4, 8, 16, 0.6f);
+    }
+}
+
+/* The plate of a button or a badge: a long hexagon with ends `tip` deep. */
+static void plate_fill(float x, float y, float w, float h, float tip, const int top[3], const int bottom[3], float a)
+{
+    int i, j;
+    for (j = (int)y; j < (int)(y + h); ++j) {
+        float f = (j + 0.5f - y) / h, t = fabsf(f - 0.5f) * 2, l = x + tip * t, r = x + w - tip * t;
+        int cr = top[0] + (int)((bottom[0] - top[0]) * f), cg = top[1] + (int)((bottom[1] - top[1]) * f);
+        int cb = top[2] + (int)((bottom[2] - top[2]) * f);
+        for (i = (int)floorf(l); i < (int)ceilf(r); ++i)
+            blend(i, j, cr, cg, cb, a * clampf(fminf(i + 1 - l, r - i)));
+    }
+}
+
+static void plate_edge(float x, float y, float w, float h, float tip, float width, int r, int g, int b, float a)
+{
+    float cy, x1, y1;
+    x += 0.5f; y += 0.5f; w -= 1; h -= 1;
+    cy = y + h / 2; x1 = x + w; y1 = y + h;
+    seg(x, cy, x + tip, y, width, r, g, b, a);
+    seg(x + tip, y, x1 - tip, y, width, r, g, b, a);
+    seg(x1 - tip, y, x1, cy, width, r, g, b, a);
+    seg(x1, cy, x1 - tip, y1, width, r, g, b, a);
+    seg(x1 - tip, y1, x + tip, y1, width, r, g, b, a);
+    seg(x + tip, y1, x, cy, width, r, g, b, a);
+}
+
+/* The tiled ornament of the ground, as LauncherView.ornament() draws it: on
+ * a PATTERN-unit lattice centred on the screen, a rosette of eight petals
+ * (parabolic lenses PETAL long, PETAL_W wide each side) with a small circle
+ * at its heart and a RING round it; between four rosettes, an eight-point
+ * star of two squares with an apothem of STAR. Line and fill coverage. */
+#define PATTERN 128.0f
+#define PETAL   46.0f
+#define PETAL_W 9.0f
+#define RING    55.0f
+#define STAR    19.0f
+
+static void ornament(float px, float py, float *line, float *fill_)
+{
+    float rx = px - PATTERN * floorf(px / PATTERN + 0.5f), ry = py - PATTERN * floorf(py / PATTERN + 0.5f);
+    float sx = px - PATTERN * floorf(px / PATTERN) - PATTERN / 2, sy = py - PATTERN * floorf(py / PATTERN) - PATTERN / 2;
+    float r = sqrtf(rx * rx + ry * ry), d = fabsf(r - 5.0f), f = 0, a, b, l;
+    if (r < PETAL + 2 && r > 0.01f) {
+        float step = 3.14159265f / 4, th = atan2f(ry, rx), off = th - step * floorf(th / step + 0.5f);
+        float u = r * cosf(off) / PETAL, across = fabsf(r * sinf(off));
+        if (u > 0 && u < 1) {
+            float w = 4 * PETAL_W * u * (1 - u);
+            d = fminf(d, fabsf(across - w));
+            if (across < w) f = 1;
+        }
+    }
+    l = fmaxf(clampf(1.1f - d), 0.6f * clampf(1.0f - fabsf(r - RING)));
+    a = fmaxf(fabsf(sx), fabsf(sy));
+    b = fmaxf(fabsf(sx + sy), fabsf(sx - sy)) * 0.70710678f;
+    l = fmaxf(l, clampf(1.1f - fminf(fabsf(a - STAR), fabsf(b - STAR))));
+    if (a < STAR && b < STAR) f = fmaxf(f, 0.6f);
+    *line = l; *fill_ = f;
+}
+
+/* Soft lights on the ground, as fractions of the screen and a radius. */
+static const float k_bokeh[][3] = {
+    {0.07f, 0.16f, 60}, {0.88f, 0.10f, 80}, {0.95f, 0.44f, 46}, {0.16f, 0.64f, 52},
+    {0.74f, 0.80f, 70}, {0.38f, 0.07f, 40}, {0.64f, 0.30f, 34}, {0.04f, 0.90f, 56},
+};
+
+/* The static picture: the ground, its ornament (faint in the middle, where
+ * the text is, stronger towards the edges), a vignette, soft lights, the
+ * pair of teal diamonds beside the logo and the two gold rules. */
 static void build_background(void)
 {
-    int x, y;
+    int x, y, i;
     float cx = WIN_W / 2.0f;
     uint32_t *save = L.px;
     for (y = 0; y < WIN_H; ++y) {
-        float t = (float)y / (WIN_H - 1);
+        float t = (float)y / (WIN_H - 1), mid = 1 - fabsf(t - 0.45f) / 0.55f;
+        float br = 7 + 9 * mid, bg = 15 + 21 * mid, bb = 30 + 38 * mid;
         for (x = 0; x < WIN_W; ++x) {
-            float r = 3 + 5 * (1 - fabsf(t - 0.45f)), g = 7 + 10 * (1 - fabsf(t - 0.45f)),
-                  b = 18 + 22 * (1 - fabsf(t - 0.45f)), dx, dy, d, k, v, n;
-            /* blue light behind the logo */
-            dx = (x - cx) / 330.0f; dy = (y - 125.0f) / 210.0f;
-            d = sqrtf(dx * dx + dy * dy);
-            k = d < 1.0f ? (1.0f - d) * (1.0f - d) : 0.0f;
-            r += 20 * k; g += 70 * k; b += 150 * k;
-            /* a wide band of light behind the title */
-            dx = (x - cx) / 520.0f; dy = (y - 255.0f) / 60.0f;
-            d = dx * dx + dy * dy;
-            k = d < 1.0f ? (1.0f - d) * 0.5f : 0.0f;
-            r += 8 * k; g += 30 * k; b += 70 * k;
-            /* scan lines, vignette, fine grain */
-            if (y % 3 == 0) { r *= 0.9f; g *= 0.9f; b *= 0.9f; }
-            dx = (x - cx) / cx; dy = (y - WIN_H / 2.0f) / (WIN_H / 2.0f);
-            v = 1.0f - 0.5f * fminf(1.0f, (dx * dx + dy * dy) * 0.6f);
-            n = (float)(((x * 73856093u) ^ (y * 19349663u)) % 5u) - 2.0f;
+            float dx = (x - cx) / (WIN_W * 0.55f), dy = (y - WIN_H * 0.45f) / (WIN_H * 0.7f);
+            float e = dx * dx + dy * dy, m = 0.25f + 0.75f * clampf(e), v, line, petal, r, g, b;
+            ornament(x + 0.5f - cx, y + 0.5f - WIN_H / 2.0f, &line, &petal);
+            r = br; g = bg; b = bb;
+            petal *= 0.3f * m; line *= 0.55f * m;
+            r += (30 - r) * petal; g += (62 - g) * petal; b += (110 - b) * petal;
+            r += (64 - r) * line;  g += (104 - g) * line; b += (160 - b) * line;
+            v = 1.0f - 0.45f * clampf((sqrtf(e) - 0.7f) / 0.7f);
             L.bg[y * WIN_W + x] = 0xFF000000u
-                | (uint32_t)clampi((int)(r * v + n * 0.5f)) << 16
-                | (uint32_t)clampi((int)(g * v + n * 0.7f)) << 8
-                | (uint32_t)clampi((int)(b * v + n));
+                | (uint32_t)clampi((int)(r * v)) << 16 | (uint32_t)clampi((int)(g * v)) << 8
+                | (uint32_t)clampi((int)(b * v));
         }
     }
     L.px = L.bg;
-    frame(9, 9, WIN_W - 18, WIN_H - 18, 1, 40, 80, 150, 0.7f);
-    glow_hline(16, 16, WIN_W - 32, 80, 160, 255, 0.9f);
-    glow_hline(16, WIN_H - 17, WIN_W - 32, 80, 160, 255, 0.9f);
-    glow_vline(16, 16, WIN_H - 32, 80, 160, 255, 0.9f);
-    glow_vline(WIN_W - 17, 16, WIN_H - 32, 80, 160, 255, 0.9f);
-    frame(22, 22, WIN_W - 44, WIN_H - 44, 1, 30, 70, 140, 0.6f);
-    jewel(16, 16, 7); jewel(WIN_W - 17, 16, 7);
-    jewel(16, WIN_H - 17, 7); jewel(WIN_W - 17, WIN_H - 17, 7);
-    jewel(WIN_W / 2, 16, 5); jewel(WIN_W / 2, WIN_H - 17, 5);
+    for (i = 0; i < (int)(sizeof k_bokeh / sizeof k_bokeh[0]); ++i)
+        glow(k_bokeh[i][0] * WIN_W, k_bokeh[i][1] * WIN_H, k_bokeh[i][2], 70, 120, 190, 0.12f);
+    diamond(cx - TEAL_X, LOGO_Y + LOGO_SIZE / 2.0f, 24, 40, 150, 190, 0.22f);
+    diamond(cx - TEAL_X + 38, LOGO_Y + LOGO_SIZE / 2.0f, 24, 60, 170, 210, 0.22f);
+    gold_rule(HEAD_RULE_Y);
+    gold_rule(FOOT_RULE_Y);
+    twin(40, HEAD_RULE_Y, 4, 0);
+    twin(WIN_W - 51, FOOT_RULE_Y, 4, 0);
+    /* the window's edge against the desktop (the Android screen has none) */
+    for (x = 0; x < WIN_W; ++x) { blend(x, 0, 110, 92, 58, 0.9f); blend(x, WIN_H - 1, 110, 92, 58, 0.9f); }
+    for (y = 0; y < WIN_H; ++y) { blend(0, y, 110, 92, 58, 0.9f); blend(WIN_W - 1, y, 110, 92, 58, 0.9f); }
     L.px = save;
 }
 
@@ -490,7 +576,7 @@ static void spawn_grain(Grain *s, int anywhere)
     s->vy = s->glint ? frand(-14.0f, -4.0f) : frand(14.0f, 42.0f);
     if (s->glint && !anywhere) s->y = frand((float)WIN_H * 0.5f, (float)WIN_H);
     s->size = s->glint ? frand(1.4f, 2.6f) : frand(0.7f, 1.8f);
-    s->alpha = s->glint ? frand(0.6f, 1.0f) : frand(0.45f, 1.0f);
+    s->alpha = s->glint ? frand(0.5f, 0.9f) : frand(0.3f, 0.8f);
     s->phase = frand(0.0f, 6.283f);
 }
 
@@ -578,10 +664,11 @@ static GlowText glow_text(HFONT font, const wchar_t *text, int w, int h, int blu
     return t;
 }
 
-/* White-blue lettering, top to bottom from `top` to `bottom`, over a blue
- * glow of strength `halo` (0: none). `shine` adds a light passing across. */
-static void draw_glow_text(const GlowText *t, int x0, int y0, float halo,
-                           const int top[3], const int bottom[3], int shine)
+/* Lettering coloured from `top` to `bottom`, over a glow of colour `halo_rgb`
+ * and strength `halo` (0: none), with a dark copy `shadow` pixels below it.
+ * `shine` adds a light passing across. */
+static void draw_glow_text(const GlowText *t, int x0, int y0, float halo, const int halo_rgb[3],
+                           const int top[3], const int bottom[3], int shadow, int shine)
 {
     int x, y;
     float sweep = fmodf(L.time * 140.0f, t->w * 2.4f) - t->w * 0.7f;
@@ -590,7 +677,13 @@ static void draw_glow_text(const GlowText *t, int x0, int y0, float halo,
         for (y = 0; y < t->h; ++y)
             for (x = 0; x < t->w; ++x) {
                 float k = t->glow[y * t->w + x] * halo;
-                if (k > 0.004f) add(x0 + x, y0 + y, 40 * k, 120 * k, 255 * k);
+                if (k > 0.004f) add(x0 + x, y0 + y, halo_rgb[0] * k, halo_rgb[1] * k, halo_rgb[2] * k);
+            }
+    if (shadow)
+        for (y = 0; y < t->h; ++y)
+            for (x = 0; x < t->w; ++x) {
+                uint8_t m = t->mask[y * t->w + x];
+                if (m) blend(x0 + x, y0 + y + shadow, 2, 5, 12, m / 255.0f * 0.75f);
             }
     for (y = 0; y < t->h; ++y) {
         float f = (float)y / t->h;
@@ -600,52 +693,46 @@ static void draw_glow_text(const GlowText *t, int x0, int y0, float halo,
         for (x = 0; x < t->w; ++x) {
             uint8_t m = t->mask[y * t->w + x];
             if (!m) continue;
-            if (shine && fabsf(x - sweep - y * 0.6f) < 60.0f)
-                blend(x0 + x, y0 + y, 255, 255, 255, m / 255.0f);
+            if (shine && fabsf(x - sweep - y * 0.6f) < 50.0f)
+                blend(x0 + x, y0 + y, 255, 248, 222, m / 255.0f);
             else
                 blend(x0 + x, y0 + y, r, g, b, m / 255.0f);
         }
     }
 }
 
-static void divider(int cx, int y, int half)
-{
-    glow_hline(cx - half, y, 2 * half, 90, 170, 255, 0.9f);
-    jewel(cx, y, 5);
-    jewel(cx - half / 2, y, 3);
-    jewel(cx + half / 2, y, 3);
-}
-
+/* A button: a navy plate edged in gold with gold lettering; under the
+ * pointer, a gold plate with navy lettering, as the reference's badge. */
 static void draw_button(int id)
 {
-    static const int text_top[3] = {255, 255, 255}, text_bottom[3] = {170, 210, 255};
-    static const int off_top[3] = {96, 110, 138}, off_bottom[3] = {70, 82, 108};
+    static const int navy_top[3] = {18, 38, 70}, navy_bottom[3] = {9, 20, 40};
+    static const int gold_top[3] = {250, 232, 176}, gold_bottom[3] = {176, 132, 62};
+    static const int off_top[3] = {12, 20, 36}, off_bottom[3] = {8, 14, 26};
+    static const int text_top[3] = {252, 238, 196}, text_bottom[3] = {210, 168, 96};
+    static const int dark_top[3] = {22, 36, 64}, dark_bottom[3] = {10, 20, 40};
+    static const int dim_top[3] = {100, 112, 136}, dim_bottom[3] = {74, 84, 106};
+    static const int warm[3] = {255, 196, 100};
     Button *b = &L.btn[id];
     RECT r = b->r;
-    int w = r.right - r.left, h = r.bottom - r.top, y;
-    int hot = b->enabled && L.hover == id, focus = b->enabled && L.focus == id;
-    const GlowText *label = id == BTN_DEMO ? &L.label_demo : &L.label_game;
+    float w = (float)(r.right - r.left), h = (float)(r.bottom - r.top), tip = h * 0.32f;
+    int hot = b->enabled && (L.hover == id || L.pressed == id), focus = b->enabled && L.focus == id;
+    const GlowText *label = id == BTN_DEMO ? &L.label_demo : id == BTN_GAME ? &L.label_game : &L.label_cancel;
     if (!b->visible) return;
-    for (y = 0; y < h; ++y) {
-        float t = (float)y / h;
-        if (!b->enabled) fill(r.left, r.top + y, w, 1, 8, 12, 22, 0.8f);
-        else if (hot) fill(r.left, r.top + y, w, 1, (int)(20 - 10 * t), (int)(56 - 26 * t), (int)(120 - 50 * t), 0.92f);
-        else fill(r.left, r.top + y, w, 1, (int)(10 - 4 * t), (int)(26 - 12 * t), (int)(60 - 26 * t), 0.88f);
+    if (!b->enabled) {
+        plate_fill((float)r.left, (float)r.top, w, h, tip, off_top, off_bottom, 0.85f);
+        plate_edge((float)r.left, (float)r.top, w, h, tip, 1.0f, 70, 82, 104, 0.8f);
+        draw_glow_text(label, r.left, r.top, 0.0f, warm, dim_top, dim_bottom, 0, 0);
+        return;
     }
-    if (b->enabled) {
-        int c = hot || focus;
-        glow_hline(r.left, r.top, w, c ? 170 : 80, c ? 215 : 160, 255, 1.0f);
-        glow_hline(r.left, r.bottom - 1, w, c ? 170 : 80, c ? 215 : 160, 255, 1.0f);
-        frame(r.left, r.top, w, h, 1, c ? 150 : 60, c ? 205 : 130, 255, 0.9f);
-        frame(r.left + 5, r.top + 5, w - 10, h - 10, 1, 40, 90, 180, 0.7f);
-        jewel(r.left, r.top + h / 2, 6);
-        jewel(r.right - 1, r.top + h / 2, 6);
-        if (hot) glow((float)(r.left + w / 2), (float)(r.top + h / 2), w * 0.5f, 30, 80, 200, 0.35f);
-        draw_glow_text(label, r.left, r.top, hot ? 2.2f : 1.3f, text_top, text_bottom, 0);
-    } else {
-        frame(r.left, r.top, w, h, 1, 50, 64, 92, 0.7f);
-        draw_glow_text(label, r.left, r.top, 0.0f, off_top, off_bottom, 0);
-    }
+    if (focus && !hot) glow(r.left + w / 2, r.top + h / 2, w * 0.55f, 110, 80, 30, 0.35f);
+    plate_fill((float)r.left, (float)r.top, w, h, tip, hot ? gold_top : navy_top, hot ? gold_bottom : navy_bottom,
+               hot ? 1.0f : 0.92f);
+    plate_edge((float)r.left, (float)r.top, w, h, tip, 1.3f, hot || focus ? 255 : 206, hot || focus ? 238 : 170,
+               hot || focus ? 190 : 104, 1.0f);
+    plate_edge(r.left + 4.0f, r.top + 4.0f, w - 8, h - 8, tip - 1.6f, 1.0f, hot ? 120 : 150, hot ? 88 : 118,
+               hot ? 36 : 66, hot ? 0.8f : 0.7f);
+    if (hot) draw_glow_text(label, r.left, r.top, 0.0f, warm, dark_top, dark_bottom, 0, 0);
+    else draw_glow_text(label, r.left, r.top, focus ? 0.9f : 0.4f, warm, text_top, text_bottom, 2, 0);
 }
 
 static void text_at(HFONT font, COLORREF color, const wchar_t *text, int x, int y, int w, int h, UINT format)
@@ -656,6 +743,26 @@ static void text_at(HFONT font, COLORREF color, const wchar_t *text, int x, int 
     DrawTextW(L.dc, text, -1, &r, format | DT_NOPREFIX);
 }
 
+/* Spaced capitals: the subtitle, the badge and the headings. */
+static int caps_width(HFONT font, int extra, const wchar_t *text)
+{
+    SIZE size = {0};
+    SelectObject(L.dc, font);
+    SetTextCharacterExtra(L.dc, extra);
+    GetTextExtentPoint32W(L.dc, text, (int)wcslen(text), &size);
+    SetTextCharacterExtra(L.dc, 0);
+    return size.cx - extra;   /* the spacing after the last letter is not seen */
+}
+
+/* Centred on x + w / 2 by hand: DT_CENTER leaves the spacing out. */
+static void caps_at(HFONT font, int extra, COLORREF color, const wchar_t *text, int x, int y, int w, int h)
+{
+    int width = caps_width(font, extra, text);
+    SetTextCharacterExtra(L.dc, extra);
+    text_at(font, color, text, x + (w - width) / 2, y, width + extra + 4, h, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    SetTextCharacterExtra(L.dc, 0);
+}
+
 /* What one button would start, under it. */
 static void install_text(int kind, const RECT *button)
 {
@@ -663,27 +770,27 @@ static void install_text(int kind, const RECT *button)
     wchar_t dir[MAX_PATH];
     int x = button->left - 20, w = button->right - button->left + 40;
     if (!in->dir[0]) {
-        text_at(L.f_text, RGB(96, 112, 140), L"Not installed", x, button->bottom + 12, w, 24,
+        text_at(L.f_text, RGB(120, 134, 160), L"Not installed", x, button->bottom + 12, w, 24,
                 DT_CENTER | DT_SINGLELINE);
         return;
     }
-    text_at(L.f_text, in->info.exact ? RGB(214, 232, 255) : RGB(255, 200, 120), in->info.line,
+    text_at(L.f_text, in->info.exact ? RGB(236, 240, 248) : RGB(255, 200, 120), in->info.line,
             x, button->bottom + 12, w, 24, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     to_wide(in->dir, dir, MAX_PATH);
-    text_at(L.f_small, RGB(110, 140, 184), dir, x, button->bottom + 38, w, 18,
+    text_at(L.f_small, RGB(130, 150, 182), dir, x, button->bottom + 38, w, 18,
             DT_CENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
 }
 
 static void layout(void)
 {
-    int i, x0 = (WIN_W - 2 * BTN_W - 50) / 2;
+    int i, x0 = (WIN_W - 2 * BTN_W - BTN_GAP) / 2;
     for (i = 0; i < BTN_COUNT; ++i) L.btn[i].visible = !L.extracting;
     SetRect(&L.btn[BTN_DEMO].r, x0, BTN_Y, x0 + BTN_W, BTN_Y + BTN_H);
-    SetRect(&L.btn[BTN_GAME].r, x0 + BTN_W + 50, BTN_Y, x0 + 2 * BTN_W + 50, BTN_Y + BTN_H);
+    SetRect(&L.btn[BTN_GAME].r, x0 + BTN_W + BTN_GAP, BTN_Y, x0 + 2 * BTN_W + BTN_GAP, BTN_Y + BTN_H);
     SetRect(&L.btn[BTN_ISO].r, WIN_W - 250, WIN_H - 62, WIN_W - 40, WIN_H - 34);
     SetRect(&L.btn[BTN_GITHUB].r, 40, WIN_H - 62, 330, WIN_H - 34);
-    SetRect(&L.btn[BTN_CLOSE].r, WIN_W - 66, 32, WIN_W - 32, 66);
-    SetRect(&L.btn[BTN_CANCEL].r, (WIN_W - BTN_W) / 2, 512, (WIN_W + BTN_W) / 2, 512 + BTN_H);
+    SetRect(&L.btn[BTN_CLOSE].r, WIN_W - 58, 18, WIN_W - 24, 52);
+    SetRect(&L.btn[BTN_CANCEL].r, (WIN_W - CANCEL_W) / 2, CANCEL_Y, (WIN_W + CANCEL_W) / 2, CANCEL_Y + BTN_H);
     L.btn[BTN_CANCEL].visible = L.extracting;
     L.btn[BTN_CLOSE].visible = 1;
     /* A button starts its game from its own folder, in this executable or
@@ -696,7 +803,7 @@ static void layout(void)
     L.btn[BTN_CLOSE].enabled = L.btn[BTN_CANCEL].enabled = 1;
     if (!L.btn[L.focus].enabled || !L.btn[L.focus].visible) {
         int mine = L.this_kind == GAME_DEMO ? BTN_DEMO : BTN_GAME;
-        L.focus = L.btn[mine].enabled ? mine : L.btn[BTN_DEMO].enabled ? BTN_DEMO
+        L.focus = L.extracting ? BTN_CANCEL : L.btn[mine].enabled ? mine : L.btn[BTN_DEMO].enabled ? BTN_DEMO
                 : L.btn[BTN_GAME].enabled ? BTN_GAME : BTN_ISO;
     }
 }
@@ -707,68 +814,91 @@ static void refresh(void)
     layout();
 }
 
+/* A link of the footer: light text, gold with a gold line under the pointer. */
+static void link_at(int id, const wchar_t *text, UINT align)
+{
+    RECT r = L.btn[id].r;
+    int lit = L.hover == id || L.focus == id;
+    text_at(L.f_small, lit ? RGB3(GOLD_LIGHT) : RGB(196, 208, 228), text, r.left, r.top,
+            r.right - r.left, r.bottom - r.top, align | DT_VCENTER | DT_SINGLELINE);
+}
+
 static void render(void)
 {
-    static const int title_top[3] = {255, 255, 255}, title_bottom[3] = {150, 200, 255};
+    static const int title_top[3] = {255, 242, 200}, title_bottom[3] = {184, 136, 60};
+    static const int title_halo[3] = {255, 190, 90};
+    static const int badge_top[3] = {250, 232, 176}, badge_bottom[3] = {176, 132, 62};
     wchar_t text[400];
-    int i;
+    int i, cx = WIN_W / 2, half;
     GdiFlush();
     memcpy(L.px, L.bg, (size_t)WIN_W * WIN_H * 4);
     draw_sand();
-    draw_glow_text(&L.title, 0, TITLE_Y, 1.9f + 0.25f * sinf(L.time * 1.6f), title_top, title_bottom, 1);
-    divider(WIN_W / 2, 344, 240);
+    draw_glow_text(&L.title, 0, TITLE_Y, 0.55f, title_halo, title_top, title_bottom, 3, 1);
+    /* "THE SANDS OF TIME" between two gold lines ending in open diamonds */
+    half = L.sub_w / 2 + 18;
+    seg((float)(cx - half - 130), SUB_Y + 0.5f, (float)(cx - half), SUB_Y + 0.5f, 1.0f, GOLD, 0.9f);
+    seg((float)(cx + half), SUB_Y + 0.5f, (float)(cx + half + 130), SUB_Y + 0.5f, 1.0f, GOLD, 0.9f);
+    for (i = -1; i <= 1; i += 2) {
+        diamond((float)(cx + i * (half + 136)), SUB_Y + 0.5f, 5, GOLD, 1.0f);
+        diamond((float)(cx + i * (half + 136)), SUB_Y + 0.5f, 3, 12, 26, 50, 1.0f);
+    }
+    /* the badge */
+    plate_fill((float)(cx - L.badge_w / 2), BADGE_Y, (float)L.badge_w, BADGE_H, 9, badge_top, badge_bottom, 1.0f);
+    plate_edge((float)(cx - L.badge_w / 2), BADGE_Y, (float)L.badge_w, BADGE_H, 9, 1.0f, 255, 240, 196, 1.0f);
+    plate_edge((float)(cx - L.badge_w / 2 + 3), BADGE_Y + 3.0f, (float)L.badge_w - 6, BADGE_H - 6.0f, 7.6f, 1.0f,
+               120, 88, 36, 0.8f);
     if (L.extracting) {
         LONG64 done = L.done_bytes, total = L.total_bytes;
         float f = total > 0 ? (float)((double)done / (double)total) : 0.0f;
-        int bx = 200, by = 432, bw = WIN_W - 400, bh = 18, fillw;
+        int bx = 200, by = BAR_Y, bw = WIN_W - 400, bh = 16, fillw;
         if (f > 1.0f) f = 1.0f;
         fillw = (int)(bw * f);
-        fill(bx, by, bw, bh, 4, 10, 24, 0.9f);
+        fill(bx, by, bw, bh, 6, 12, 26, 0.9f);
         for (i = 0; i < bh; ++i) {
             float t = (float)i / bh;
-            fill(bx, by + i, fillw, 1, (int)(255 - 40 * t), (int)(214 - 80 * t), (int)(130 - 90 * t), 1.0f);
+            fill(bx, by + i, fillw, 1, (int)(248 - 60 * t), (int)(226 - 90 * t), (int)(160 - 100 * t), 1.0f);
         }
         for (i = 0; fillw > 8 && i < 18; ++i)   /* sand running in the bar */
             glow(bx + fmodf(L.time * 90.0f + i * 53.0f, (float)fillw),
-                 by + 4.0f + (i * 7) % (bh - 8), 1.2f, 255, 240, 190, 0.7f);
-        glow_hline(bx - 3, by - 3, bw + 6, 80, 160, 255, 1.0f);
-        glow_hline(bx - 3, by + bh + 2, bw + 6, 80, 160, 255, 1.0f);
-        jewel(bx - 3, by + bh / 2, 5);
-        jewel(bx + bw + 2, by + bh / 2, 5);
+                 by + 4.0f + (i * 7) % (bh - 8), 1.2f, 255, 250, 220, 0.7f);
+        seg(bx - 3.5f, by - 2.5f, bx + bw + 2.5f, by - 2.5f, 1.0f, GOLD, 1.0f);
+        seg(bx - 3.5f, by + bh + 2.5f, bx + bw + 2.5f, by + bh + 2.5f, 1.0f, GOLD, 1.0f);
+        diamond(bx - 6.0f, by + bh / 2.0f, 5, 222, 190, 124, 1.0f);
+        diamond(bx + bw + 5.0f, by + bh / 2.0f, 5, 222, 190, 124, 1.0f);
         draw_button(BTN_CANCEL);
     } else {
+        half = L.head_w / 2 + 16;
+        twin((float)(cx - half - 17), HEAD_Y + 9.0f, 4, 1);
+        twin((float)(cx + half), HEAD_Y + 9.0f, 4, 1);
         draw_button(BTN_DEMO);
         draw_button(BTN_GAME);
-        if (L.hover == BTN_GITHUB || L.focus == BTN_GITHUB)
-            glow_hline(L.btn[BTN_GITHUB].r.left + 20, L.btn[BTN_GITHUB].r.bottom - 3, 200, 120, 190, 255, 0.8f);
-        if (L.hover == BTN_ISO || L.focus == BTN_ISO)
-            glow_hline(L.btn[BTN_ISO].r.left + 60, L.btn[BTN_ISO].r.bottom - 3, 150, 120, 190, 255, 0.8f);
+        for (i = BTN_ISO; i <= BTN_GITHUB; ++i)
+            if (L.hover == i || L.focus == i) {
+                RECT r = L.btn[i].r;
+                float w = i == BTN_ISO ? 150.0f : 200.0f, x = i == BTN_ISO ? r.right - w : r.left + 20.0f;
+                seg(x, r.bottom - 2.5f, x + w, r.bottom - 2.5f, 1.0f, GOLD, 0.9f);
+            }
     }
 
     SetBkMode(L.dc, TRANSPARENT);
-    text_at(L.f_sub, RGB(176, 206, 245), L"The Sands of Time  \x2022  Xbox, recompiled for Windows",
-            0, 302, WIN_W, 30, DT_CENTER | DT_SINGLELINE);
+    caps_at(L.f_sub, 4, RGB(236, 216, 164), L"THE SANDS OF TIME", 0, SUB_Y - 15, WIN_W, 30);
+    caps_at(L.f_badge, 2, RGB(22, 30, 50), BADGE_TEXT, 0, BADGE_Y, WIN_W, BADGE_H);
     if (L.extracting) {
         LONG64 done = L.done_bytes, total = L.total_bytes;
         const wchar_t *name = wcsrchr(L.iso_w, L'\\');
         swprintf(text, 400, L"Installing  \x2022  %ls", name ? name + 1 : L.iso_w);
-        text_at(L.f_text, RGB(225, 238, 255), text, 60, 384, WIN_W - 120, 30, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        text_at(L.f_text, RGB(236, 240, 248), text, 60, BAR_Y - 44, WIN_W - 120, 30, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         if (total > 0)
             swprintf(text, 400, L"%.0f%%  \x2022  %.1f of %.1f MB", 100.0 * (double)done / (double)total,
                      done / 1048576.0, total / 1048576.0);
         else
             wcscpy_s(text, 400, L"Reading the disc's file table\x2026");
-        text_at(L.f_small, RGB(180, 205, 240), text, 0, 458, WIN_W, 20, DT_CENTER | DT_SINGLELINE);
+        text_at(L.f_small, RGB3(GOLD_LIGHT), text, 0, BAR_Y + 26, WIN_W, 20, DT_CENTER | DT_SINGLELINE);
         EnterCriticalSection(&L.lock);
-        text_at(L.f_small, RGB(110, 140, 184), L.status, 120, 478, WIN_W - 240, 18, DT_CENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
+        text_at(L.f_small, RGB(130, 150, 182), L.status, 120, BAR_Y + 46, WIN_W - 240, 18, DT_CENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
         LeaveCriticalSection(&L.lock);
-        {
-            RECT r = L.btn[BTN_CANCEL].r;
-            text_at(L.f_text, L.hover == BTN_CANCEL ? RGB(255, 255, 255) : RGB(200, 225, 255), L"Cancel",
-                    r.left, r.top, r.right - r.left, r.bottom - r.top, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        }
     } else {
-        text_at(L.f_label, RGB(110, 165, 240), L"INSTALLED GAMES", 0, 356, WIN_W, 18, DT_CENTER | DT_SINGLELINE);
+        caps_at(L.f_label, 3, RGB(236, 216, 164), L"INSTALLED GAMES", 0, HEAD_Y, WIN_W, 18);
         install_text(GAME_DEMO, &L.btn[BTN_DEMO].r);
         install_text(GAME_RETAIL, &L.btn[BTN_GAME].r);
         text[0] = 0;
@@ -784,14 +914,12 @@ static void render(void)
                 if (L.inst[k].info.note[0]) wcscpy_s(text, 400, L.inst[k].info.note);
         }
         if (text[0])
-            text_at(L.f_small, L.error[0] ? RGB(255, 130, 110) : RGB(255, 200, 120), text, 60, 528, WIN_W - 120, 20,
+            text_at(L.f_small, L.error[0] ? RGB(255, 130, 110) : RGB(255, 200, 120), text, 60, MESSAGE_Y, WIN_W - 120, 20,
                     DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        text_at(L.f_small, L.hover == BTN_GITHUB ? RGB(235, 245, 255) : RGB(140, 185, 245), L"\x2605  " GITHUB_TEXT,
-                L.btn[BTN_GITHUB].r.left, L.btn[BTN_GITHUB].r.top, 290, 28, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        text_at(L.f_small, L.hover == BTN_ISO ? RGB(235, 245, 255) : RGB(140, 185, 245), L"Install from ISO\x2026  \x25B8",
-                L.btn[BTN_ISO].r.left, L.btn[BTN_ISO].r.top, 210, 28, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        link_at(BTN_GITHUB, L"\x2605  " GITHUB_TEXT, DT_LEFT);
+        link_at(BTN_ISO, L"Install from ISO\x2026  \x25B8", DT_RIGHT);
     }
-    text_at(L.f_text, L.hover == BTN_CLOSE ? RGB(235, 245, 255) : RGB(110, 165, 240), L"\x2715",
+    text_at(L.f_text, L.hover == BTN_CLOSE ? RGB3(GOLD_LIGHT) : RGB3(GOLD), L"\x2715",
             L.btn[BTN_CLOSE].r.left, L.btn[BTN_CLOSE].r.top, 34, 34, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     if (L.logo_dc) {
         BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
@@ -881,15 +1009,20 @@ static void load_fonts(void)
     if (ttf) L.font_mem = AddFontMemResourceEx((void *)ttf, size, NULL, &count);
     L.atlantis = L.font_mem && count;
     display = L.atlantis ? L"Atlantis MF" : serif;
-    L.f_sub = make_font(serif, 21, FW_NORMAL, 1, CLEARTYPE_QUALITY);
-    L.f_text = make_font(serif, 20, FW_NORMAL, 0, CLEARTYPE_QUALITY);
+    L.f_sub = make_font(serif, 20, FW_SEMIBOLD, 0, CLEARTYPE_QUALITY);
+    L.f_text = make_font(L"Segoe UI", 18, FW_NORMAL, 0, CLEARTYPE_QUALITY);
     L.f_small = make_font(L"Segoe UI", 14, FW_NORMAL, 0, CLEARTYPE_QUALITY);
     L.f_label = make_font(L"Segoe UI", 13, FW_SEMIBOLD, 0, CLEARTYPE_QUALITY);
-    title = make_font(display, L.atlantis ? 72 : 60, L.atlantis ? FW_NORMAL : FW_BOLD, 0, ANTIALIASED_QUALITY);
-    button = make_font(display, L.atlantis ? 32 : 28, L.atlantis ? FW_NORMAL : FW_SEMIBOLD, 0, ANTIALIASED_QUALITY);
-    L.title = glow_text(title, L"Prince of Persia", WIN_W, TITLE_H, 7);
+    L.f_badge = make_font(serif, 14, FW_BOLD, 0, CLEARTYPE_QUALITY);
+    L.sub_w = caps_width(L.f_sub, 4, L"THE SANDS OF TIME");
+    L.head_w = caps_width(L.f_label, 3, L"INSTALLED GAMES");
+    L.badge_w = caps_width(L.f_badge, 2, BADGE_TEXT) + 48;
+    title = make_font(display, L.atlantis ? 66 : 56, L.atlantis ? FW_NORMAL : FW_BOLD, 0, ANTIALIASED_QUALITY);
+    button = make_font(display, L.atlantis ? 28 : 24, L.atlantis ? FW_NORMAL : FW_SEMIBOLD, 0, ANTIALIASED_QUALITY);
+    L.title = glow_text(title, L"Prince of Persia", WIN_W, TITLE_H, 6);
     L.label_demo = glow_text(button, L"Start Demo", BTN_W, BTN_H, 4);
     L.label_game = glow_text(button, L"Start Game", BTN_W, BTN_H, 4);
+    L.label_cancel = glow_text(button, L"Cancel", CANCEL_W, BTN_H, 4);
     DeleteObject(title);
     DeleteObject(button);
 }
@@ -1384,8 +1517,9 @@ static void destroy_window(void)
     if (L.f_text) DeleteObject(L.f_text);
     if (L.f_small) DeleteObject(L.f_small);
     if (L.f_label) DeleteObject(L.f_label);
+    if (L.f_badge) DeleteObject(L.f_badge);
     if (L.font_mem) RemoveFontMemResourceEx(L.font_mem);
-    free_glow(&L.title); free_glow(&L.label_demo); free_glow(&L.label_game);
+    free_glow(&L.title); free_glow(&L.label_demo); free_glow(&L.label_game); free_glow(&L.label_cancel);
     free(L.bg);
 }
 

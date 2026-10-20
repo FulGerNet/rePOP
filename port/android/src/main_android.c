@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include <time.h>
 #include <ucontext.h>
 #include <unistd.h>
@@ -67,6 +68,54 @@ extern void resot_android_input_event(const SDL_Event *event);
 static char s_game_dir[1024], s_data_dir[1024];
 static SDL_Window *s_window;
 static volatile int s_game_running;
+static pthread_t s_event_thread, s_title_thread;
+static __thread int s_profile_role = -1;
+static uintptr_t s_profile_pc[2];
+
+static void profile_signal(int signal_number, siginfo_t *info, void *context)
+{
+    (void)signal_number; (void)info;
+    if (s_profile_role >= 0)
+        __atomic_store_n(&s_profile_pc[s_profile_role],
+                         (uintptr_t)((ucontext_t *)context)->uc_mcontext.pc, __ATOMIC_RELAXED);
+}
+
+static void *profile_main(void *unused)
+{
+    struct { uintptr_t pc; unsigned role, hits; } samples[400] = {0};
+    unsigned count = 0;
+    (void)unused;
+    sleep(15);
+    for (unsigned tick = 0; tick < 200; tick++) {
+        pthread_kill(s_event_thread, SIGUSR2);
+        pthread_kill(s_title_thread, SIGUSR2);
+        usleep(5000);
+        for (unsigned role = 0; role < 2; role++) {
+            uintptr_t pc = __atomic_exchange_n(&s_profile_pc[role], 0, __ATOMIC_RELAXED);
+            unsigned entry;
+            if (!pc) continue;
+            for (entry = 0; entry < count; entry++)
+                if (samples[entry].pc == pc && samples[entry].role == role) break;
+            if (entry == count && count < 400) {
+                samples[count].pc = pc; samples[count].role = role; count++;
+            }
+            if (entry < count) samples[entry].hits++;
+        }
+    }
+    for (unsigned entry = 0; entry < count; entry++) {
+        Dl_info symbol = {0};
+        dladdr((void *)samples[entry].pc, &symbol);
+        fprintf(stderr, "[CPU profile] %s %u %s+0x%llx %s\n",
+                samples[entry].role ? "title" : "events", samples[entry].hits,
+                symbol.dli_fname ? symbol.dli_fname : "?",
+                (unsigned long long)(samples[entry].pc - (uintptr_t)symbol.dli_fbase),
+                symbol.dli_sname ? symbol.dli_sname : "?");
+    }
+    fprintf(stderr, "[CPU profile] completed; stopping diagnostic session\n");
+    fflush(stderr);
+    _exit(0);
+    return NULL;
+}
 
 const char *resot_android_data_dir(void) { return s_data_dir; }
 
@@ -241,11 +290,14 @@ static void set_default(const char *name, const char *value)
 
 static void *game_main(void *unused)
 {
+    s_profile_role = 1;
     void *xbe_data = NULL;
     size_t xbe_size = 0;
     char why[512], save_dir[1200];
     const char *missing;
     (void)unused;
+    if (setpriority(PRIO_PROCESS, 0, 0) != 0)
+        fprintf(stderr, "[THREAD] game normal priority failed: %s\n", strerror(errno));
 
     if ((missing = missing_game_file()) != NULL) {
         snprintf(why, sizeof why, "The folder %s does not contain the %s game files.\n\nMissing: %s",
@@ -308,6 +360,8 @@ static void *game_main(void *unused)
 
 int SDL_main(int argc, char **argv)
 {
+    s_profile_role = 0;
+    s_event_thread = pthread_self();
     pthread_t thread, flush;
     pthread_attr_t attr;
     int i;
@@ -404,7 +458,18 @@ int SDL_main(int argc, char **argv)
         return 1;
     }
     pthread_attr_destroy(&attr);
+    s_title_thread = thread;
     pthread_detach(thread);
+    if (access("cpu-profile-enable", F_OK) == 0) {
+        struct sigaction action = {0};
+        pthread_t profiler;
+        action.sa_sigaction = profile_signal;
+        action.sa_flags = SA_SIGINFO | SA_RESTART;
+        sigemptyset(&action.sa_mask);
+        sigaction(SIGUSR2, &action, NULL);
+        if (pthread_create(&profiler, NULL, profile_main, NULL) == 0)
+            pthread_detach(profiler);
+    }
 
     /* The window's events: input, and the activity's lifecycle. */
     for (;;) {

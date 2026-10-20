@@ -125,6 +125,15 @@ In short, on Windows:
 
 ## Development status
 
+Android optimization update (2026-10-20): retail's small vertex interpreter
+now skips calculations whose results are unused. Android and both Windows
+builds pass, with 8/8 native GPU/support tests including Vulkan/D3D12 shader
+pixel comparisons. ADB retail title checks measured about 29-31 FPS at 480p,
+36-38 FPS at 360p and up to 48-49 FPS at 240p across sequential runs;
+the last vertex changes showed no clear gain at 480p. Power improvement
+and sustained gameplay performance remain unverified;
+see [VALIDATION.md](docs/VALIDATION.md).
+
 🟢 works in the runs recorded in [VALIDATION.md](docs/VALIDATION.md) ·
 🟡 partial · ⚪ not started. A green cell means "observed working here", not
 "matches the console".
@@ -148,7 +157,18 @@ In short, on Windows:
 | Virtual memory reservations | 🟡 reserve/commit fix tested on synthetic input; optional, gameplay with this option not checked | 🟡 corrected reserve/commit and audio address translation; user passed the previous crash point; checkpoint save/load still untested |
 | Xbox Live (retail only) | n/a | ⚪ not planned |
 | Android (arm64, Vulkan; one APK for both) | 🟡 demo-specific draw evidence checked and native simple shaders enabled (2026-10-19): SM8635 480p title/menu improves from about 27.5 to 62.9–63.1 FPS in steady timing windows; first playable scenes include 33.8–53.3 FPS windows, so sustained 60 FPS gameplay remains unmet. Bulk texture conversion and image cycling also enabled; see validation log | 🟡 user confirms runs and videos corrected; logs show severe FPS drops on Adreno 750; native vertex-buffer reuse, save diagnostics and device-width Hor+ built (2026-10-19), GPU vertex programs left the phone waiting on the GPU (8–18 FPS, long black screen before the menu); Vulkan pipeline cache removed the per-pipeline compile stalls (0.3–0.5 ms after the first, device log); GPU vertex programs with bound-only texture sampling rebuilt (2026-10-19), frame rate not yet seen on the device; white light-map borders, forming-tank alignment, bulk texture conversion and native cache optimizations built into the APK; single-stage fragment specialization measured on SM8635: menu 16.5–17.1 to 24.6–24.8 FPS at 480p; FPS touch button hides while its panel is visible, same spot closes it; broader device persistence/performance validation pending |
+| Android scheduling / next Vulkan draw optimization (2026-10-20) | 🟡 system UI responsive per user; menu 40–57 FPS; compact vertex inputs and state-command reuse built locally, demo device measurement pending | 🟡 renewed ADB tests: final APK title about 29–31 FPS at 480p, 36–38 at 360p; preceding APK up to 48–49 at 240p; opening cutscene reached; sustained gameplay performance unverified |
 | Checked against the console | ⚪ | ⚪ |
+
+Android update (2026-10-20): the user confirms that system UI no longer lags
+with the scheduling/stability build, but reports demo menu fluctuations of
+40–57 FPS. The subsequent performance build restores SDL's two frames in
+flight, packs native vertex inputs into 16/32/64/128 bytes instead of always
+128, and skips unchanged viewport/scissor/blend commands. Both targets share
+these native-encoder changes (compact inputs on Vulkan; state-command reuse
+also on D3D12). Renewed retail phone tests measured the final build at
+29–31 FPS at 480p and 36–38 FPS at 360p in the title. Sustained 60 FPS remains
+unachieved. See [VALIDATION.md](docs/VALIDATION.md).
 
 ## Repository layout
 

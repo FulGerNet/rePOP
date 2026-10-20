@@ -26,6 +26,7 @@
 #include <windows.h>
 #else
 #include "../platform/win32_compat.h"
+#include <time.h> /* RE-SoT: precise mobile frame pacing without a busy tail. */
 #endif
 #include <stdio.h>
 #include <stdlib.h>
@@ -382,12 +383,21 @@ static void fb_limit_frame(void)
             last = now.QuadPart;
             return;
         }
+#if defined(__ANDROID__)
+        /* RE-SoT: sleep through the final remainder on mobile instead of
+         * polling a core while Android's compositor also needs CPU time. */
+        struct timespec pause = {0, (long)(remaining * 1000000000LL / frequency)};
+        pause.tv_sec = pause.tv_nsec / 1000000000L;
+        pause.tv_nsec %= 1000000000L;
+        nanosleep(&pause, NULL);
+#else
         /* RE-SoT: leave a millisecond for scheduler jitter, yielding to
          * other ready threads during the short final remainder. */
         if (remaining > frequency / 500)
             Sleep((DWORD)(remaining * 1000 / frequency - 1));
         else
             SwitchToThread();
+#endif
         QueryPerformanceCounter(&now);
     }
     last = now.QuadPart;

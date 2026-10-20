@@ -41,19 +41,21 @@ target_include_directories(xbox_kernel PUBLIC
 )
 
 if(WIN32)
+    # RE-SoT: standalone runtime regression projects have their own source root.
+    get_filename_component(RESOT_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../.." ABSOLUTE)
     # RE-SoT: native GPU command encoder; no D3D11 translation backend.
-    set(RESOT_SDL_ROOT "${CMAKE_SOURCE_DIR}/build/deps/SDL3-3.4.18" CACHE PATH "SDL3 SDK (tools/setup-native-gpu.ps1)")
-    set(RESOT_DXC "${CMAKE_SOURCE_DIR}/build/deps/dxc/bin/x64/dxc.exe" CACHE FILEPATH "DXC shader compiler")
+    set(RESOT_SDL_ROOT "${RESOT_SOURCE_ROOT}/build/deps/SDL3-3.4.18" CACHE PATH "SDL3 SDK (tools/setup-native-gpu.ps1)")
+    set(RESOT_DXC "${RESOT_SOURCE_ROOT}/build/deps/dxc/bin/x64/dxc.exe" CACHE FILEPATH "DXC shader compiler")
     if(NOT EXISTS "${RESOT_SDL_ROOT}/include/SDL3/SDL_gpu.h" OR NOT EXISTS "${RESOT_DXC}")
         message(FATAL_ERROR "Native GPU dependencies missing. Run tools/setup-native-gpu.ps1 first.")
     endif()
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     set(native_shaders "${CMAKE_BINARY_DIR}/native-shaders")
     add_custom_command(OUTPUT "${native_shaders}/nv2a_native_shaders.h"
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/build-native-shaders.py"
+        COMMAND "${Python3_EXECUTABLE}" "${RESOT_SOURCE_ROOT}/tools/build-native-shaders.py"
                 --dxc "${RESOT_DXC}" --output "${native_shaders}"
-        DEPENDS "${CMAKE_SOURCE_DIR}/tools/build-native-shaders.py"
-                "${CMAKE_SOURCE_DIR}/tools/check-hlsl.py"
+        DEPENDS "${RESOT_SOURCE_ROOT}/tools/build-native-shaders.py"
+                "${RESOT_SOURCE_ROOT}/tools/check-hlsl.py"
                 "${CMAKE_CURRENT_SOURCE_DIR}/nv2a_hw_d3d11.inc"
         VERBATIM)
     target_sources(xbox_kernel PRIVATE "${native_shaders}/nv2a_native_shaders.h")

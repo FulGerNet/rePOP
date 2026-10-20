@@ -1,11 +1,195 @@
 # Validation log
 
+## 2026-10-20: launcher restyle (gold on night blue); Android launcher full screen
+
+Both launchers (`port/windows/src/launcher.c`, `LauncherView.java`) were
+redrawn after the style of Ubisoft's Sands of Time announcement cards: a
+night-blue ground tiled with rosettes and eight-point stars (fainter in the
+middle), soft lights, a pair of teal diamonds beside the logo, full-width gold
+rules with gold twin diamonds, cyan twin diamonds beside "INSTALLED GAMES",
+a gold "Prince of Persia" title, "THE SANDS OF TIME" between gold lines, a
+gold "RECOMPILED FOR WINDOWS/ANDROID" badge, and buttons as long hexagonal
+plates (navy edged in gold; gold with navy lettering under the pointer or
+finger). The Android launcher now fills the screen: system bars hidden
+(immersive, swipe to show), drawn under the cutout, the 1000 x 640 plane
+widened to the screen's shape instead of letterboxed.
+
+**Run:** `tools/recomp.ps1 -Target xbox-demo -BuildOnly` and
+`-Target xbox-retail -BuildOnly` (both built); `bin/sot-xbox-demo.exe`
+captured with the pointer away and over Start Game
+(`logs/launcher-gold-windows.png`, `logs/launcher-gold-windows-hover.png`).
+`tools/build-android.ps1 -Install` (release APK installed with `-r` on the
+connected phone, 2712 x 1220), launcher started with `am start`, `screencap`
+(`logs/launcher-gold-android.png`). **Seen:** on Windows, both buttons
+enabled with their games and folders, the hover plate gold with dark
+lettering, the focused Demo plate with a bright edge. On Android, the screen
+filled edge to edge with no status or navigation bar, the rules and ground
+reaching both edges, the footer links and the left rule's diamonds moved
+clear of the cutout. **Not checked:** the retail executable's window (built,
+not opened); the installation/progress view and the Cancel plate on either
+host; touch, controller and keyboard navigation of the new Android screen;
+the swipe that shows the bars; a phone in portrait or a 4:3 tablet; starting
+a game from the new screens.
+
+## 2026-10-20: ADB installation and Android retail resolution measurements
+
+User authorized renewed device tests. `adb devices -l` identified the connected
+24069PC21G/peridot. `adb install -r bin/reSOT-android.apk` succeeded for the
+initial APK and the subsequent revision; no uninstall/data clear was issued.
+The initial external `resot-options.ini` did not exist. Benchmark INIs set
+FPSLimit=0, VSync=0, PostProcessing=0 and scale 100/50/75. The phone retains
+75% (360p) for the next launch; keyboard/controller mappings use their defaults.
+
+Observed retail title screen (animated Menu), system Vulkan, GPU vertex
+programs, FPS panel and touch overlay visible:
+
+| Configuration | Observed five-second FPS windows | Evidence (ignored local logs) |
+| --- | --- | --- |
+| Initial APK, default 480p / VSync on / limit 60 | early steady 29.1-29.4; later windows also near 31 | `logs/android-perf-vsync-on.txt` |
+| Initial APK, 480p / VSync off / unlimited | steady windows about 30.6-31.0, with lower transition/stall windows | `logs/android-perf-vsync-off-480.txt` |
+| Initial APK, 240p / VSync off / unlimited | about 45 initially, later 48.2-48.9; lower windows also recorded | `logs/android-perf-vsync-off-240.txt` |
+| Final APK, 480p / VSync off / unlimited | about 29.4-30.9; no demonstrated gain over the initial APK | `logs/android-perf-final-480.txt` |
+| Final APK, 360p / VSync off / unlimited | initial steady windows 36.1-36.5, later 38.3-38.4; a 26.2 window also recorded | `logs/android-perf-final-360.txt` |
+
+Final 360p samples show executor about 11.1-11.3 ms and present about
+11.7-12.6 ms; final 480p samples include about 18 ms in present. These CPU
+wall-clock intervals include waiting and are not GPU timestamp measurements.
+The scale response shows substantial pixel-work sensitivity in this scene.
+Do not attribute all changes to VSync or vertex trimming: runs were sequential,
+thermals uncontrolled, and later initial-APK windows approached 31 FPS too.
+Battery temperature rose from 35.4 to 40.0 C across testing; cached thermal
+service temperatures were unchanged and are not reliable per-run samples.
+GPU utilization sysfs access was denied; no power reduction was measured.
+
+The final APK also reached the `0101_Porte` opening cutscene (capture
+`logs/android-perf-profile.png`, panel 27.6 FPS). This is not a matched-scene
+gameplay benchmark. Sustained 60 FPS, demo device behavior in this revision,
+full gameplay and save/load remain unverified.
+
+Additional final-revision changes: retail small programs discard completely
+empty instructions after pruning dead ALU lanes, preserving END and ARL;
+queued program snapshots distinguish original and remapped variants even
+when the guest program generation is unchanged. This avoids using a remapped
+program for a later generic fragment draw, or the reverse. The demo retains
+its shader policy. No generated source, seed or guest address changed.
+
+Validation repeated: `python tools/check-hlsl.py` passed all 10 entries;
+`cmake --build build/tests/native-gpu --config Release` and
+`ctest --test-dir build/tests/native-gpu -C Release --output-on-failure`
+passed 8/8, including 112 original/trimmed pixel comparisons per GPU backend;
+both `tools/recomp.ps1 -Target <target> -BuildOnly` builds and
+`tools/build-android.ps1` passed. An initial test assertion incorrectly
+assumed R7 was unread for every opcode; it was corrected to require trimming
+when MAC is disabled, and the suite then passed.
+
+## 2026-10-20: retail small vertex interpreter, unused ALU destinations
+
+Runtime program packing now clears writes to the small shader's omitted
+outputs and unread temporary registers. MAC/ILU opcodes with no observable
+destination are disabled. ARL address updates remain, and eliminating a
+paired MAC redirects the surviving ILU to its original implicit R1 destination.
+Selection remains retail-only; demo shader policy is unchanged. No generated
+game source, seed, address, resolution or graphics option changed.
+
+Commands and observations:
+
+- `python tools/check-hlsl.py`: all 10 shader entries compiled.
+- `cmake --build build/tests/native-gpu --config Release` and
+  `ctest --test-dir build/tests/native-gpu -C Release --output-on-failure`:
+  8/8 passed, including 112 generic/remapped vertex-program pixel comparisons
+  per backend (Vulkan and D3D12), mixed input pitches, and a dead MAC paired
+  with a surviving ILU whose destination must remain R1.
+- `tools/recomp.ps1 -Target xbox-demo -BuildOnly` and
+  `tools/recomp.ps1 -Target xbox-retail -BuildOnly`: both built.
+- `tools/build-android.ps1`: release APK built, `bin/reSOT-android.apk`.
+
+Builds required execution outside the sandbox: MSBuild's tracker and Gradle's
+native services were denied inside it. An initial obsolete test build tree
+also referenced the removed `tests/nv2a_vulkan` source directory; the current
+`build/tests/native-gpu` tree was used instead.
+No phone installation or gameplay test was performed. These checks demonstrate
+equivalence for synthetic probes, not a measured Android FPS/power improvement
+or complete game rendering validation.
+
 What was actually run and seen, newest first. Every entry names the command,
 the observation and what was **not** checked. Nothing here has been compared
 against a console or an emulator yet.
 
 Machine for all entries: Windows 11, i7-9700K, Direct3D feature level 11_0,
 MSVC 19.51 (Visual Studio 2026), x64 Release.
+
+## 2026-10-20: Android crash logs, system responsiveness and unmeasured draw optimization
+
+Collected `adb pull /sdcard/Android/data/com.fulger.resot/files/logs
+logs/android-20261020-user` (82 files), `adb logcat -b crash -d -v threadtime`,
+`adb shell dumpsys activity exit-info com.fulger.resot`, `top -H`, `meminfo`
+and `thermalservice`. Original logs are retained locally. The latest recorded
+demo native crash is 2026-10-19 21:48:07: `sub_002EF6CD+0x22C`, guest fault
+VA `0xFFFFFFBE`, `edi=0xFFFFFFB4`, with the DirectSound voice-list service
+on the stack. Earlier logs contain the same fault. Android also records a
+retail low-memory kill at 22:18:42 and a system-loading force-stop at
+22:18:54; those are different failures from the demo SIGSEGV.
+
+Demo logs show guest raises proceeding without the dispatch lock after the
+100-ms timeout. A temporary callback trace (`logs/android-20261020-trace.txt`)
+identifies D3D DPC `0x0029FEE0` on runtime thread 1004 spanning such a timeout
+and subsequently returning. This is not proof of a permanently leaked lock.
+Removed the demo guest-raise timeout bypass: a late callback cannot grant
+another thread permission to mutate protected audio lists. Retail's policy
+is unchanged. Interrupt epilogues also restore saved guest ownership even
+when the callback returns at the same IRQL; demo DPC drains process their
+entry snapshot so newly queued work waits for the next drain.
+
+Added a demo-mode regression to `tests/kernel_irql_abi`: nested interrupt
+ownership and a competing thread holding the dispatch lock for 200 ms.
+The raising thread must wait past the former timeout. Standalone runtime
+CMake now resolves native dependencies/shader tools from the repository,
+so this regression can be configured outside the top-level project.
+
+Android samples initially show several game threads at Linux nice -20.
+Runtime-created workers and the title worker now start at normal priority;
+this does not control priorities later chosen by SDL, GPU drivers or Android.
+Runtime worker IDs are exposed as `resot-<id>` thread names. The mobile frame
+limiter uses nanosleep instead of a polling tail, and both mobile targets use
+16/2-MB vertex/index rings rather than the demo's desktop 64/8-MB reuse ring.
+An explicit event-loop delay was tried and removed: no demonstrated benefit.
+
+The user confirms system UI no longer lags, but reports demo menu 40–57 FPS.
+A one-frame GPU queue was part of that intermediate build; the final
+performance source restores SDL's default two frames in flight to retain
+CPU/GPU overlap. Neither the reported regression nor the responsiveness
+improvement is isolated to one change by a controlled A/B run. A preliminary
+fixed-lock run reached `01_GP01_E3_Long` with 33.7/46.5/40.0-FPS windows and
+no crash in the captured log (`logs/android-20261020-demo-gameplay.txt`).
+This is not a long-playthrough stability guarantee. Thermal conditions were
+not controlled and no temperature reduction is claimed.
+
+At the user's request, stopped phone tests. Subsequent performance changes
+are local only: native vertex-program inputs use 1/2/4/8 float4 slots rather
+than always eight, with 128-byte-aligned mixed-pitch draw/ring offsets.
+The packed program still uses the same input map and fetch_attr conversion;
+inactive shader locations alias slot zero. Two-input vertices therefore use
+32 rather than 128 bytes before inter-draw padding. Viewport/scissor/blend
+commands are skipped when unchanged within a pass. These paths are shared
+by both targets' native encoders; compact inputs are Vulkan-only because
+SDL 3.4.18's D3D12 vertex-view cache does not invalidate pitch on a pipeline
+change. D3D12 retains eight slots. No shader quality option or
+guest code/seeds/address changed. No device result exists for this version.
+
+Checks before the compact-input change: shader compilation, demo IRQL CTest
+(1/1), native GPU CTest (6/6), both Windows `recomp.ps1 -BuildOnly` targets,
+Android build and replacement installs passed. Those GPU tests do not
+validate the subsequent mixed-pitch input change. The final performance APK
+and both Windows targets built successfully with `tools/build-android.ps1`
+and separate `tools/recomp.ps1 -Target xbox-demo -BuildOnly` /
+`tools/recomp.ps1 -Target xbox-retail -BuildOnly` commands. No final APK
+installation or further phone tests were performed. The user confirmed
+reinstalling/clearing app data during this work, explaining the new Android
+UID and absent options/retail folder; old options are backed up locally.
+Copied only retail game files from local Assets for future checks, excluding
+CACHE/TDATA/UDATA. No uninstall or data-clear command was issued by the agent.
+Sustained 60 FPS in either game, broader crash freedom and final input-packing
+appearance/performance remain unverified.
 
 ## 2026-10-19: Android demo optimization parity and device measurements
 

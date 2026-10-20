@@ -2477,7 +2477,18 @@ static int kernel_dispatch_enter(void)
  * stack and TIB that a deferred routine needs, with the dispatch lock held. */
 static void kernel_drain_dpcs(void)
 {
+#if RESOT_RUNTIME_DEMO
+    /* RE-SoT: demo audio can requeue deferred work. Drain only the entry
+     * snapshot so producers cannot monopolize the dispatch lock forever. */
+    LONG remaining;
+    dpc_lock();
+    remaining = (g_dpc_tail - g_dpc_head + XBOX_MAX_PENDING_DPC) % XBOX_MAX_PENDING_DPC;
+    LeaveCriticalSection(&g_dpc_lock);
+#endif
     for (;;) {
+#if RESOT_RUNTIME_DEMO
+        if (remaining-- == 0) break;
+#endif
         PendingDpc d;
         dpc_lock();
         if (g_dpc_head == g_dpc_tail) {

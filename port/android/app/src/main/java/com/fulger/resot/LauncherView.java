@@ -5,37 +5,62 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.LinearGradient;
+import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffXfermode;
 import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.os.SystemClock;
 import android.text.TextUtils;
+import android.view.DisplayCutout;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowInsets;
 
 import java.io.InputStream;
 import java.util.Random;
 
 /**
  * The reSOT title screen, drawn as the Windows launcher draws it
- * (port/windows/src/launcher.c): on a 1000 x 640 plane, night blue with a
- * blue light behind the logo and the title, faint scan lines, a luminous
- * double frame with blue jewels, white-blue lettering on a blue glow in the
- * Atlantis MF face when the build has it (Palatino-like serif otherwise),
- * and drifting golden sand. The plane is scaled to fit the screen and the
- * background continues to its edges.
+ * (port/windows/src/launcher.c), in the style of Ubisoft's Sands of Time
+ * announcement cards: a night-blue ground tiled with faint rosettes and
+ * eight-point stars, soft lights, gold rules across the screen ending in twin
+ * diamonds, cyan twin diamonds beside the headings, gold lettering in the
+ * Atlantis MF face when the build has it (a serif otherwise), buttons as long
+ * hexagonal plates, navy edged in gold and gold when pressed, and drifting
+ * golden sand.
+ *
+ * The layout is launcher.c's 1000 x 640 plane, scaled to the screen's height
+ * (or its width, on a screen narrower than 1000 x 640) and widened to the
+ * screen's shape: the ground, the rules and the footer reach the edges of any
+ * phone, the middle column stays centred, and the footer and the close
+ * button keep clear of a display cutout. Windows has a fixed window, and the
+ * one-pixel gold edge it draws against the desktop is left out here.
  *
  * Keep the two launchers alike: a change of layout, wording or colour here
  * belongs in launcher.c too, and the reverse.
  */
 final class LauncherView extends View {
-    static final int W = 1000, H = 640;
     static final int BTN_DEMO = 0, BTN_GAME = 1, BTN_ISO = 2, BTN_GITHUB = 3, BTN_CLOSE = 4, BTN_CANCEL = 5, BTN_DRIVER = 6, BTN_COUNT = 7;
-    private static final int LOGO_Y = 30, LOGO_SIZE = 178, TITLE_Y = 206, BTN_W = 310, BTN_H = 64, BTN_Y = 382;
-    private static final int N_SAND = 240;
+    // launcher.c's layout, on its 1000 x 640 plane
+    private static final float BASE_W = 1000, BASE_H = 640;
+    private static final float LOGO_Y = 22, LOGO_SIZE = 132, TEAL_X = 150, TITLE_Y = 150, TITLE_H = 84, SUB_Y = 248,
+        BADGE_Y = 266, BADGE_H = 26, HEAD_RULE_Y = 320, HEAD_Y = 336, BTN_W = 300, BTN_H = 56, BTN_GAP = 64,
+        BTN_Y = 368, MESSAGE_Y = 510, BAR_Y = 420, CANCEL_W = 240, CANCEL_Y = 498;
+    private static final String BADGE_TEXT = "RECOMPILED FOR ANDROID";
+    // the ornament of the ground (launcher.c, ornament())
+    private static final float PATTERN = 128, PETAL = 46, PETAL_W = 9, RING = 55, STAR = 19;
+    private static final float[][] BOKEH = {
+        {0.07f, 0.16f, 60}, {0.88f, 0.10f, 80}, {0.95f, 0.44f, 46}, {0.16f, 0.64f, 52},
+        {0.74f, 0.80f, 70}, {0.38f, 0.07f, 40}, {0.64f, 0.30f, 34}, {0.04f, 0.90f, 56},
+    };
+    private static final int GOLD = 0xC8A666, GOLD_LIGHT = 0xF6E2A6, CYAN = 0x50C8FA;
+    private static final int N_SAND = 160;
 
     interface Listener { void onActivate(int button); }
 
@@ -54,12 +79,14 @@ final class LauncherView extends View {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF[] buttons = new RectF[BTN_COUNT];
     private final boolean[] enabled = new boolean[BTN_COUNT];
-    private final Typeface display, serif, sans;
+    private final Typeface display, serifBold, sans, sansBold;
     private final boolean atlantis;
-    private Bitmap logo;
+    private Bitmap logo, ground;
     private final float[][] sand = new float[N_SAND][8]; // x y vx vy size alpha phase glint
     private final Random rng = new Random();
-    private float scale = 1, ox, oy, time;
+    /** The plane: W x H units (W >= 1000 on a wide screen), `scale` pixels each. */
+    private float W = BASE_W, H = BASE_H, top, scale = 1, time;
+    private float insetLeft, insetRight;      // a display cutout, in units
     private long lastTick;
     private int hover = -1, pressed = -1, focus = BTN_DEMO;
 
@@ -69,24 +96,54 @@ final class LauncherView extends View {
         Typeface face = null;
         try { face = Typeface.createFromAsset(context.getAssets(), "AtlantisMF.ttf"); } catch (RuntimeException ignored) {}
         atlantis = face != null;
-        serif = Typeface.create(Typeface.SERIF, Typeface.NORMAL);
+        serifBold = Typeface.create(Typeface.SERIF, Typeface.BOLD);
         sans = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL);
-        display = atlantis ? face : Typeface.create(Typeface.SERIF, Typeface.BOLD);
+        sansBold = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD);
+        display = atlantis ? face : serifBold;
         try (InputStream in = context.getAssets().open("reSOT.png")) {
             logo = BitmapFactory.decodeStream(in);
         } catch (Exception ignored) {}
-        int x0 = (W - 2 * BTN_W - 50) / 2;
-        buttons[BTN_DEMO] = new RectF(x0, BTN_Y, x0 + BTN_W, BTN_Y + BTN_H);
-        buttons[BTN_GAME] = new RectF(x0 + BTN_W + 50, BTN_Y, x0 + 2 * BTN_W + 50, BTN_Y + BTN_H);
-        buttons[BTN_ISO] = new RectF(W - 250, H - 62, W - 40, H - 34);
-        buttons[BTN_GITHUB] = new RectF(40, H - 62, 330, H - 34);
-        buttons[BTN_CLOSE] = new RectF(W - 66, 32, W - 32, 66);
-        buttons[BTN_CANCEL] = new RectF((W - BTN_W) / 2f, 512, (W + BTN_W) / 2f, 512 + BTN_H);
-        buttons[BTN_DRIVER] = new RectF(380,H-62,690,H-34);
+        for (int i = 0; i < BTN_COUNT; i++) buttons[i] = new RectF();
+        layout();
         for (float[] s : sand) spawn(s, true);
         setFocusable(true);
         setFocusableInTouchMode(true);
         lastTick = SystemClock.uptimeMillis();
+    }
+
+    // ── the plane and the layout ─────────────────────────────
+
+    @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        if (w <= 0 || h <= 0) return;
+        scale = Math.min(w / BASE_W, h / BASE_H);
+        W = w / scale;
+        H = h / scale;
+        top = (H - BASE_H) / 2;          // a taller screen: the middle column stays centred
+        layout();
+        for (float[] s : sand) spawn(s, true);
+        buildGround(w, h);
+    }
+
+    @Override public WindowInsets onApplyWindowInsets(WindowInsets insets) {
+        DisplayCutout cutout = insets.getDisplayCutout();
+        insetLeft = cutout != null ? cutout.getSafeInsetLeft() / scale : 0;
+        insetRight = cutout != null ? cutout.getSafeInsetRight() / scale : 0;
+        layout();
+        if (getWidth() > 0 && getHeight() > 0) buildGround(getWidth(), getHeight());
+        invalidate();
+        return super.onApplyWindowInsets(insets);
+    }
+
+    private void layout() {
+        float cx = W / 2, x0 = cx - BTN_W - BTN_GAP / 2, left = 40 + insetLeft, right = W - 40 - insetRight;
+        buttons[BTN_DEMO].set(x0, top + BTN_Y, x0 + BTN_W, top + BTN_Y + BTN_H);
+        buttons[BTN_GAME].set(cx + BTN_GAP / 2, top + BTN_Y, cx + BTN_GAP / 2 + BTN_W, top + BTN_Y + BTN_H);
+        buttons[BTN_ISO].set(right - 210, H - 62, right, H - 34);
+        buttons[BTN_GITHUB].set(left, H - 62, left + 290, H - 34);
+        buttons[BTN_DRIVER].set(cx - 120, H - 62, cx + 120, H - 34);
+        buttons[BTN_CLOSE].set(W - 58 - insetRight, 18, W - 24 - insetRight, 52);
+        buttons[BTN_CANCEL].set(cx - CANCEL_W / 2, top + CANCEL_Y, cx + CANCEL_W / 2, top + CANCEL_Y + BTN_H);
     }
 
     // ── state ────────────────────────────────────────────────
@@ -118,7 +175,7 @@ final class LauncherView extends View {
         s[3] = glint ? frand(-14, -4) : frand(14, 42);
         if (glint && !anywhere) s[1] = frand(H * 0.5f, H);
         s[4] = glint ? frand(1.4f, 2.6f) : frand(0.7f, 1.8f);
-        s[5] = glint ? frand(0.6f, 1) : frand(0.45f, 1);
+        s[5] = glint ? frand(0.5f, 0.9f) : frand(0.3f, 0.8f);
         s[6] = frand(0, 6.283f);
     }
 
@@ -130,84 +187,275 @@ final class LauncherView extends View {
         }
     }
 
-    // ── drawing ──────────────────────────────────────────────
+    // ── drawing helpers ──────────────────────────────────────
 
-    private void glowLine(Canvas c, float x0, float y0, float x1, float y1, int color, float alpha) {
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setShader(null);
-        for (int d = 4; d >= 1; d--) {
-            paint.setStrokeWidth(1 + 2 * d);
-            paint.setColor(withAlpha(color, alpha * 0.08f * (5 - d)));
-            c.drawLine(x0, y0, x1, y1, paint);
-        }
-        paint.setStrokeWidth(1.4f);
-        paint.setColor(withAlpha(color, alpha));
-        c.drawLine(x0, y0, x1, y1, paint);
-    }
-
-    private static int withAlpha(int rgb, float a) {
+    private static int argb(int rgb, float a) {
         int alpha = Math.max(0, Math.min(255, Math.round(a * 255)));
         return alpha << 24 | (rgb & 0xFFFFFF);
     }
 
-    private void diamond(Canvas c, float cx, float cy, float s, int color) {
-        android.graphics.Path p = new android.graphics.Path();
+    private void line(Canvas c, float x0, float y0, float x1, float y1, float width, int rgb, float a) {
+        paint.setShader(null);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(width);
+        paint.setColor(argb(rgb, a));
+        c.drawLine(x0, y0, x1, y1, paint);
+    }
+
+    private void diamond(Canvas c, float cx, float cy, float s, int rgb, float a) {
+        Path p = new Path();
         p.moveTo(cx, cy - s); p.lineTo(cx + s, cy); p.lineTo(cx, cy + s); p.lineTo(cx - s, cy); p.close();
+        paint.setShader(null);
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(color);
+        paint.setColor(argb(rgb, a));
         c.drawPath(p, paint);
     }
 
+    /** A soft dot of light: sand grains, highlights and the lights of the ground. */
     private void glowDot(Canvas c, float x, float y, float r, int rgb, float a) {
         if (r <= 0) return;
         paint.setStyle(Paint.Style.FILL);
-        paint.setShader(new RadialGradient(x, y, r, withAlpha(rgb, a), rgb & 0xFFFFFF, Shader.TileMode.CLAMP));
+        paint.setShader(new RadialGradient(x, y, r, new int[] { argb(rgb, a), argb(rgb, a * 0.25f), argb(rgb, 0) },
+                                           new float[] { 0, 0.5f, 1 }, Shader.TileMode.CLAMP));
         c.drawCircle(x, y, r, paint);
         paint.setShader(null);
     }
 
-    /** A blue jewel: the ornament of the frame and the dividers. */
-    private void jewel(Canvas c, float cx, float cy, float s) {
-        diamond(c, cx, cy, s + 2, 0xFF040A18);
-        diamond(c, cx, cy, s, 0xFF5AAAFF);
-        diamond(c, cx, cy, s / 2, 0xFFE6F5FF);
-        glowDot(c, cx, cy, s * 2.6f, 0x3C8CFF, 0.55f);
+    /** Two small diamonds side by side, from x rightwards: gold on the rules, cyan beside a heading. */
+    private void twin(Canvas c, float x, float y, float s, boolean cyan) {
+        for (int k = 0; k < 2; k++) {
+            float cx = x + k * (2 * s + 3);
+            if (cyan) {
+                glowDot(c, cx, y, s * 2.6f, 0x1E78C8, 0.45f);
+                diamond(c, cx, y, s, CYAN, 1);
+                diamond(c, cx, y, s * 0.45f, 0xD2F4FF, 1);
+            } else {
+                diamond(c, cx, y, s + 1, 0x281E0E, 0.8f);
+                diamond(c, cx, y, s, 0xDEBE7C, 1);
+            }
+        }
     }
 
-    private void background(Canvas c, int width, int height) {
-        // night blue, brightest a little above the middle, as build_background()
+    /** A gold rule across the whole screen, engraved: a dark line under it. */
+    private void goldRule(Canvas c, float y) {
+        paint.setShader(null);
         paint.setStyle(Paint.Style.FILL);
-        paint.setShader(new LinearGradient(0, 0, 0, height,
-            new int[] { 0xFF060B1C, 0xFF081128, 0xFF050A18 }, new float[] { 0, 0.45f, 1 }, Shader.TileMode.CLAMP));
-        c.drawRect(0, 0, width, height, paint);
+        paint.setColor(argb(GOLD, 0.8f)); c.drawRect(0, y, W, y + 1, paint);
+        paint.setColor(argb(0x040810, 0.6f)); c.drawRect(0, y + 1, W, y + 2, paint);
+    }
+
+    /** The plate of a button or a badge: a long hexagon with ends `tip` deep. */
+    private static Path plate(float x, float y, float w, float h, float tip) {
+        Path p = new Path();
+        float cy = y + h / 2;
+        p.moveTo(x, cy); p.lineTo(x + tip, y); p.lineTo(x + w - tip, y); p.lineTo(x + w, cy);
+        p.lineTo(x + w - tip, y + h); p.lineTo(x + tip, y + h); p.close();
+        return p;
+    }
+
+    private void plateFill(Canvas c, float x, float y, float w, float h, float tip, int top, int bottom, float a) {
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(0xFF000000);
+        paint.setAlpha(Math.round(a * 255));
+        paint.setShader(new LinearGradient(0, y, 0, y + h, top | 0xFF000000, bottom | 0xFF000000, Shader.TileMode.CLAMP));
+        c.drawPath(plate(x, y, w, h, tip), paint);
+        paint.setShader(null);
+        paint.setAlpha(255);
+    }
+
+    private void plateEdge(Canvas c, float x, float y, float w, float h, float tip, float width, int rgb, float a) {
+        paint.setShader(null);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(width);
+        paint.setStrokeJoin(Paint.Join.MITER);
+        paint.setColor(argb(rgb, a));
+        c.drawPath(plate(x + 0.5f, y + 0.5f, w - 1, h - 1, tip), paint);
+    }
+
+    /** Lettering coloured from `topColor` to `bottomColor` over the box [y0, y1],
+     *  centred on (cx, cy), over a warm glow `halo` (0: none), with a dark copy
+     *  `shadow` units below it; `shine` adds a light passing across. */
+    private void glowText(Canvas c, String text, float cx, float cy, Typeface face, float size, float y0, float y1,
+                          float halo, int topColor, int bottomColor, float shadow, boolean shine) {
+        paint.setTypeface(face);
+        paint.setTextSize(size);
+        paint.setLetterSpacing(0);
+        paint.setTextAlign(Paint.Align.CENTER);
+        paint.setStyle(Paint.Style.FILL);
+        Paint.FontMetrics fm = paint.getFontMetrics();
+        float base = cy - (fm.ascent + fm.descent) / 2;
+        if (halo > 0) {
+            paint.setColor(argb(0xFFBE5A, 0.35f * halo));
+            paint.setShadowLayer(size * 0.16f, 0, 0, argb(0xFFBE5A, Math.min(1f, 0.6f * halo)));
+            c.drawText(text, cx, base, paint);
+            paint.clearShadowLayer();
+        }
+        if (shadow > 0) {
+            paint.setColor(argb(0x02050C, 0.75f));
+            c.drawText(text, cx, base + shadow, paint);
+        }
+        paint.setColor(0xFFFFFFFF);
+        paint.setShader(new LinearGradient(0, y0, 0, y1, topColor, bottomColor, Shader.TileMode.CLAMP));
+        c.drawText(text, cx, base, paint);
+        if (shine) {
+            // launcher.c: |x - sweep - 0.6 (y - y0)| < 50 on a 1000-unit box,
+            // the sweep running at 140 units a second; the gradient runs 60
+            // units either side of the band's middle, across it
+            float sweep = cx - BASE_W / 2 + (time * 140f) % (BASE_W * 2.4f) - BASE_W * 0.7f;
+            float k = 1 / (float) Math.sqrt(1.36f), half = 50 * k;
+            int glare = 0xFFFFF8DE;
+            paint.setShader(new LinearGradient(sweep - 60 * k, y0 + 36 * k, sweep + 60 * k, y0 - 36 * k,
+                new int[] { 0, 0, glare, glare, 0, 0 },
+                new float[] { 0, 0.5f - half / 120 - 0.005f, 0.5f - half / 120, 0.5f + half / 120, 0.5f + half / 120 + 0.005f, 1 },
+                Shader.TileMode.CLAMP));
+            c.drawText(text, cx, base, paint);
+        }
         paint.setShader(null);
     }
 
-    private void frame(Canvas c) {
-        // blue light behind the logo and a band behind the title
-        glowDot(c, W / 2f, 125, 330, 0x1446A0, 0.55f);
-        paint.setStyle(Paint.Style.FILL);
-        paint.setShader(new RadialGradient(W / 2f, 255, 520, 0x2C0A2A5A, 0x000A2A5A, Shader.TileMode.CLAMP));
-        c.save(); c.scale(1, 60f / 520f, W / 2f, 255);
-        c.drawCircle(W / 2f, 255, 520, paint);
-        c.restore();
+    private void text(Canvas c, String text, float x, float y, float w, Typeface face, float size, int color,
+                      Paint.Align align) {
+        paint.setTypeface(face);
+        paint.setTextSize(size);
+        paint.setLetterSpacing(0);
+        paint.setColor(color);
         paint.setShader(null);
-        // scan lines
-        paint.setColor(0x14000000);
-        for (int y = 0; y < H; y += 3) c.drawRect(0, y, W, y + 1, paint);
-        // luminous double frame with jewels
-        paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1);
-        paint.setColor(withAlpha(0x285096, 0.7f)); c.drawRect(9, 9, W - 9, H - 9, paint);
-        glowLine(c, 16, 16, W - 16, 16, 0x50A0FF, 0.9f);
-        glowLine(c, 16, H - 17, W - 16, H - 17, 0x50A0FF, 0.9f);
-        glowLine(c, 16, 16, 16, H - 16, 0x50A0FF, 0.9f);
-        glowLine(c, W - 17, 16, W - 17, H - 16, 0x50A0FF, 0.9f);
-        paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1);
-        paint.setColor(withAlpha(0x1E468C, 0.6f)); c.drawRect(22, 22, W - 22, H - 22, paint);
-        jewel(c, 16, 16, 7); jewel(c, W - 17, 16, 7);
-        jewel(c, 16, H - 17, 7); jewel(c, W - 17, H - 17, 7);
-        jewel(c, W / 2f, 16, 5); jewel(c, W / 2f, H - 17, 5);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setTextAlign(align);
+        CharSequence fit = TextUtils.ellipsize(text, new android.text.TextPaint(paint), w,
+                                               align == Paint.Align.CENTER ? TextUtils.TruncateAt.MIDDLE : TextUtils.TruncateAt.END);
+        float x0 = align == Paint.Align.CENTER ? x + w / 2 : align == Paint.Align.RIGHT ? x + w : x;
+        Paint.FontMetrics fm = paint.getFontMetrics();
+        c.drawText(fit.toString(), x0, y - (fm.ascent + fm.descent) / 2, paint);
     }
+
+    /** Spaced capitals, centred on (cx, cy); returns their width. */
+    private float caps(Canvas c, String text, float cx, float cy, Typeface face, float size, float spacing, int color) {
+        paint.setTypeface(face);
+        paint.setTextSize(size);
+        paint.setLetterSpacing(spacing / size);
+        paint.setColor(color);
+        paint.setShader(null);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setTextAlign(Paint.Align.CENTER);
+        Paint.FontMetrics fm = paint.getFontMetrics();
+        float w = paint.measureText(text);
+        if (c != null) c.drawText(text, cx, cy - (fm.ascent + fm.descent) / 2, paint);
+        paint.setLetterSpacing(0);
+        return w;
+    }
+
+    // ── the ground, drawn once per size ──────────────────────
+
+    /** launcher.c's ornament(): a rosette of eight petals on each lattice
+     *  point, a ring round it, an eight-point star between four of them. */
+    private void ornament(Canvas c, float cx, float cy) {
+        Path petals = new Path();
+        for (int k = 0; k < 8; k++) {
+            Path p = new Path();
+            p.moveTo(0, 0);
+            p.quadTo(PETAL / 2, 2 * PETAL_W, PETAL, 0);
+            p.quadTo(PETAL / 2, -2 * PETAL_W, 0, 0);
+            p.close();
+            Matrix m = new Matrix();
+            m.setRotate(k * 45);
+            p.transform(m);
+            petals.addPath(p);
+        }
+        Path square = new Path(), octagon = new Path();
+        square.addRect(-STAR, -STAR, STAR, STAR, Path.Direction.CW);
+        Path turned = new Path(square);
+        Matrix m45 = new Matrix();
+        m45.setRotate(45);
+        turned.transform(m45);
+        float far = STAR / (float) Math.cos(Math.PI / 8);
+        for (int k = 0; k < 8; k++) {
+            double a = Math.PI / 8 + k * Math.PI / 4;
+            float x = far * (float) Math.cos(a), y = far * (float) Math.sin(a);
+            if (k == 0) octagon.moveTo(x, y); else octagon.lineTo(x, y);
+        }
+        octagon.close();
+
+        int nx = (int) Math.ceil(W / 2 / PATTERN) + 1, ny = (int) Math.ceil(H / 2 / PATTERN) + 1;
+        Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG), linePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        fillPaint.setStyle(Paint.Style.FILL);
+        linePaint.setStyle(Paint.Style.STROKE);
+        linePaint.setStrokeWidth(1.6f);
+        for (int j = -ny; j <= ny; j++)
+            for (int i = -nx; i <= nx; i++) {
+                float x = cx + i * PATTERN, y = cy + j * PATTERN;
+                c.save(); c.translate(x, y);
+                fillPaint.setColor(argb(0x1E3E6E, 0.3f));
+                c.drawPath(petals, fillPaint);
+                linePaint.setColor(argb(0x4068A0, 0.55f));
+                c.drawPath(petals, linePaint);
+                c.drawCircle(0, 0, 5, linePaint);
+                linePaint.setColor(argb(0x4068A0, 0.33f));
+                c.drawCircle(0, 0, RING, linePaint);
+                c.restore();
+                c.save(); c.translate(x + PATTERN / 2, y + PATTERN / 2);
+                fillPaint.setColor(argb(0x1E3E6E, 0.18f));
+                c.drawPath(octagon, fillPaint);
+                linePaint.setColor(argb(0x4068A0, 0.55f));
+                c.drawPath(square, linePaint);
+                c.drawPath(turned, linePaint);
+                c.restore();
+            }
+    }
+
+    /** The static picture, as launcher.c's build_background(): the ground,
+     *  its ornament (faint in the middle, stronger towards the edges), a
+     *  vignette, soft lights, the teal diamonds beside the logo and the two
+     *  gold rules. */
+    private void buildGround(int w, int h) {
+        if (ground == null || ground.getWidth() != w || ground.getHeight() != h) {
+            if (ground != null) ground.recycle();
+            ground = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        }
+        Canvas c = new Canvas(ground);
+        c.scale(scale, scale);
+        float cx = W / 2;
+        paint.setStyle(Paint.Style.FILL);
+        paint.setShader(new LinearGradient(0, 0, 0, H, new int[] { 0xFF070F1E, 0xFF102444, 0xFF070F1E },
+                                           new float[] { 0, 0.45f, 1 }, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, W, H, paint);
+        paint.setShader(null);
+
+        // the ornament, weighted by 0.25 + 0.75 e (e: the squared distance on
+        // an ellipse of 0.55 W by 0.7 H round the middle)
+        Matrix ellipse = new Matrix();
+        ellipse.setScale(0.55f * W, 0.7f * H);
+        ellipse.postTranslate(cx, H * 0.45f);
+        int layer = c.saveLayer(0, 0, W, H, null);
+        ornament(c, cx, H / 2);
+        Paint mask = new Paint();
+        mask.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_IN));
+        RadialGradient weight = new RadialGradient(0, 0, 1,
+            new int[] { argb(0, 0.25f), argb(0, 0.297f), argb(0, 0.437f), argb(0, 0.672f), argb(0, 1) },
+            new float[] { 0, 0.25f, 0.5f, 0.75f, 1 }, Shader.TileMode.CLAMP);
+        weight.setLocalMatrix(ellipse);
+        mask.setShader(weight);
+        c.drawRect(0, 0, W, H, mask);
+        c.restoreToCount(layer);
+
+        // the vignette: darker from 0.7 to 1.4 of that ellipse
+        Paint vignette = new Paint();
+        RadialGradient dark = new RadialGradient(0, 0, 1.4f, new int[] { 0, 0, argb(0, 0.45f) },
+                                                 new float[] { 0, 0.5f, 1 }, Shader.TileMode.CLAMP);
+        dark.setLocalMatrix(ellipse);
+        vignette.setShader(dark);
+        c.drawRect(0, 0, W, H, vignette);
+
+        for (float[] b : BOKEH) glowDot(c, b[0] * W, b[1] * H, b[2], 0x4678BE, 0.12f);
+        diamond(c, cx - TEAL_X, top + LOGO_Y + LOGO_SIZE / 2, 24, 0x2896BE, 0.22f);
+        diamond(c, cx - TEAL_X + 38, top + LOGO_Y + LOGO_SIZE / 2, 24, 0x3CAAD2, 0.22f);
+        goldRule(c, top + HEAD_RULE_Y);
+        goldRule(c, H - 80);
+        twin(c, 40 + insetLeft, top + HEAD_RULE_Y + 0.5f, 4, false);
+        twin(c, W - 51 - insetRight, H - 80 + 0.5f, 4, false);
+    }
+
+    // ── the screen ───────────────────────────────────────────
 
     private void drawSand(Canvas c) {
         for (float[] s : sand) {
@@ -218,82 +466,49 @@ final class LauncherView extends View {
         }
     }
 
-    /** White-blue lettering, lighter at the top, on a blue glow. */
-    private void glowText(Canvas c, String text, float cx, float cy, Typeface face, float size, float halo,
-                          int top, int bottom, boolean on) {
-        paint.setTypeface(face);
-        paint.setTextSize(size);
-        paint.setTextAlign(Paint.Align.CENTER);
-        paint.setStyle(Paint.Style.FILL);
-        Paint.FontMetrics fm = paint.getFontMetrics();
-        float base = cy - (fm.ascent + fm.descent) / 2;
-        if (halo > 0) {
-            paint.setColor(0xFF2878FF);
-            paint.setShadowLayer(size * 0.18f * halo, 0, 0, withAlpha(0x2878FF, Math.min(1f, 0.55f * halo)));
-            c.drawText(text, cx, base, paint);
-            paint.clearShadowLayer();
-        }
-        paint.setShader(new LinearGradient(0, base + fm.ascent, 0, base + fm.descent, top, bottom, Shader.TileMode.CLAMP));
-        c.drawText(text, cx, base, paint);
-        paint.setShader(null);
-    }
-
-    private void text(Canvas c, String text, float x, float y, float w, Typeface face, float size, int color,
-                      Paint.Align align, boolean italic) {
-        paint.setTypeface(italic ? Typeface.create(face, Typeface.ITALIC) : face);
-        paint.setTextSize(size);
-        paint.setColor(color);
-        paint.setStyle(Paint.Style.FILL);
-        paint.setTextAlign(align);
-        CharSequence fit = TextUtils.ellipsize(text, new android.text.TextPaint(paint), w, TextUtils.TruncateAt.END);
-        float x0 = align == Paint.Align.CENTER ? x + w / 2 : align == Paint.Align.RIGHT ? x + w : x;
-        Paint.FontMetrics fm = paint.getFontMetrics();
-        c.drawText(fit.toString(), x0, y - (fm.ascent + fm.descent) / 2, paint);
-    }
-
-    private void divider(Canvas c, float cx, float y, float half) {
-        glowLine(c, cx - half, y, cx + half, y, 0x5AAAFF, 0.9f);
-        jewel(c, cx, y, 5); jewel(c, cx - half / 2, y, 3); jewel(c, cx + half / 2, y, 3);
-    }
-
+    /** A button: a navy plate edged in gold with gold lettering; pressed, a
+     *  gold plate with navy lettering. */
     private void button(Canvas c, int id, String label) {
         RectF r = buttons[id];
+        float w = r.width(), h = r.height(), tip = h * 0.32f, size = atlantis ? 28 : 24;
         boolean on = enabled[id], hot = on && (hover == id || pressed == id), focused = on && focus == id;
-        paint.setStyle(Paint.Style.FILL);
-        paint.setShader(on
-            ? new LinearGradient(0, r.top, 0, r.bottom, hot ? 0xEB143878 : 0xE00A1A3C, hot ? 0xEB0A1E46 : 0xE0060E22, Shader.TileMode.CLAMP)
-            : null);
-        if (!on) paint.setColor(0xCC080C16);
-        c.drawRect(r, paint);
-        paint.setShader(null);
-        if (on) {
-            boolean lit = hot || focused;
-            glowLine(c, r.left, r.top, r.right, r.top, lit ? 0xAAD7FF : 0x50A0FF, 1);
-            glowLine(c, r.left, r.bottom - 1, r.right, r.bottom - 1, lit ? 0xAAD7FF : 0x50A0FF, 1);
-            paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1);
-            paint.setColor(lit ? 0xE696CDFF : 0xE63C82FF); c.drawRect(r, paint);
-            paint.setColor(0xB3285AB4); c.drawRect(r.left + 5, r.top + 5, r.right - 5, r.bottom - 5, paint);
-            jewel(c, r.left, r.centerY(), 6); jewel(c, r.right - 1, r.centerY(), 6);
-            if (hot) glowDot(c, r.centerX(), r.centerY(), r.width() * 0.5f, 0x1E50C8, 0.35f);
-            glowText(c, label, r.centerX(), r.centerY(), display, atlantis ? 32 : 28, hot ? 2.2f : 1.3f,
-                     0xFFFFFFFF, 0xFFAAD2FF, true);
-        } else {
-            paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1);
-            paint.setColor(0xB332405C); c.drawRect(r, paint);
-            glowText(c, label, r.centerX(), r.centerY(), display, atlantis ? 32 : 28, 0, 0xFF606E8A, 0xFF46526C, false);
+        if (!on) {
+            plateFill(c, r.left, r.top, w, h, tip, 0x0C1424, 0x080E1A, 0.85f);
+            plateEdge(c, r.left, r.top, w, h, tip, 1, 0x46526A, 0.8f);
+            glowText(c, label, r.centerX(), r.centerY(), display, size, r.top, r.bottom, 0, 0xFF647088, 0xFF4A546A, 0, false);
+            return;
         }
+        if (focused && !hot) glowDot(c, r.centerX(), r.centerY(), w * 0.55f, 0x6E501E, 0.35f);
+        plateFill(c, r.left, r.top, w, h, tip, hot ? 0xFAE8B0 : 0x122646, hot ? 0xB0843E : 0x091428, hot ? 1 : 0.92f);
+        plateEdge(c, r.left, r.top, w, h, tip, 1.3f, hot || focused ? 0xFFEEBE : 0xCEAA68, 1);
+        plateEdge(c, r.left + 4, r.top + 4, w - 8, h - 8, tip - 1.6f, 1, hot ? 0x785824 : 0x967642, hot ? 0.8f : 0.7f);
+        if (hot) glowText(c, label, r.centerX(), r.centerY(), display, size, r.top, r.bottom, 0, 0xFF162440, 0xFF0A1428, 0, false);
+        else glowText(c, label, r.centerX(), r.centerY(), display, size, r.top, r.bottom, focused ? 0.9f : 0.4f,
+                      0xFFFCEEC4, 0xFFD2A860, 2, false);
     }
 
     /** What one button would start, under it. */
     private void installText(Canvas c, int kind, RectF b) {
         float x = b.left - 20, w = b.width() + 40;
         if (!state.installed[kind]) {
-            text(c, "Not installed", x, b.bottom + 24, w, serif, 20, 0xFF60708C, Paint.Align.CENTER, false);
+            text(c, "Not installed", x, b.bottom + 24, w, sans, 18, 0xFF7886A0, Paint.Align.CENTER);
             return;
         }
-        text(c, state.line[kind], x, b.bottom + 24, w, serif, 20, state.exact[kind] ? 0xFFD6E8FF : 0xFFFFC878,
-             Paint.Align.CENTER, false);
-        text(c, state.dir[kind], x, b.bottom + 47, w, sans, 13, 0xFF6E8CB8, Paint.Align.CENTER, false);
+        text(c, state.line[kind], x, b.bottom + 24, w, sans, 18, state.exact[kind] ? 0xFFECF0F8 : 0xFFFFC878,
+             Paint.Align.CENTER);
+        text(c, state.dir[kind], x, b.bottom + 47, w, sans, 14, 0xFF8296B6, Paint.Align.CENTER);
+    }
+
+    /** A link of the footer: light text, gold with a gold line under it when chosen. */
+    private void link(Canvas c, int id, String label, Paint.Align align, float underline) {
+        RectF r = buttons[id];
+        boolean lit = hover == id || focus == id;
+        text(c, label, r.left, r.centerY(), r.width(), sans, 14, lit ? argb(GOLD_LIGHT, 1) : 0xFFC4D0E4, align);
+        if (lit) {
+            float x = align == Paint.Align.RIGHT ? r.right - underline : align == Paint.Align.CENTER
+                    ? r.centerX() - underline / 2 : r.left + 20;
+            line(c, x, r.bottom - 2.5f, x + underline, r.bottom - 2.5f, 1, GOLD, 0.9f);
+        }
     }
 
     @Override protected void onDraw(Canvas canvas) {
@@ -303,72 +518,78 @@ final class LauncherView extends View {
         time += dt;
         step(dt);
 
-        int width = getWidth(), height = getHeight();
-        scale = Math.min(width / (float) W, height / (float) H);
-        ox = (width - W * scale) / 2; oy = (height - H * scale) / 2;
-        background(canvas, width, height);
+        if (ground == null) buildGround(getWidth(), getHeight());
+        canvas.drawBitmap(ground, 0, 0, null);
         canvas.save();
-        canvas.translate(ox, oy);
         canvas.scale(scale, scale);
-        frame(canvas);
+        float cx = W / 2;
         drawSand(canvas);
         if (logo != null) {
             float lw = LOGO_SIZE * logo.getWidth() / (float) logo.getHeight();
             paint.setFilterBitmap(true);
-            canvas.drawBitmap(logo, null, new RectF((W - lw) / 2, LOGO_Y, (W + lw) / 2, LOGO_Y + LOGO_SIZE), paint);
+            canvas.drawBitmap(logo, null, new RectF(cx - lw / 2, top + LOGO_Y, cx + lw / 2, top + LOGO_Y + LOGO_SIZE), paint);
         }
-        glowText(canvas, "Prince of Persia", W / 2f, TITLE_Y + 48, display, atlantis ? 72 : 60,
-                 1.9f + 0.25f * (float) Math.sin(time * 1.6f), 0xFFFFFFFF, 0xFF96C8FF, true);
-        text(canvas, "The Sands of Time  •  Xbox, recompiled for Android", 0, 317, W, serif, 21,
-             0xFFB0CEF5, Paint.Align.CENTER, true);
-        divider(canvas, W / 2f, 344, 240);
+        glowText(canvas, "Prince of Persia", cx, top + TITLE_Y + TITLE_H / 2, display, atlantis ? 66 : 56,
+                 top + TITLE_Y, top + TITLE_Y + TITLE_H, 0.55f, 0xFFFFF2C8, 0xFFB8883C, 3, true);
+
+        // THE SANDS OF TIME between two gold lines ending in open diamonds
+        float sub = top + SUB_Y + 0.5f;
+        float half = caps(canvas, "THE SANDS OF TIME", cx, sub, serifBold, 20, 4, 0xFFECD8A4) / 2 + 18;
+        line(canvas, cx - half - 130, sub, cx - half, sub, 1, GOLD, 0.9f);
+        line(canvas, cx + half, sub, cx + half + 130, sub, 1, GOLD, 0.9f);
+        for (int i = -1; i <= 1; i += 2) {
+            diamond(canvas, cx + i * (half + 136), sub, 5, GOLD, 1);
+            diamond(canvas, cx + i * (half + 136), sub, 3, 0x0C1A32, 1);
+        }
+        // the badge
+        float bw = caps(null, BADGE_TEXT, 0, 0, serifBold, 14, 2, 0) + 48, bx = cx - bw / 2, by = top + BADGE_Y;
+        plateFill(canvas, bx, by, bw, BADGE_H, 9, 0xFAE8B0, 0xB0843E, 1);
+        plateEdge(canvas, bx, by, bw, BADGE_H, 9, 1, 0xFFF0C4, 1);
+        plateEdge(canvas, bx + 3, by + 3, bw - 6, BADGE_H - 6, 7.6f, 1, 0x785824, 0.8f);
+        caps(canvas, BADGE_TEXT, cx, by + BADGE_H / 2, serifBold, 14, 2, 0xFF161E32);
 
         if (state.extracting) {
             float f = state.total > 0 ? Math.min(1f, (float) ((double) state.done / state.total)) : 0;
-            float bx = 200, by = 432, bw = W - 400, bh = 18, fill = bw * f;
+            float bx0 = cx - (BASE_W - 400) / 2, by0 = top + BAR_Y, bw0 = BASE_W - 400, bh = 16, fill = bw0 * f;
             paint.setStyle(Paint.Style.FILL); paint.setShader(null);
-            paint.setColor(0xE6040A18); canvas.drawRect(bx, by, bx + bw, by + bh, paint);
-            paint.setShader(new LinearGradient(0, by, 0, by + bh, 0xFFFFD682, 0xFFD78628, Shader.TileMode.CLAMP));
-            canvas.drawRect(bx, by, bx + fill, by + bh, paint);
+            paint.setColor(0xE6060C1A); canvas.drawRect(bx0, by0, bx0 + bw0, by0 + bh, paint);
+            paint.setShader(new LinearGradient(0, by0, 0, by0 + bh, 0xFFF8E2A0, 0xFFBC8C3C, Shader.TileMode.CLAMP));
+            canvas.drawRect(bx0, by0, bx0 + fill, by0 + bh, paint);
             paint.setShader(null);
             for (int i = 0; fill > 8 && i < 18; i++)
-                glowDot(canvas, bx + (time * 90 + i * 53) % fill, by + 4 + (i * 7) % (bh - 8), 1.7f, 0xFFF0BE, 0.7f);
-            glowLine(canvas, bx - 3, by - 3, bx + bw + 3, by - 3, 0x50A0FF, 1);
-            glowLine(canvas, bx - 3, by + bh + 2, bx + bw + 3, by + bh + 2, 0x50A0FF, 1);
-            jewel(canvas, bx - 3, by + bh / 2, 5); jewel(canvas, bx + bw + 2, by + bh / 2, 5);
-            text(canvas, "Installing  •  " + state.isoName, 60, 399, W - 120, serif, 20, 0xFFE1EEFF, Paint.Align.CENTER, false);
+                glowDot(canvas, bx0 + (time * 90 + i * 53) % fill, by0 + 4 + (i * 7) % (bh - 8), 1.7f, 0xFFFADC, 0.7f);
+            line(canvas, bx0 - 3.5f, by0 - 2.5f, bx0 + bw0 + 2.5f, by0 - 2.5f, 1, GOLD, 1);
+            line(canvas, bx0 - 3.5f, by0 + bh + 2.5f, bx0 + bw0 + 2.5f, by0 + bh + 2.5f, 1, GOLD, 1);
+            diamond(canvas, bx0 - 6, by0 + bh / 2, 5, 0xDEBE7C, 1);
+            diamond(canvas, bx0 + bw0 + 5, by0 + bh / 2, 5, 0xDEBE7C, 1);
+            text(canvas, "Installing  •  " + state.isoName, cx - BASE_W / 2 + 60, by0 - 29, BASE_W - 120, sans, 18,
+                 0xFFECF0F8, Paint.Align.CENTER);
             text(canvas, state.total > 0
                     ? String.format(java.util.Locale.US, "%.0f%%  •  %.1f of %.1f MB", 100.0 * state.done / state.total,
                                     state.done / 1048576.0, state.total / 1048576.0)
                     : "Reading the disc's file table…",
-                 0, 468, W, sans, 14, 0xFFB4CDF0, Paint.Align.CENTER, false);
-            text(canvas, state.status, 120, 487, W - 240, sans, 13, 0xFF6E8CB8, Paint.Align.CENTER, false);
+                 cx - BASE_W / 2, by0 + 36, BASE_W, sans, 14, argb(GOLD_LIGHT, 1), Paint.Align.CENTER);
+            text(canvas, state.status, cx - BASE_W / 2 + 120, by0 + 55, BASE_W - 240, sans, 14, 0xFF8296B6, Paint.Align.CENTER);
             button(canvas, BTN_CANCEL, "Cancel");
         } else {
-            text(canvas, "INSTALLED GAMES", 0, 365, W, Typeface.create(sans, Typeface.BOLD), 13, 0xFF6EA5F0,
-                 Paint.Align.CENTER, false);
+            float head = top + HEAD_Y + 9;
+            half = caps(canvas, "INSTALLED GAMES", cx, head, sansBold, 13, 3, 0xFFECD8A4) / 2 + 16;
+            twin(canvas, cx - half - 17, head, 4, true);
+            twin(canvas, cx + half, head, 4, true);
             button(canvas, BTN_DEMO, "Start Demo");
             button(canvas, BTN_GAME, "Start Game");
             installText(canvas, 0, buttons[BTN_DEMO]);
             installText(canvas, 1, buttons[BTN_GAME]);
             String message = !state.error.isEmpty() ? state.error : state.note;
             if (!message.isEmpty())
-                text(canvas, message, 60, 538, W - 120, sans, 14, !state.error.isEmpty() ? 0xFFFF826E : 0xFFFFC878,
-                     Paint.Align.CENTER, false);
-            boolean gh = hover == BTN_GITHUB || focus == BTN_GITHUB, iso = hover == BTN_ISO || focus == BTN_ISO;
-            text(canvas, "★  github.com/FulGerNet/rePOP", buttons[BTN_GITHUB].left, buttons[BTN_GITHUB].centerY(),
-                 290, sans, 14, gh ? 0xFFEBF5FF : 0xFF8CB9F5, Paint.Align.LEFT, false);
-            text(canvas, "Install from ISO…  ▸", buttons[BTN_ISO].left, buttons[BTN_ISO].centerY(),
-                 210, sans, 14, iso ? 0xFFEBF5FF : 0xFF8CB9F5, Paint.Align.RIGHT, false);
-            text(canvas,"GPU driver…",buttons[BTN_DRIVER].centerX(),buttons[BTN_DRIVER].centerY(),310,sans,14,
-                 hover==BTN_DRIVER||focus==BTN_DRIVER?0xFFEBF5FF:0xFF6EA5F0,Paint.Align.CENTER,false);
-            if (gh) glowLine(canvas, buttons[BTN_GITHUB].left + 20, buttons[BTN_GITHUB].bottom - 3,
-                             buttons[BTN_GITHUB].left + 220, buttons[BTN_GITHUB].bottom - 3, 0x78BEFF, 0.8f);
-            if (iso) glowLine(canvas, buttons[BTN_ISO].left + 60, buttons[BTN_ISO].bottom - 3,
-                              buttons[BTN_ISO].left + 210, buttons[BTN_ISO].bottom - 3, 0x78BEFF, 0.8f);
+                text(canvas, message, 60 + insetLeft, top + MESSAGE_Y + 10, W - 120 - insetLeft - insetRight, sans, 14,
+                     !state.error.isEmpty() ? 0xFFFF826E : 0xFFFFC878, Paint.Align.CENTER);
+            link(canvas, BTN_GITHUB, "★  github.com/FulGerNet/rePOP", Paint.Align.LEFT, 200);
+            link(canvas, BTN_DRIVER, "GPU driver…", Paint.Align.CENTER, 90);
+            link(canvas, BTN_ISO, "Install from ISO…  ▸", Paint.Align.RIGHT, 150);
         }
-        text(canvas, "✕", buttons[BTN_CLOSE].left, buttons[BTN_CLOSE].centerY(), 34, sans, 20,
-             hover == BTN_CLOSE || focus == BTN_CLOSE ? 0xFFEBF5FF : 0xFF6EA5F0, Paint.Align.CENTER, false);
+        text(canvas, "✕", buttons[BTN_CLOSE].left, buttons[BTN_CLOSE].centerY(), 34, sans, 18,
+             argb(hover == BTN_CLOSE || focus == BTN_CLOSE ? GOLD_LIGHT : GOLD, 1), Paint.Align.CENTER);
         canvas.restore();
         postInvalidateOnAnimation();
     }
@@ -376,7 +597,7 @@ final class LauncherView extends View {
     // ── input: touch, and a controller or keyboard moving the focus ──
 
     private int hit(float px, float py) {
-        float x = (px - ox) / scale, y = (py - oy) / scale;
+        float x = px / scale, y = py / scale;
         for (int i = 0; i < BTN_COUNT; i++) {
             RectF r = buttons[i];
             if (visible(i) && enabled[i] && x >= r.left - 8 && x < r.right + 8 && y >= r.top - 8 && y < r.bottom + 8)

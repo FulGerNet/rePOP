@@ -31,6 +31,7 @@
 #include <sys/mman.h>
 #if defined(__ANDROID__)
 #include <sys/syscall.h> /* RE-SoT: memfd_create below API 30 */
+#include <sys/resource.h> /* RE-SoT: normalize inherited mobile worker priority. */
 #endif
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
@@ -789,9 +790,21 @@ BOOL ReleaseMutex(HANDLE h)
 
 static void *thread_trampoline(void *arg)
 {
+#if defined(__ANDROID__)
+    /* RE-SoT: device traces show inherited nice -20 on busy game workers.
+     * Keep runtime work at normal priority so system UI can preempt it. */
+    if (setpriority(PRIO_PROCESS, 0, 0) != 0)
+        fprintf(stderr, "[THREAD] normal priority failed: %s\n", strerror(errno));
+#endif
     w32_object *o = (w32_object *)arg;
     t_self_obj = o;
     t_tid      = o->tid;
+#if defined(__ANDROID__)
+    /* RE-SoT: correlate runtime IDs in crash logs with Android thread samples. */
+    char thread_name[16];
+    snprintf(thread_name, sizeof thread_name, "resot-%lu", (unsigned long)o->tid);
+    pthread_setname_np(pthread_self(), thread_name);
+#endif
 
     /* CREATE_SUSPENDED gate */
     pthread_mutex_lock(&o->lock);

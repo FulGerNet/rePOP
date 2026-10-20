@@ -215,9 +215,9 @@ static void irql_track(KIRQL old_level, KIRQL new_level, void *ra)
  *
  * A guest thread owns this lock from its raise to DISPATCH_LEVEL until it
  * lowers below it; DPC drains and the APU ISR only run while they can take
- * it. Delivery threads never wait for it. A guest waits a bounded time and
- * then proceeds unowned (logged), so a leaked raise elsewhere cannot hang the
- * title. Recursive for the owner, so a DPC that raises nests. */
+ * it. Delivery threads never wait for it. Retail retains its bounded guest
+ * wait; the demo never bypasses exclusion (audio-list crash, 2026-10-20).
+ * Recursive for the owner, so a DPC that raises nests. */
 static volatile LONG s_disp_owner;
 static LONG s_disp_depth;                       /* owner thread only */
 static XBOX_THREAD_LOCAL int t_disp_guest;      /* this thread's raise owns it */
@@ -257,10 +257,19 @@ static void dispatch_guest_raise(void)
         if (GetTickCount() - start > 100) {
             static volatile LONG told;
             if (InterlockedIncrement(&told) <= 5)
+#if RESOT_RUNTIME_DEMO
+                /* RE-SoT: demo D3D DPC 0x0029FEE0 can take >100 ms during
+                 * startup. Bypassing its lock races the voice-list service
+                 * at 0x002EF6CD; time passing never grants ownership. */
+                fprintf(stderr, "  [IRQL] tid %lu waiting for dispatch lock"
+                        " held by tid %ld (depth %ld)\n",
+                        (unsigned long)me, (long)s_disp_owner, (long)s_disp_depth);
+#else
                 fprintf(stderr, "  [IRQL] tid %lu raised without the dispatch lock"
-                        " (held by tid %ld for >100 ms)\n",
-                        (unsigned long)me, (long)s_disp_owner);
+                        " (held by tid %ld for >100 ms, depth %ld)\n",
+                        (unsigned long)me, (long)s_disp_owner, (long)s_disp_depth);
             return;
+#endif
         }
         if (++spins < 64) SwitchToThread(); else Sleep(1);
     }
@@ -297,6 +306,12 @@ static void dispatch_guest_edge(KIRQL old_level, KIRQL new_level)
 int xbox_IrqlEnterInterrupt(int level)
 {
     int saved = (int)g_current_irql;
+#if RESOT_RUNTIME_DEMO
+    /* RE-SoT: preserve guest ownership independently of IRQL. A nested ISR
+     * can lower and raise back to the same level while creating a guest
+     * reference; level-only restoration then leaks the dispatch lock. */
+    saved |= t_disp_guest << 8;
+#endif
     if (g_current_irql != (KIRQL)level) {
         irql_track(g_current_irql, (KIRQL)level, IRQL_CALLER());
         g_current_irql = (KIRQL)level;
@@ -307,16 +322,17 @@ int xbox_IrqlEnterInterrupt(int level)
 
 void xbox_IrqlLeaveInterrupt(int saved)
 {
-    if (g_current_irql != (KIRQL)saved) {
 #if RESOT_RUNTIME_DEMO
-        /* RE-SoT: demo 0x002EF6CD services DirectSound voice lists. An ISR
-         * may lower below DISPATCH_LEVEL and raise again, taking a recursive
-         * guest dispatch reference. Restore that edge too: otherwise the
-         * outer dispatcher's Leave drops only its own reference, permanently
-         * stranding the lock on the ISR thread (Android log: tid 1004).
-         * A subsequent timed-out guest raise then edits these lists unlocked. */
-        dispatch_guest_edge(g_current_irql, (KIRQL)saved);
+    /* RE-SoT: balance references even if the callback returns at its saved
+     * level. Keep the delivery caller's separate dispatch reference intact. */
+    int saved_guest = (saved >> 8) & 1;
+    saved &= 0xFF;
+    if (!saved_guest)
+        dispatch_guest_lower();
+    else if (!t_disp_guest)
+        dispatch_guest_raise();
 #endif
+    if (g_current_irql != (KIRQL)saved) {
         irql_track(g_current_irql, (KIRQL)saved, IRQL_CALLER());
         g_current_irql = (KIRQL)saved;
         irql_publish();

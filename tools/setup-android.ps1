@@ -36,6 +36,8 @@ Get-CheckedArchive 'gradle-9.1.0-bin.zip' `
 if ($LASTEXITCODE) { throw 'SDL query patch failed.' }
 & python (Join-Path $PSScriptRoot 'patch-sdl-android-driver.py') (Join-Path $cache 'sdl-source/SDL3-3.4.18')
 if ($LASTEXITCODE) { throw 'SDL Android driver patch failed.' }
+& python (Join-Path $PSScriptRoot 'patch-sdl-android-events.py') (Join-Path $cache 'sdl-source/SDL3-3.4.18')
+if ($LASTEXITCODE) { throw 'SDL Android event-wait patch failed.' }
 # Pinned upstream source; the commit pins liblinkernsbypass via .gitmodules.
 $adreno = Join-Path $cache 'libadrenotools'
 $adrenoCommit = '8fae8ce254dfc1344527e05301e43f37dea2df80'

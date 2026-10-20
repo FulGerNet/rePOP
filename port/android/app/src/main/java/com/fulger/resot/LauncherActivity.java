@@ -13,6 +13,9 @@ import android.os.ParcelFileDescriptor;
 import android.os.StatFs;
 import android.os.SystemClock;
 import android.provider.OpenableColumns;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
 
 import java.io.File;
@@ -52,12 +55,40 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        // The whole screen, under a cutout too: LauncherView widens its plane
+        // to the screen's shape and keeps its links clear of the cutout.
+        getWindow().getAttributes().layoutInDisplayCutoutMode =
+            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         base = getExternalFilesDir(null);
         if (base == null) base = getFilesDir();
         view = new LauncherView(this, this);
         setContentView(view);
         view.requestFocus();
+        immersive();
         if (state != null) askedForIso = state.getBoolean("asked", false);
+    }
+
+    /** No status or navigation bar; a swipe from an edge shows them for a while. */
+    @SuppressWarnings("deprecation")
+    private void immersive() {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            getWindow().setDecorFitsSystemWindows(false);
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c != null) {
+                c.hide(WindowInsets.Type.systemBars());
+                c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        }
+    }
+
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) immersive();   // after a dialog or the file picker
     }
 
     @Override protected void onSaveInstanceState(Bundle out) {
