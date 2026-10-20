@@ -50,6 +50,7 @@ public class GameActivity extends SDLActivity {
     }
 
     @Override protected void onCreate(Bundle savedInstanceState) {
+        DefaultOptions.ensure(this);
         super.onCreate(savedInstanceState);
         if (mLayout != null) {
             touchControls = new TouchControls(this);

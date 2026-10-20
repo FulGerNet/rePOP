@@ -54,7 +54,13 @@ typedef struct NgPipeline {
     SDL_GPUGraphicsPipeline *gpu;
     struct NgPipeline *next;
     struct NgPipeline *bucket_next; /* RE-SoT: indexed lookup, retain list for destruction. */
+    /* RE-SoT: background compilation (ng_pipeline). NG_PSO_PENDING until a
+     * compiler thread publishes gpu; the executor reads gpu only after
+     * reading NG_PSO_READY. */
+    SDL_AtomicInt state;
+    struct NgPipeline *job_next;
 } NgPipeline;
+enum { NG_PSO_READY, NG_PSO_PENDING, NG_PSO_FAILED };
 #define NG_DRAW_QUEUE 1024
 /* RE-SoT: immutable state snapshots keep deferred native draws in guest order. */
 typedef struct {
@@ -136,6 +142,23 @@ static struct {
     uint32_t p_small; /* RE-SoT: original and remapped programs cannot share a snapshot. */
     int last_cslot, last_pslot, gpu_vsh;
 } s_ng;
+/* RE-SoT: pipeline compiler threads. On Adreno a new pipeline with the
+ * NV2A combiner shader took 0.15-1.8 s inside vkCreateGraphicsPipelines;
+ * eight new state combinations on entering an area froze one retail run for
+ * 12 s in total (2026-10-20 device logs, "[HW native] pipeline N created in").
+ * Guest draws whose pipeline is still compiling are skipped for those
+ * frames instead. The pipeline-cache save runs here too, off the executor. */
+#define NG_COMPILERS 2
+static struct {
+    SDL_Mutex *lock;
+    SDL_Condition *cond;
+    SDL_Thread *thread[NG_COMPILERS];
+    NgPipeline *head, *tail;
+    int quit, save, running, async;
+    SDL_AtomicInt compiled, skipped;
+} s_ngc;
+static void ng_compiler_start(void);
+static void ng_compiler_stop(void);
 /* RE-SoT: SDL 3.4.18's D3D12 sampler heap (see ng_flush_draws). Vulkan
  * allocates its descriptor sets from growing pools and needs no budget. */
 #define NG_D3D12_SAMPLER_BUDGET 1536
@@ -190,6 +213,20 @@ static void ng_submit(void)
 }
 /* RE-SoT: both hosts use the same internal scale, independent of the window. */
 static int s_applied_render_percent;
+#if defined(_WIN32)
+/* RE-SoT: SDL subclasses the adopted HWND. Its WM_NCCALCSIZE handler uses
+ * cached BORDERLESS/RESIZABLE flags, so changing GWL_STYLE alone cannot
+ * restore a caption or resize frame on Vulkan/D3D12 after F11. The host
+ * window thread calls this before applying its saved Win32 placement. */
+void nv2a_hw_set_window_frame(int bordered)
+{
+    if(!s_ng.window)return;
+    if(!SDL_SetWindowBordered(s_ng.window,bordered!=0))
+        fprintf(stderr,"[WINDOW] border change failed: %s\n",SDL_GetError());
+    if(!SDL_SetWindowResizable(s_ng.window,true))
+        fprintf(stderr,"[WINDOW] resize frame change failed: %s\n",SDL_GetError());
+}
+#endif
 static uint32_t ng_px(uint32_t x,uint32_t scale) { return hw_px(x,scale); }
 static uint32_t ng_py(uint32_t y,uint32_t scale) { return hw_py(y,scale); }
 /* RE-SoT: caller holds s_hw.lock. GPU polling never blocks or submits. */
@@ -328,6 +365,7 @@ static void ng_shutdown(void)
     if (s_ng.cmd) { SDL_CancelGPUCommandBuffer(s_ng.cmd); s_ng.cmd = NULL; }
     if (s_ng.device) {
         SDL_WaitForGPUIdle(s_ng.device);
+        ng_compiler_stop(); /* RE-SoT: no background creation past this point. */
         if (s_ng_cache_save) s_ng_cache_save(s_ng.device);
         ng_vis_destroy(&s_ng_visibility); /* RE-SoT: release native counters only after idle. */
         for (i = 0; i < HW_MAX_SURFACES; i++)
@@ -340,7 +378,8 @@ static void ng_shutdown(void)
             if (s_ng.samplers[u][v][l]) SDL_ReleaseGPUSampler(s_ng.device,s_ng.samplers[u][v][l]);
         while ((pipeline = s_ng.pipelines) != NULL) {
             s_ng.pipelines = pipeline->next;
-            SDL_ReleaseGPUGraphicsPipeline(s_ng.device,pipeline->gpu); free(pipeline);
+            if (pipeline->gpu) SDL_ReleaseGPUGraphicsPipeline(s_ng.device,pipeline->gpu);
+            free(pipeline);
         }
         if (s_ng.vertices) SDL_ReleaseGPUBuffer(s_ng.device,s_ng.vertices);
         if (s_ng.vertex_transfer) SDL_ReleaseGPUTransferBuffer(s_ng.device,s_ng.vertex_transfer);
@@ -515,6 +554,7 @@ static int ng_init(const char *backend)
     s_hw.cpu_vsh = 1;
     s_hw.cull_face = 0x405; s_hw.front_face = 0x900;
     s_ng.present_mode = -1;
+    ng_compiler_start(); /* RE-SoT: background pipelines and cache saves. */
     InterlockedExchange(&s_hw_backend, s_ng.active);
     xbox_FramebufferWindowHwMode(1);
     fprintf(stderr, "[HW] active renderer: %s native (SDL GPU %s; NV2A vertex programs on the %s)\n",
@@ -556,7 +596,8 @@ static NgSurface *ng_surface(void)
     for (i = 0; i < HW_MAX_SURFACES; i++) {
         NgSurface *s = &s_ng.surfaces[i];
         if (s->color && s->offset == off && s->w == w) {
-            if (s->h >= h) return s;
+            /* RE-SoT: rebuild a learned effect target when its quality changes. */
+            if (s->h >= h && s->sc == hw_surface_scale(w)) return s;
             out = s; break;
         }
         if (!s->color || (old->color && s->frame < old->frame)) old = s;
@@ -589,6 +630,15 @@ static void ng_mark(NgSurface *s)
 }
 /* RE-SoT: the glow chain's 160x120 source, drawn this frame
  * (hw_postprocess_candidate's test on the D3D11 surfaces). */
+/* RE-SoT: distinguish render-to-texture effects from static UI textures. */
+static int ng_effect_source(uint32_t offset,uint32_t w,uint32_t h)
+{
+    unsigned i;
+    for(i=0;i<HW_MAX_SURFACES;i++)if(s_ng.surfaces[i].color
+        && s_ng.surfaces[i].offset==offset && s_ng.surfaces[i].w==w
+        && s_ng.surfaces[i].h==h)return 1;
+    return 0;
+}
 static int ng_postprocess_source(uint32_t offset)
 {
     uint32_t i;
@@ -646,7 +696,10 @@ static SDL_GPUTexture *ng_texture(int stage, NgSurface *target)
             (s->w == t->width && best->w != t->width) ||
             ((s->w == t->width) == (best->w == t->width) && s->frame > best->frame))) best = s;
     }
-    if (best) return best == target ? NULL : best->color;
+    if (best) {
+        hw_trace_effect_source(stage,best->offset,best->w,best->h,best->frame); /* RE-SoT */
+        return best == target ? NULL : best->color;
+    }
     if (!hw_mem_ok(t->offset, t->cube ? 6*tex_face_stride(t) : hw_tex_bytes(t))) return NULL;
     slot = (t->offset >> 6)*2654435761u >> 22;
     for (i = 0; i < 16; i++) {
@@ -731,21 +784,16 @@ static SDL_GPUBlendFactor ng_factor(uint32_t f, int alpha)
     default: return SDL_GPU_BLENDFACTOR_ONE;
     }
 }
-static SDL_GPUGraphicsPipeline *ng_pipeline(const NgPipelineKey *key)
+/* Builds the pipeline for key; called by the executor or a compiler thread.
+ * Reads only the key and shaders created before the key existed. */
+static SDL_GPUGraphicsPipeline *ng_pipeline_build(const NgPipelineKey *key, int background)
 {
-    NgPipeline *p;
+    SDL_GPUGraphicsPipeline *gpu;
     SDL_GPUGraphicsPipelineCreateInfo ci = {0};
     SDL_GPUColorTargetDescription color = {0};
     SDL_GPUVertexAttribute attrs[8] = {0};
     SDL_GPUVertexBufferDescription vb = {0};
-    uint32_t i, bucket = 2166136261u;
-    /* RE-SoT: retail scenes issue hundreds/thousands of draws and accumulate
-     * many pipelines. Hash the entire initialized key, retaining full-key
-     * comparison so collisions never substitute a different pipeline. */
-    for (i = 0; i < sizeof *key; i++) bucket = (bucket ^ ((const uint8_t *)key)[i])*16777619u;
-    bucket &= 255;
-    for (p = s_ng.pipeline_buckets[bucket]; p; p = p->bucket_next)
-        if (!memcmp(&p->key, key, sizeof *key)) return p->gpu;
+    uint32_t i;
     /* RE-SoT: vs_uber uses only its packed program's referenced inputs. */
     ci.vertex_shader = key->shader == 0 || key->shader == 6 || key->shader == 8 ? s_ng.vs : key->shader == 4 || key->shader == 5 || key->shader == 7 ? s_ng.uber_vs : s_ng.blit_vs;
     if (key->small_vsh) ci.vertex_shader = s_ng.small_vs; /* RE-SoT: selector already proved absent high-temp reads. */
@@ -785,25 +833,142 @@ static SDL_GPUGraphicsPipeline *ng_pipeline(const NgPipelineKey *key)
     ci.target_info.color_target_descriptions = &color; ci.target_info.num_color_targets = 1;
     ci.target_info.has_depth_stencil_target = (key->depth & 2) != 0;
     ci.target_info.depth_stencil_format = s_ng.depth_format;
-    p = (NgPipeline *)calloc(1, sizeof *p);
-    if (!p) ng_fail("pipeline allocation");
     {
-        /* RE-SoT: driver shader compilation happens here, on the executor;
-         * log slow or early creations (Android first-frame stalls). */
-        static uint32_t created;
+        /* RE-SoT: driver shader compilation happens here; log slow or early
+         * creations (Android first-frame stalls) and which thread paid. */
+        static SDL_AtomicInt created;
         LARGE_INTEGER t0, t1, f;
         double ms;
+        int n;
         QueryPerformanceCounter(&t0);
-        p->key = *key; p->gpu = SDL_CreateGPUGraphicsPipeline(s_ng.device, &ci);
+        gpu = SDL_CreateGPUGraphicsPipeline(s_ng.device, &ci);
         QueryPerformanceCounter(&t1); QueryPerformanceFrequency(&f);
         ms = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)f.QuadPart;
-        if (++created <= 16 || ms >= 50.0)
-            fprintf(stderr, "[HW native] pipeline %u (shader %u) created in %.1f ms\n",
-                    created, key->shader, ms);
+        n = SDL_AddAtomicInt(&created, 1) + 1;
+        if (n <= 16 || ms >= 50.0)
+            fprintf(stderr, "[HW native] pipeline %d (shader %u) created in %.1f ms%s\n",
+                    n, key->shader, ms, background ? " (background)" : "");
     }
-    if (!p->gpu) ng_fail("create pipeline");
-    p->next = s_ng.pipelines; s_ng.pipelines = p;
-    p->bucket_next = s_ng.pipeline_buckets[bucket]; s_ng.pipeline_buckets[bucket] = p;
+    return gpu;
+}
+
+static int SDLCALL ng_compiler(void *unused)
+{
+    (void)unused;
+    SDL_LockMutex(s_ngc.lock);
+    for (;;) {
+        NgPipeline *p;
+        while (!s_ngc.quit && !s_ngc.head && !s_ngc.save)
+            SDL_WaitCondition(s_ngc.cond, s_ngc.lock);
+        if (s_ngc.quit) break;
+        if (s_ngc.head) {
+            p = s_ngc.head;
+            s_ngc.head = p->job_next;
+            if (!s_ngc.head) s_ngc.tail = NULL;
+            SDL_UnlockMutex(s_ngc.lock);
+            p->gpu = ng_pipeline_build(&p->key, 1);
+            /* Release order: gpu is visible before READY. */
+            SDL_SetAtomicInt(&p->state, p->gpu ? NG_PSO_READY : NG_PSO_FAILED);
+            SDL_AddAtomicInt(&s_ngc.compiled, 1);
+            SDL_LockMutex(s_ngc.lock);
+        } else {
+            s_ngc.save = 0;
+            SDL_UnlockMutex(s_ngc.lock);
+            if (!s_ng_cache_save(s_ng.device))
+                fprintf(stderr, "[HW native] pipeline cache save failed: %s\n", SDL_GetError());
+            SDL_LockMutex(s_ngc.lock);
+        }
+    }
+    SDL_UnlockMutex(s_ngc.lock);
+    return 0;
+}
+
+/* RESOT_ASYNC_PIPELINES=0 compiles every pipeline on the executor (exact
+ * frames, with the stalls); =1 forces background compilation. Default: on
+ * Android, where the stalls were measured, off elsewhere. */
+static void ng_compiler_start(void)
+{
+    const char *e = getenv("RESOT_ASYNC_PIPELINES");
+    int i;
+#if defined(__ANDROID__)
+    s_ngc.async = !(e && *e == '0');
+#else
+    s_ngc.async = e && *e && *e != '0';
+#endif
+    if (!s_ngc.async && !s_ng_cache_save) return;
+    s_ngc.lock = SDL_CreateMutex();
+    s_ngc.cond = SDL_CreateCondition();
+    if (!s_ngc.lock || !s_ngc.cond) { s_ngc.async = 0; return; }
+    s_ngc.quit = 0;
+    for (i = 0; i < (s_ngc.async ? NG_COMPILERS : 1); i++) {
+        s_ngc.thread[i] = SDL_CreateThread(ng_compiler, "resot-pso", NULL);
+        if (s_ngc.thread[i]) s_ngc.running++;
+    }
+    if (!s_ngc.running) s_ngc.async = 0;
+    fprintf(stderr, "[HW native] pipeline compilation: %s (%d thread%s)\n",
+            s_ngc.async ? "background, draws wait without stalling" : "on the executor",
+            s_ngc.running, s_ngc.running == 1 ? "" : "s");
+}
+
+static void ng_compiler_stop(void)
+{
+    int i;
+    if (s_ngc.lock) {
+        SDL_LockMutex(s_ngc.lock);
+        s_ngc.quit = 1;
+        SDL_BroadcastCondition(s_ngc.cond);
+        SDL_UnlockMutex(s_ngc.lock);
+    }
+    for (i = 0; i < NG_COMPILERS; i++)
+        if (s_ngc.thread[i]) { SDL_WaitThread(s_ngc.thread[i], NULL); s_ngc.thread[i] = NULL; }
+    /* Jobs nobody took stay PENDING; their gpu is NULL and is not released. */
+    s_ngc.head = s_ngc.tail = NULL;
+    s_ngc.running = s_ngc.async = 0;
+    if (s_ngc.cond) { SDL_DestroyCondition(s_ngc.cond); s_ngc.cond = NULL; }
+    if (s_ngc.lock) { SDL_DestroyMutex(s_ngc.lock); s_ngc.lock = NULL; }
+}
+
+/* NULL while the pipeline compiles in the background: the caller skips the
+ * draw. may_defer is set only for guest draws (ng_flush_draws); blits,
+ * clears and presentation always get their pipeline. */
+static SDL_GPUGraphicsPipeline *ng_pipeline(const NgPipelineKey *key, int may_defer)
+{
+    NgPipeline *p;
+    uint32_t i, bucket = 2166136261u;
+    int state;
+    /* RE-SoT: retail scenes issue hundreds/thousands of draws and accumulate
+     * many pipelines. Hash the entire initialized key, retaining full-key
+     * comparison so collisions never substitute a different pipeline. */
+    for (i = 0; i < sizeof *key; i++) bucket = (bucket ^ ((const uint8_t *)key)[i])*16777619u;
+    bucket &= 255;
+    for (p = s_ng.pipeline_buckets[bucket]; p; p = p->bucket_next)
+        if (!memcmp(&p->key, key, sizeof *key)) break;
+    if (!p) {
+        p = (NgPipeline *)calloc(1, sizeof *p);
+        if (!p) ng_fail("pipeline allocation");
+        p->key = *key;
+        p->next = s_ng.pipelines; s_ng.pipelines = p;
+        p->bucket_next = s_ng.pipeline_buckets[bucket]; s_ng.pipeline_buckets[bucket] = p;
+        if (may_defer && s_ngc.async) {
+            SDL_SetAtomicInt(&p->state, NG_PSO_PENDING);
+            SDL_LockMutex(s_ngc.lock);
+            if (s_ngc.tail) s_ngc.tail->job_next = p; else s_ngc.head = p;
+            s_ngc.tail = p;
+            SDL_SignalCondition(s_ngc.cond);
+            SDL_UnlockMutex(s_ngc.lock);
+        } else {
+            p->gpu = ng_pipeline_build(key, 0);
+            SDL_SetAtomicInt(&p->state, p->gpu ? NG_PSO_READY : NG_PSO_FAILED);
+        }
+    }
+    state = SDL_GetAtomicInt(&p->state);
+    if (state == NG_PSO_PENDING) {
+        if (may_defer) { SDL_AddAtomicInt(&s_ngc.skipped, 1); return NULL; }
+        /* A blit wanting a key a guest draw queued: wait for it. */
+        while (SDL_GetAtomicInt(&p->state) == NG_PSO_PENDING) SDL_Delay(1);
+        state = SDL_GetAtomicInt(&p->state);
+    }
+    if (state == NG_PSO_FAILED) ng_fail("create pipeline");
     return p->gpu;
 }
 
@@ -905,10 +1070,11 @@ static void ng_flush_draws(void)
     SDL_EndGPUCopyPass(copy);
     for (i = 0; i < s_ng.queued_count; i++) {
         NgDraw *draw = &s_ng.queued[i];
-        SDL_GPUGraphicsPipeline *pipeline = ng_pipeline(&draw->key);
+        SDL_GPUGraphicsPipeline *pipeline = ng_pipeline(&draw->key,1);
         SDL_GPUBufferBinding vb = {s_ng.vertices,s_ng.vertex_offset};
         uint32_t sampler_count = draw->key.shader >= 5 ? 1 : 8; /* RE-SoT */
         int new_samplers;
+        if (!pipeline) continue; /* RE-SoT: still compiling (s_ngc); later frames draw it. */
         /* RE-SoT: SDL 3.4.18's D3D12 descriptor writer checks only the
          * current index, not index+table size, against its 2048-sampler heap.
          * One-slot host blits followed by eight-slot guest draws can cross
@@ -1122,6 +1288,7 @@ static int ng_draw_program_batch(void)
     }
     pcount = nv2a_vsh_pack_gpu(&words, &inputs, &ninputs);
     if (!pcount) return 0;
+    if (hw_skip_shadow()) return 1; /* RE-SoT: same effect policy as D3D11/CPU. */
     /* RE-SoT: use 1/2/4/8 float4 inputs instead of always uploading eight.
      * This removes unused zero stores and cuts CPU/GPU transfer bytes for
      * small programs; formats still use the exact fetch_attr conversion. */
@@ -1294,7 +1461,7 @@ static void ng_blit(SDL_GPUTexture *target_image, SDL_GPUTextureFormat format,
     if (ng_sampler_budget(1)) ng_submit(); /* RE-SoT: D3D12 sampler-heap budget. */
     key.shader = shader; key.mask = mask; key.format = format;
     if (shader == 3) { key.blend = 1; key.src = 0x302; key.dst = 0x303; }
-    pipeline = ng_pipeline(&key);
+    pipeline = ng_pipeline(&key,0);
     target.texture = target_image; target.store_op = SDL_GPU_STOREOP_STORE;
     target.load_op = clear ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
     target.clear_color.a = 1;
@@ -1534,7 +1701,14 @@ static void ng_flip(void)
         DWORD t = GetTickCount();
         if (s_ng_cache_save && t - last_save >= 5000) {
             last_save = t;
-            if (!s_ng_cache_save(s_ng.device))
+            /* RE-SoT: 2.7 MB through Android's FUSE storage; the compiler
+             * thread writes it, not the executor holding s_hw.lock. */
+            if (s_ngc.running) {
+                SDL_LockMutex(s_ngc.lock);
+                s_ngc.save = 1;
+                SDL_SignalCondition(s_ngc.cond);
+                SDL_UnlockMutex(s_ngc.lock);
+            } else if (!s_ng_cache_save(s_ng.device))
                 fprintf(stderr, "[HW native] pipeline cache save failed: %s\n", SDL_GetError());
         }
     }
@@ -1555,6 +1729,9 @@ static void ng_flip(void)
             (unsigned long long)s_ng.small_vsh_draws,(unsigned long long)s_ng.guest_draws); /* RE-SoT: distinguish eligibility from speedup. */
         fprintf(stderr,"[HW native] specialized combiners: %llu/%llu guest draws, %u cached variants\n",
             (unsigned long long)s_ng.spec_ps_draws,(unsigned long long)s_ng.guest_draws,s_ng.spec_ps_count); /* RE-SoT */
+        if (s_ngc.async) /* RE-SoT: what background compilation cost in skipped draws. */
+            fprintf(stderr,"[HW native] background pipelines: %d compiled, %d guest draws skipped while compiling\n",
+                    SDL_GetAtomicInt(&s_ngc.compiled),SDL_GetAtomicInt(&s_ngc.skipped));
         /* RE-SoT: expose the existing F6 timings on Android as well, where
          * there is no diagnostics panel. Avoid inferring CPU/GPU bottlenecks
          * from FPS alone. Values are the latest half-second sample. */

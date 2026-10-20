@@ -76,8 +76,10 @@ static HDC s_dc;
 static HBITMAP s_bitmap;
 static uint32_t *s_bits;
 static HFONT s_font, s_title_font;
-static int s_keys[ACTIONS], s_joy[ACTIONS], s_fps = 60, s_resolution;
-static int s_vsync=1, s_post_processing=1, s_capture = -1, s_capture_tab;
+static int s_keys[ACTIONS], s_joy[ACTIONS], s_fps = 0, s_resolution=3;
+static int s_vsync=0, s_texture_glow=0, s_capture = -1, s_capture_tab;
+static int s_console_logs;
+extern void resot_console_logs_set(int);
 static int s_renderer; /* 0 (default): D3D11, 1: native D3D12, 2: native Vulkan; restart. */
 static const char *const s_renderer_tokens[] = {"d3d11","d3d12","vulkan"};
 static const char *const s_renderer_names[] = {"D3D11","D3D12 (native)","Vulkan (native)"};
@@ -91,7 +93,7 @@ static const char *active_renderer(void)
 static int s_joy_was[25], s_walk, s_walk_was, s_pending_size, s_size_posted;
 static int s_native_capture, s_native_since, s_capture_armed;
 static int s_keyboard_enabled=1, s_mouse_speed=43, s_walk_deflection=12000;
-static int s_look_sensitivity=100;
+static int s_look_sensitivity=200;
 static char s_path[1024];
 
 extern void *xbox_FramebufferWindowHandle(void);
@@ -101,6 +103,9 @@ extern void xbox_SetFrameLimit(int);
 extern void xbox_SetRenderScalePercent(int);
 extern void xbox_SetVSync(int);
 extern void xbox_SetPostProcessing(int);
+extern void xbox_SetPostProcessingQuality(int);
+static int s_post_quality=1;
+static const char *const s_quality_names[]={"Off","Low","Mid","High"};
 extern void xbox_FramebufferSetOptionsCallbacks(
     int (*)(const uint32_t **, uint32_t *, uint32_t *),
     int (*)(void *, unsigned, uintptr_t, intptr_t));
@@ -113,9 +118,9 @@ long resot_native_revision(void) { return InterlockedCompareExchange(&s_revision
 void resot_options_summary(char *out, unsigned size)
 {
     AcquireSRWLockShared(&s_lock);
-    snprintf(out,size,"FPS limit %s, VSync %s, post-processing %s, resolution %s",
+    snprintf(out,size,"FPS limit %s, VSync %s, texture glow %s, resolution %s",
              s_cap_names[s_fps==30?0:s_fps==60?1:s_fps==120?2:3], s_vsync?"on":"off",
-             s_post_processing?"on":"off", s_native_sizes[s_resolution]);
+             s_texture_glow?"on":"off", s_native_sizes[s_resolution]);
     ReleaseSRWLockShared(&s_lock);
 }
 
@@ -140,8 +145,11 @@ static int save_config(void)
     ok &= WritePrivateProfileStringA("Graphics","FPSLimit",value,s_path);
     snprintf(value,sizeof value,"%d",s_vsync);
     ok &= WritePrivateProfileStringA("Graphics","VSync",value,s_path);
-    snprintf(value,sizeof value,"%d",s_post_processing);
-    ok &= WritePrivateProfileStringA("Graphics","PostProcessing",value,s_path);
+    ok &= WritePrivateProfileStringA("Graphics","PostProcessing",NULL,s_path);
+    snprintf(value,sizeof value,"%d",s_post_quality);
+    ok &= WritePrivateProfileStringA("Graphics","PostProcessingQuality",value,s_path);
+    snprintf(value,sizeof value,"%d",s_texture_glow);
+    ok &= WritePrivateProfileStringA("Graphics","TextureGlowEffect",value,s_path);
     snprintf(value,sizeof value,"%d",s_scales[s_resolution]);
     ok &= WritePrivateProfileStringA("Graphics","InternalResolutionPercent",value,s_path);
     snprintf(value,sizeof value,"%d",s_look_sensitivity);
@@ -153,6 +161,8 @@ static int save_config(void)
         snprintf(value,sizeof value,"%d",s_joy[i]);
         ok &= WritePrivateProfileStringA("Joystick",name,value,s_path);
     }
+    snprintf(value,sizeof value,"%d",s_console_logs);
+    ok &= WritePrivateProfileStringA("Diagnostics","ConsoleLogs",value,s_path);
     if (!ok) fprintf(stderr,"[OPTIONS] could not save %s (read-only folder?)\n",s_path);
     snprintf(s_status,sizeof s_status,"%s",ok ? "Saved to resot-options.ini." :
              "Could not save resot-options.ini. Folder may be read-only.");
@@ -191,7 +201,7 @@ static void assign_binding(int code)
     save_config();
 }
 
-static int controls_top(void) { return s_graphics_expanded ? 344 : 46; }
+static int controls_top(void) { return s_graphics_expanded ? 444 : 46; }
 static int rows_top(void) { return controls_top()+138; }
 static int max_scroll(void)
 {
@@ -355,8 +365,16 @@ static int event(void *handle, unsigned message, uintptr_t wp, intptr_t lp)
                 if(!s_vsync && s_fps)
                     snprintf(s_status,sizeof s_status,"VSync off. FPS limiter remains at %d.",s_fps);
             } else if(s_graphics_expanded && body>=191 && body<221 && x>=245) {
-                s_post_processing=x<360;xbox_SetPostProcessing(s_post_processing);save_config();
+                s_texture_glow=x<360;xbox_SetPostProcessing(s_texture_glow);save_config();
             } else if(s_graphics_expanded && body>=241 && body<272 && x>=245) s_dropdown=!s_dropdown;
+            else if(s_graphics_expanded && body>=330 && body<360 && x>=245) {
+                int quality=(x-245)/58;if(quality>=0 && quality<4) {
+                    s_post_quality=quality;xbox_SetPostProcessingQuality(quality);save_config();
+                }
+            }
+            else if(s_graphics_expanded && body>=380 && body<410 && x>=245) {
+                s_console_logs=!s_console_logs;resot_console_logs_set(s_console_logs);save_config();
+            }
             else if(s_controls_expanded && body>=controls_top() && body<controls_top()+28 && x>=360) {
                 memcpy(s_keys,s_default_keys,sizeof s_keys);memcpy(s_joy,s_default_joy,sizeof s_joy);
                 s_capture=-1;s_walk=s_walk_was=0;save_config();
@@ -439,14 +457,22 @@ static int panel(const uint32_t **pixels,uint32_t *width,uint32_t *height)
         box(245,Y(141),110,30,s_vsync?RGB(46,95,135):RGB(36,46,63));
         box(365,Y(141),115,30,!s_vsync?RGB(46,95,135):RGB(36,46,63));
         text(257,Y(142),95,"On",RGB(235,242,251));text(377,Y(142),95,"Off",RGB(235,242,251));
-        text(20,Y(191),220,"Post-processing",RGB(220,229,242));
-        box(245,Y(191),110,30,s_post_processing?RGB(46,95,135):RGB(36,46,63));
-        box(365,Y(191),115,30,!s_post_processing?RGB(46,95,135):RGB(36,46,63));
+        text(20,Y(191),220,"Texture glow effect",RGB(220,229,242));
+        box(245,Y(191),110,30,s_texture_glow?RGB(46,95,135):RGB(36,46,63));
+        box(365,Y(191),115,30,!s_texture_glow?RGB(46,95,135):RGB(36,46,63));
         text(257,Y(192),95,"On",RGB(235,242,251));text(377,Y(192),95,"Off",RGB(235,242,251));
         text(20,Y(241),220,"Screen resolution",RGB(220,229,242));
         box(245,Y(241),235,30,RGB(36,46,63));text(255,Y(242),220,s_size_names[s_resolution],RGB(235,242,251));
         text(20,Y(282),455,"Window size keeps the desktop display mode.",RGB(139,159,186));
         text(20,Y(303),455,"The game's own timing may still limit FPS.",RGB(139,159,186));
+        text(20,Y(330),220,"Post processing",RGB(220,229,242));
+        for(i=0;i<4;i++) {
+            box(245+i*58,Y(330),53,30,s_post_quality==i?RGB(46,95,135):RGB(36,46,63));
+            text(250+i*58,Y(331),50,s_quality_names[i],RGB(235,242,251));
+        }
+        text(20,Y(380),220,"Console logs",RGB(220,229,242));
+        box(245,Y(380),235,30,RGB(36,46,63));
+        text(255,Y(381),220,s_console_logs?"On":"Off",RGB(235,242,251));
         }
         box(16,Y(controls_top()),468,28,RGB(31,43,60));
         text(23,Y(controls_top()),330,s_controls_expanded?"[-] Controls":"[+] Controls",RGB(110,193,249));
@@ -598,7 +624,8 @@ void resot_native_label(int page, int item, char *out, unsigned size)
         switch (item) {
         case 0: snprintf(out,size,"FPS limit: %s",s_cap_names[s_fps==30?0:s_fps==60?1:s_fps==120?2:3]); break;
         case 1: snprintf(out,size,"VSync: %s",s_vsync?"On":"Off"); break;
-        case 2: snprintf(out,size,"Post processing: %s",s_post_processing?"On":"Off"); break;
+        case 2: snprintf(out,size,"Texture glow effect: %s",s_texture_glow?"On":"Off"); break;
+        case 4: snprintf(out,size,"Post processing: %s",s_quality_names[s_post_quality]); break;
         default: snprintf(out,size,"Resolution: %s",s_native_sizes[s_resolution]); break;
         }
     } else if (page==RESOT_NATIVE_CONTROLS && item==0) {
@@ -633,8 +660,9 @@ void resot_native_activate(int page, int item)
         switch (item) {
         case 0: s_fps=s_fps==30?60:s_fps==60?120:s_fps==120?0:30; xbox_SetFrameLimit(s_fps); break;
         case 1: s_vsync=!s_vsync; xbox_SetVSync(s_vsync); break;
-        case 2: s_post_processing=!s_post_processing; xbox_SetPostProcessing(s_post_processing); break;
+        case 2: s_texture_glow=!s_texture_glow; xbox_SetPostProcessing(s_texture_glow); break;
         case 3: s_resolution=(s_resolution+1)%6; resize=1; break;
+        case 4: s_post_quality=(s_post_quality+1)%4; xbox_SetPostProcessingQuality(s_post_quality); break;
         }
         save_config();
     } else if (page==RESOT_NATIVE_CONTROLS && item==0) {
@@ -657,6 +685,31 @@ void resot_native_reset_bindings(void)
     ReleaseSRWLockExclusive(&s_lock);
 }
 
+void resot_options_prepare_config(void)
+{
+    char path[1024], *slash;
+    HMODULE module=GetModuleHandleA(NULL);
+    HRSRC resource=FindResourceA(module,MAKEINTRESOURCEA(203),RT_RCDATA);
+    HGLOBAL loaded;
+    const void *data;
+    DWORD size,written,n=GetModuleFileNameA(NULL,path,sizeof path);
+    HANDLE file;
+    if(!resource || !n || n>=sizeof path)return;
+    slash=strrchr(path,'\\');if(!slash)return;
+    slash[1]=0;
+    if(strlen(path)+strlen("resot-options.ini")>=sizeof path)return;
+    strcat(path,"resot-options.ini");
+    loaded=LoadResource(module,resource);data=loaded?LockResource(loaded):NULL;
+    size=SizeofResource(module,resource);
+    if(!data || !size)return;
+    /* CREATE_NEW preserves existing files, including when both targets start. */
+    file=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(file==INVALID_HANDLE_VALUE)return;
+    if(!WriteFile(file,data,size,&written,NULL) || written!=size)
+        fprintf(stderr,"[OPTIONS] could not finish creating %s\n",path);
+    CloseHandle(file);
+}
+
 void resot_options_init(void)
 {
     char name[32],*slash;const char *env;int i;
@@ -669,7 +722,7 @@ void resot_options_init(void)
     slash=strrchr(s_path,'\\');if(slash)slash[1]=0;else s_path[0]=0;
     if(strlen(s_path)+strlen("resot-options.ini")>=sizeof s_path)return;
     strcat(s_path,"resot-options.ini");
-    s_look_sensitivity=resot_look_percent((int)GetPrivateProfileIntA("Controls","LookSensitivityPercent",100,s_path));
+    s_look_sensitivity=resot_look_percent((int)GetPrivateProfileIntA("Controls","LookSensitivityPercent",200,s_path));
     GetPrivateProfileStringA("Graphics","Renderer","d3d11",name,sizeof name,s_path);
     env=getenv("RESOT_RENDERER");
     s_renderer=!_stricmp(name,"vulkan")?2:!_stricmp(name,"d3d12")?1:0;
@@ -678,15 +731,18 @@ void resot_options_init(void)
      * selection when an unrelated option/binding is saved. */
     i=env&&*env?(!_stricmp(env,"vulkan")?2:!_stricmp(env,"d3d12")?1:0):s_renderer;
     _putenv_s("RESOT_RENDERER",s_renderer_tokens[i]);
-    s_fps=(int)GetPrivateProfileIntA("Graphics","FPSLimit",60,s_path);
-    if(s_fps!=0 && s_fps!=30 && s_fps!=60 && s_fps!=120)s_fps=60;
-    s_resolution=2;
-    { int percent=(int)GetPrivateProfileIntA("Graphics","InternalResolutionPercent",100,s_path);
+    s_fps=(int)GetPrivateProfileIntA("Graphics","FPSLimit",0,s_path);
+    if(s_fps!=0 && s_fps!=30 && s_fps!=60 && s_fps!=120)s_fps=0;
+    s_resolution=3;
+    { int percent=(int)GetPrivateProfileIntA("Graphics","InternalResolutionPercent",150,s_path);
       for(i=0;i<6;i++)if(s_scales[i]==percent)s_resolution=i; }
     xbox_SetRenderScalePercent(s_scales[s_resolution]);
     env=getenv("RECOMP_HW_VSYNC");
-    s_vsync=GetPrivateProfileIntA("Graphics","VSync",!env || *env!='0',s_path)!=0;
-    s_post_processing=GetPrivateProfileIntA("Graphics","PostProcessing",1,s_path)!=0;
+    s_vsync=GetPrivateProfileIntA("Graphics","VSync",env && *env!='0',s_path)!=0;
+    s_post_quality=(int)GetPrivateProfileIntA("Graphics","PostProcessingQuality",1,s_path);
+    if(s_post_quality<0 || s_post_quality>3)s_post_quality=1;
+    xbox_SetPostProcessingQuality(s_post_quality);
+    s_texture_glow=GetPrivateProfileIntA("Graphics","TextureGlowEffect",0,s_path)!=0;
     s_pending_size=0; /* Internal resolution never changes the window. */
     for(i=0;i<ACTIONS;i++) {
         snprintf(name,sizeof name,"Action%d",i);
@@ -695,9 +751,11 @@ void resot_options_init(void)
         if(s_keys[i]<0 || s_keys[i]>255)s_keys[i]=s_default_keys[i];
         if(s_joy[i]<0 || s_joy[i]>24)s_joy[i]=s_default_joy[i];
     }
+    s_console_logs=GetPrivateProfileIntA("Diagnostics","ConsoleLogs",0,s_path)!=0;
+    if(s_console_logs)resot_console_logs_set(1);
     xbox_SetFrameLimit(s_fps);
     xbox_SetVSync(s_vsync);
-    xbox_SetPostProcessing(s_post_processing);
+    xbox_SetPostProcessing(s_texture_glow);
     xbox_FramebufferSetOptionsCallbacks(panel,event);
     xbox_InputSetHostFilter(input);
 }

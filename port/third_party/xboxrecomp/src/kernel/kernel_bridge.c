@@ -3306,13 +3306,20 @@ static void bridge_NtCreateFile(void)
     {
         extern uint32_t xbox_LastFileError(void);
         uint32_t _e = g_eax ? xbox_LastFileError() : 0u;
-        if (g_eax)
+        /* RE-SoT: a missing file is normally a probe the title falls back
+         * from (demo: sound\english\X.SB2, then sound\X.SB2, for every bank).
+         * Log the first 32; other failures are always logged. */
+        static unsigned _not_found;
+        int _quiet = (_e == 2u || _e == 3u) && ++_not_found > 32;
+        if (_not_found == 33 && _quiet)
+            fprintf(stderr, "  [FILE] further file-not-found results are not logged\n");
+        if (g_eax && !_quiet)
             fprintf(stderr, "  [FILE] -> 0x%08X FAILED (win32 err=%u%s)\n",
                     g_eax, _e,
                     _e == 32u ? " ERROR_SHARING_VIOLATION"
                   : _e ==  2u ? " ERROR_FILE_NOT_FOUND"
                   : _e ==  3u ? " ERROR_PATH_NOT_FOUND" : "");
-        else
+        else if (!g_eax)
             fprintf(stderr, "  [FILE] -> 0x%08X\n", g_eax);
     }
     fflush(stderr);

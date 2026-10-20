@@ -28,7 +28,14 @@ remain under validation; see [VALIDATION.md](../../docs/VALIDATION.md).
 
 ## What is in the APK
 
-Version 0.1.1 (Android versionCode 2) keeps the Vulkan specialization and
+Version 0.1.2 (Android versionCode 3) bundles
+[the supplied Android defaults](default-options.ini): Vulkan, unlimited FPS,
+VSync/glow/logs off, 480p (100%), post-processing Off and look sensitivity 200%.
+The launcher or direct game startup creates a missing INI from the packaged
+asset; an existing INI is retained. The effect-quality and logging repairs are
+included; no further gameplay tests were run after the user's confirmation.
+
+The preceding 0.1.1 release keeps the Vulkan specialization and
 adds power follow-ups: display refresh follows the selected FPS cap,
 inactive timer scans use fewer locks, and eligible frames use an exact
 internal-size snapshot with one final upscale. Movies, native panels and
@@ -150,7 +157,7 @@ saved in `resot-options.ini`. On Android, the resolution entry cycles the
 ratio. The default is now **480p/1x** (previous Android rendering used 2x).
 The INI key is `[Graphics] InternalResolutionPercent=100` (allowed values:
 50, 75, 100, 150, 225, 300). A change takes effect when the next guest render
-target is used. Postprocess targets retain their guest resolution, movies
+target is used. Auxiliary targets follow the effect-quality budget, movies
 retain their decoded size, and final presentation still fills the device.
 Lower internal resolutions reduce GPU pixel work only.
 The retail renderer shares the white light-map border correction, forming
@@ -212,7 +219,7 @@ while the panel is open; tapping the same spot closes the panel and restores
 the button. The invisible touch area remains active. Windows uses F5 and
 has no corresponding touch button.
 **Look sensitivity** is in **reSOT Options → Controls** in both games:
-25–200% in steps of 25, with 100% retaining the original speed. It applies
+25–200% in steps of 25, default 200%, with 100% retaining the original speed. It applies
 to controller, keyboard/mouse and the touch camera, after the game's original
 stick deadzone; movement sensitivity is unchanged. The setting is stored as
 `[Controls] LookSensitivityPercent`, and the same option is in Windows F7.
@@ -224,9 +231,9 @@ The selected dimensions and aspect are logged at startup. An explicit
 this automatic choice follows the Android device's drawable at game startup.
 Windows now exposes the same internal resolution choices in the main menu
 and F7; F11 alone changes fullscreen/window mode.
-Android defaults to `PostProcessing=0` in `[Graphics]` to reduce GPU work;
-Windows keeps `PostProcessing=1`. An existing saved value takes precedence:
-set it to `0` in an existing Android INI or turn it off in the game's options.
+Android defaults to `PostProcessingQuality=0` in `[Graphics]`; Windows uses
+`PostProcessingQuality=1`. Both default to `TextureGlowEffect=0`. Existing
+saved values take precedence; `PostProcessing` is an obsolete key.
 Retail's option-label refresh now reads its text-object metadata on Android;
 previously that metadata probe was implemented only on Windows, so values
 appeared stale until the page reopened. Device validation of this correction
@@ -257,6 +264,19 @@ Device frame rate with this APK is not yet validated; `[HW native] pipeline …
 created in … ms` lines show driver compile times. The startup log line `[HW] active renderer`
 says whether programs run on the GPU or the CPU. Native timing logs
 distinguish movie composition Hz from guest frame rate.
+
+The cache does not cover a state combination the phone has never seen: in
+2026-10-20 retail logs a new pipeline of the main pixel shader still took
+0.15–1.8 s, and entering an area that needed several of them froze the game
+for seconds (12 s in total in one run). Android therefore compiles the
+pipelines of guest draws on two background threads (`resot-pso`); a draw
+whose pipeline is not ready yet is skipped, so a new material can appear a
+few frames late instead of the game stopping. The same threads write
+`vulkan-pipelines.bin`. The log says `[HW native] pipeline compilation:
+background …` at start-up, marks such creations `(background)`, and reports
+`background pipelines: N compiled, M guest draws skipped` every 5 s.
+`RESOT_ASYNC_PIPELINES=0` restores compilation on the renderer thread.
+Windows keeps compiling on the renderer thread unless `RESOT_ASYNC_PIPELINES=1`.
 
 ## Custom Adreno Vulkan drivers
 
@@ -341,3 +361,32 @@ parent directory; byte reads still use the image. Random-access writes, relative
 were corrected for Android retail. Host regression tests pass; save/create,
 close-app, reopen and load must still be checked on the phone. The demo's
 storage path has not received this retail-specific change.
+
+### Post processing quality and texture glow
+
+`Texture glow effect` uses `[Graphics] TextureGlowEffect=0` by default.
+`Post processing` is separate: `PostProcessingQuality=0/1/2/3` selects
+Off/Low/Mid/High (Android default Off). Low and Mid now budget auxiliary buffers,
+including projected-shadow maps, at 50% and 75% width/height. High retains
+original effect resolution. Off omits recognized blur/bloom chains, their
+fullscreen consumers, the final glow composite and recognized projected
+shadows; other auxiliary buffers use 25% while retaining their materials.
+Display/history buffers and tiny bloom levels are protected. The user confirms
+the option works (2026-10-20). The same policy serves demo and retail on both
+hosts; see the [effect study](../../docs/POST-PROCESSING.md) for exact coverage
+and the remaining water/motion-blur identification work.
+
+### On-screen console logs
+
+Only the INI can enable the Android log overlay; there is no Android menu
+switch. In `Android/data/com.fulger.resot/files/resot-options.ini`, set:
+
+```ini
+[Diagnostics]
+ConsoleLogs=1
+```
+
+Restart the game after changing this value. `ConsoleLogs=0` disables it.
+The overlay reads `logs/xbox-demo-err.txt` and `logs/xbox-demo-out.txt`, or
+the retail equivalents, inside the same app files folder. Errors are red,
+warnings yellow; recent rows scroll and fade. Normal file logging is retained.

@@ -340,13 +340,14 @@ static volatile LONG s_frame_limit, s_frame_limit_generation;
 
 /* RE-SoT: graphics options are safe before renderer initialization and can
  * change live. Only the verified post-processing composite consults this. */
-static volatile LONG s_post_processing = 1;
+/* RE-SoT: glow is opt-in on both hosts; old INI preferences do not enable it. */
+static volatile LONG s_post_processing = 0;
 
 void xbox_SetPostProcessing(int enabled)
 {
     LONG value = enabled != 0;
     if (InterlockedExchange(&s_post_processing, value) != value)
-        fprintf(stderr, "  [VIDEO] post-processing %s\n", value ? "on" : "off");
+        fprintf(stderr, "  [VIDEO] texture glow effect %s\n", value ? "on" : "off");
 }
 
 int xbox_FramebufferPostProcessing(void)
@@ -495,6 +496,8 @@ static unsigned fb_vk_sided(WPARAM w, LPARAM l)
  * window over the whole monitor. A maximised window keeps its title bar, so
  * its client area is not the picture's shape and the picture gets bars at
  * the sides; over the whole monitor it fills a 16:9 screen. */
+/* RE-SoT: synchronize the SDL wrapper as well as the underlying HWND. */
+extern void nv2a_hw_set_window_frame(int bordered);
 static void fb_toggle_fullscreen(HWND h)
 {
     static WINDOWPLACEMENT saved = { sizeof(WINDOWPLACEMENT) };
@@ -508,11 +511,13 @@ static void fb_toggle_fullscreen(HWND h)
         if (!GetMonitorInfoA(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi))
             return;
         have_saved = GetWindowPlacement(h, &saved);
+        nv2a_hw_set_window_frame(0);
         SetWindowLongPtrA(h, GWL_STYLE, WS_POPUP | WS_VISIBLE);
         SetWindowPos(h, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
                      mi.rcMonitor.right - mi.rcMonitor.left,
                      mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED);
     } else {
+        nv2a_hw_set_window_frame(1);
         SetWindowLongPtrA(h, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
         if (have_saved) {
             SetWindowPlacement(h, &saved);

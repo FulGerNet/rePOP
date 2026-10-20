@@ -75,7 +75,8 @@ static float panel_scale(HWND window)
  * whatever run.ps1 redirected it to). */
 static void read_log(void)
 {
-    HANDLE h = (HANDLE)_get_osfhandle(2), f;
+    int descriptor = _fileno(stderr);
+    HANDLE h = descriptor >= 0 ? (HANDLE)_get_osfhandle(descriptor) : INVALID_HANDLE_VALUE, f;
     wchar_t path[MAX_PATH];
     char buf[24576], *p, *end;
     DWORD n = 0;

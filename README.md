@@ -35,6 +35,18 @@ not a person.*
 | `xbox-demo` | E3 2003 demo, `default.xbe` built 2003-07-18 | Runs movies, menus, pause and the scripted level sections at about 58-60 FPS with VSync; played by a person to the third level without a freeze. Compact F5 and F6 options added. User confirms corrected audio and 120+ FPS (2026-10-18); intermittent visual defects remain under validation; no console comparison |
 | `xbox-retail` | NTSC retail, title `0x5553001D`, `default.xbe` built 2003-10-20 | Bring-up: first playable level reached by the user and a scripted run. The invalid-refresh timestep that caused extreme slow motion is corrected: gameplay measured 9.003 real seconds / 9.008 simulation seconds with the fix. User confirms corrected audio, 120+ FPS and the save-crash fix (2026-10-18); full-level accuracy and broader audio/visual validation remain incomplete |
 
+The existing post-processing quality selector now budgets auxiliary effect
+buffers and projected shadows as well as recognized blur/bloom chains, on
+both hosts and targets. The user confirms that it works (2026-10-20).
+The [effect study](docs/POST-PROCESSING.md) records the remaining water,
+motion-blur and other effect-identification gaps. Windows native renderers
+also synchronize SDL window borders when F11 leaves fullscreen; that separate
+correction still awaits confirmation. See [VALIDATION.md](docs/VALIDATION.md).
+
+The log viewers have a source-selection repair: Windows follows the logger's
+actual file path, and Android reads the `logs/` subfolder. Output from these
+repairs still awaits user confirmation.
+
 **Both targets remain under gameplay validation.** The user reports
 angle-dependent object flickering in the demo's first level and a crash at
 the garden lever, and a retail crash at the second ladder of its first level
@@ -125,6 +137,14 @@ In short, on Windows:
 
 ## Development status
 
+Version 0.1.2 bundles the user's platform-specific INI defaults: unlimited
+FPS, VSync/glow/logs off and 200% look sensitivity on both hosts; Windows
+uses D3D11, 720p and post-processing Low, Android uses Vulkan, 480p and
+post-processing Off. Missing INIs are created from the bundled templates;
+existing preferences survive upgrades. This release includes the effect-quality
+and logging changes below. No further gameplay tests were run after the
+user confirmed the option works and requested that testing stop.
+
 Version 0.1.1 includes Android power follow-ups: display refresh follows
 the FPS limit, inactive timer scans use fewer locks, and eligible frames
 keep their internal-size snapshot until the final upscale. Thermal benefit
@@ -165,6 +185,7 @@ see [VALIDATION.md](docs/VALIDATION.md).
 
 | Component | Xbox demo | Xbox retail |
 | --- | --- | --- |
+| Shared effect-quality selector (Windows/Android) | 🟡 expanded to auxiliary buffers and projected shadows; builds and support tests pass; user confirms the option works (2026-10-20, target unspecified); [all-effects audit remains partial](docs/POST-PROCESSING.md) | 🟡 independent shadow/bloom trace evidence, shared implementation builds; broader water/time-effect identification remains incomplete |
 | Lift and build | 🟢 11,215 functions (2 of them written by hand: the D3D KickOff), 0 failed | 🟢 14,418 functions (2 by hand: the D3D KickOff), 0 failed |
 | Boot to first frame | 🟢 | 🟢 |
 | Portable launch / F5 overlay / video skip | 🟢 verified by the user (2026-10-18) | 🟢 verified by the user (2026-10-18) |
@@ -181,7 +202,7 @@ see [VALIDATION.md](docs/VALIDATION.md).
 | Save / load, memory unit | 🟡 save crash reported resolved by the user (2026-10-18); full save/load and memory-unit validation incomplete | 🟡 save crash reported resolved by the user (2026-10-18); Android random-write and migration corrections pass host tests (2026-10-19); "damaged profile" on Android traced to a stale directory search, fix built, device save/relaunch/load still unverified |
 | Virtual memory reservations | 🟡 reserve/commit fix tested on synthetic input; optional, gameplay with this option not checked | 🟡 corrected reserve/commit and audio address translation; user passed the previous crash point; checkpoint save/load still untested |
 | Xbox Live (retail only) | n/a | ⚪ not planned |
-| Android (arm64, Vulkan; one APK for both) | 🟡 demo-specific draw evidence checked and native simple shaders enabled (2026-10-19): SM8635 480p title/menu improves from about 27.5 to 62.9–63.1 FPS in steady timing windows; first playable scenes include 33.8–53.3 FPS windows, so sustained 60 FPS gameplay remains unmet. Bulk texture conversion and image cycling also enabled; see validation log | 🟡 user confirms runs and videos corrected; logs show severe FPS drops on Adreno 750; native vertex-buffer reuse, save diagnostics and device-width Hor+ built (2026-10-19), GPU vertex programs left the phone waiting on the GPU (8–18 FPS, long black screen before the menu); Vulkan pipeline cache removed the per-pipeline compile stalls (0.3–0.5 ms after the first, device log); GPU vertex programs with bound-only texture sampling rebuilt (2026-10-19), frame rate not yet seen on the device; white light-map borders, forming-tank alignment, bulk texture conversion and native cache optimizations built into the APK; single-stage fragment specialization measured on SM8635: menu 16.5–17.1 to 24.6–24.8 FPS at 480p; FPS touch button hides while its panel is visible, same spot closes it; broader device persistence/performance validation pending |
+| Android (arm64, Vulkan; one APK for both) | 🟡 demo-specific draw evidence checked and native simple shaders enabled (2026-10-19): SM8635 480p title/menu improves from about 27.5 to 62.9–63.1 FPS in steady timing windows; first playable scenes include 33.8–53.3 FPS windows, so sustained 60 FPS gameplay remains unmet. Bulk texture conversion and image cycling also enabled; recurring audio-ISR crash (Reception Hall, guest read at 0xFFFFFFBE) addressed by mapping the full flash mirror, not yet replayed there (2026-10-20); see validation log | 🟡 user confirms runs and videos corrected; logs show severe FPS drops on Adreno 750; native vertex-buffer reuse, save diagnostics and device-width Hor+ built (2026-10-19), GPU vertex programs left the phone waiting on the GPU (8–18 FPS, long black screen before the menu); Vulkan pipeline cache removed the per-pipeline compile stalls (0.3–0.5 ms after the first, device log); GPU vertex programs with bound-only texture sampling rebuilt (2026-10-19), frame rate not yet seen on the device; white light-map borders, forming-tank alignment, bulk texture conversion and native cache optimizations built into the APK; single-stage fragment specialization measured on SM8635: menu 16.5–17.1 to 24.6–24.8 FPS at 480p; FPS touch button hides while its panel is visible, same spot closes it; broader device persistence/performance validation pending; seconds-long freezes traced to new-pipeline compiles (up to 1.8 s each), now compiled in the background with draws skipped until ready (built 2026-10-20, menu 58–59 FPS, not yet seen in a new area) |
 | Android scheduling / next Vulkan draw optimization (2026-10-20) | 🟡 system UI responsive per user; menu 40–57 FPS; compact vertex inputs and state-command reuse built locally, demo device measurement pending | 🟡 renewed ADB tests: final APK title about 29–31 FPS at 480p, 36–38 at 360p; preceding APK up to 48–49 at 240p; opening cutscene reached; sustained gameplay performance unverified |
 | Checked against the console | ⚪ | ⚪ |
 

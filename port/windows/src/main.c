@@ -21,6 +21,7 @@
 #include <math.h>
 #include "options.h"
 #include "launcher.h"
+#include "console_logs.h"
 
 /* xboxrecomp runtime headers */
 #include <xbox/xboxrecomp.h>
@@ -111,7 +112,8 @@ static void resot_redirect_log(FILE *stream, const char *path)
     if (freopen_s(&reopened, "NUL", "w", stream) != 0) return;
     log = _fsopen(path, mode, _SH_DENYNO);
     if (log) {
-        _dup2(_fileno(log), _fileno(stream));
+        if(_dup2(_fileno(log), _fileno(stream))==0)
+            resot_console_log_path(stream,path);
         fclose(log);
     }
 }
@@ -729,6 +731,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     /* Resolve an explicit relative asset path before changing directory.
      * Caches and diagnostics belong to this application, independent of the
      * directory from which Explorer/a shortcut/the terminal launched it. */
+    resot_options_prepare_config();
     resot_game_dir();
     {
         char directory[MAX_PATH];

@@ -28,7 +28,11 @@ void xbox_FramebufferTakeMouse(int *x,int *y) { *x=*y=0; }
 void xbox_SetFrameLimit(int fps) { }
 void xbox_SetRenderScalePercent(int scale) { }
 void xbox_SetVSync(int enabled) { }
-void xbox_SetPostProcessing(int enabled) { }
+static int test_glow=-1,test_quality=-1;
+void xbox_SetPostProcessing(int enabled) { test_glow=enabled; }
+void xbox_SetPostProcessingQuality(int quality) { test_quality=quality; }
+void resot_console_logs_set(int enabled) { }
+void resot_host_draw_text(uint32_t *p,int w,int h,int x,int y,const char *t,uint32_t c) { }
 int nv2a_hw_backend(void) { return 11; }
 void xbox_FramebufferSetOptionsCallbacks(int (*a)(const uint32_t**,uint32_t*,uint32_t*),int (*b)(void*,unsigned,uintptr_t,intptr_t)) { }
 void xbox_InputSetHostFilter(void (*fn)(void*,unsigned)) { }
@@ -42,6 +46,10 @@ static uint32_t g_eax,g_esp;
 main = r'''
 int main(void) {
     char text[96],path[MAX_PATH];
+    assert(resot_log_level("[VIDEO] initialized")==0);
+    assert(resot_log_level("WARNING: fallback")==1);
+    assert(resot_log_level("[CRASH] access violation")==2);
+    assert(resot_log_level("pipeline FAILED")==2);
     _putenv_s("RECOMP_PAD_SCRIPT",""); _putenv_s("RECOMP_PAD_LIVE","");
     GetFullPathNameA("look-test.ini",MAX_PATH,path,NULL);
     strcpy(s_path,path);
@@ -60,7 +68,23 @@ int main(void) {
     assert(axes[0]==0.25f && axes[1]==0);
     s_look_sensitivity=100;axes[0]=0.5f;axes[1]=-1;resot_scale_look(axes);
     assert(axes[0]==0.5f && axes[1]==-1);
+    assert(s_texture_glow==0);
+    resot_native_label(RESOT_NATIVE_GRAPHICS,2,text,sizeof text);
+    assert(!strcmp(text,"Texture glow effect: Off"));
+    resot_native_activate(RESOT_NATIVE_GRAPHICS,2); assert(test_glow==1);
+    resot_native_activate(RESOT_NATIVE_GRAPHICS,2); assert(test_glow==0);
+    assert(GetPrivateProfileIntA("Graphics","TextureGlowEffect",99,s_path)==0);
+    s_post_quality=3; /* Exercise the full cycle independently of platform defaults. */
+    for(int i=0;i<4;i++) {
+        resot_native_activate(RESOT_NATIVE_GRAPHICS,4);
+        assert(test_quality==i);
+        assert(GetPrivateProfileIntA("Graphics","PostProcessingQuality",99,s_path)==i);
+        resot_native_label(RESOT_NATIVE_GRAPHICS,4,text,sizeof text);
+        assert(strstr(text,s_quality_names[i]));
+    }
     native_layout();
+    assert(s_pages[P_GFX].n==5);
+    assert(s_pages[P_GFX].c[4].arg==MSG_ID(P_GFX,4));
     assert(s_pages[P_CTRL].n==8);
     assert(s_pages[P_CTRL].c[0].text==T_LOOK);
     assert(s_pages[P_CTRL].c[0].arg==MSG_ID(P_CTRL,0));
@@ -77,7 +101,7 @@ int main(void) {
     /* Render the actual F7 GDI panel, with Controls expanded and graphics
      * collapsed, so its new sensitivity row can be inspected visually. */
     const uint32_t *pixels;uint32_t width,height;
-    s_open=1;s_graphics_expanded=0;s_controls_expanded=1;s_scroll=0;s_dirty=1;
+    s_open=1;s_graphics_expanded=1;s_controls_expanded=0;s_scroll=0;s_dirty=1;
     assert(panel(&pixels,&width,&height));
     BITMAPFILEHEADER file={0};BITMAPINFOHEADER info={0};
     file.bfType=0x4D42;file.bfOffBits=sizeof file+sizeof info;
@@ -109,6 +133,7 @@ for target, normalizer, right, left in [('demo','000C05D0','000C08B2','000C08A3'
             host_stubs='\n'.join(line for line in stubs.splitlines() if not line.startswith(('int resot_diag_panel(', 'int resot_diag_event(')))
             host_stubs+='\nconst char *resot_android_data_dir(void) { return "."; }\n'
         unit = '#include <windows.h>\n#include <assert.h>\n#include "'+(root/options).as_posix()+'"\n'
+        unit += '#include "'+(root/'port/game/log_level.h').as_posix()+'"\n'
         unit += host_stubs + texts + layout + stubgen + function(source,'sub_'+normalizer)
         unit += f'\n#define RIGHT_RET 0x{right}u\n#define LEFT_RET 0x{left}u\n#define WRAPPER sub_{normalizer}\n'
         if host=='windows':
@@ -116,7 +141,7 @@ for target, normalizer, right, left in [('demo','000C05D0','000C08B2','000C08A3'
         unit += main
         name=f'{host}-{target}'
         (project/f'{name}.c').write_text(unit,encoding='utf-8')
-        cmake += f'add_executable(look-{name} {name}.c)\ntarget_include_directories(look-{name} PRIVATE "{(root / "port/third_party/xboxrecomp/src").as_posix()}")\ntarget_link_libraries(look-{name} PRIVATE user32 gdi32)\nadd_test(NAME look-{name} COMMAND look-{name})\n'
+        cmake += f'add_executable(look-{name} {name}.c)\ntarget_include_directories(look-{name} PRIVATE "{(root / "port/third_party/xboxrecomp/src").as_posix()}" "{(root / f"source/xbox-{target}").as_posix()}")\ntarget_link_libraries(look-{name} PRIVATE user32 gdi32)\nadd_test(NAME look-{name} COMMAND look-{name})\n'
 (project/'CMakeLists.txt').write_text(cmake)
 env = {k.upper() if os.name=='nt' else k:v for k,v in os.environ.items()}
 def run(*args):

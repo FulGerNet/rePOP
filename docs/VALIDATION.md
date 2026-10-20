@@ -1,5 +1,278 @@
 # Validation log
 
+## 2026-10-20: release 0.1.2 and supplied platform defaults
+
+The user supplied separate Windows/Android INIs and explicitly excluded ISO
+and installation paths. Their settings are retained in
+`port/windows/default-options.ini` and `port/android/default-options.ini`, with
+the Windows `[Launcher]` paths omitted. Both use unlimited FPS, VSync off,
+texture glow off, logs off, look sensitivity 200%, and the supplied keyboard/
+controller bindings. Windows uses D3D11, 150% internal size and effect quality
+Low; Android uses Vulkan, 100% internal size and effect quality Off.
+
+Windows embeds its template as resource 203 and creates an absent INI before
+the launcher, with CREATE_NEW. Android packages its template as an asset and
+creates an absent INI in either launcher or direct game startup, without
+replacing an existing file. Native fallback values match each platform's
+template. Existing installation paths and preferences are not overwritten by
+the initialization code. Windows resources are 0.1.2 (numeric 0,1,2,0), and
+Android is versionName 0.1.2 / versionCode 3.
+
+Final commands: `python tools/check-hlsl.py`,
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly`, the retail equivalent, and
+`tools/build-android.ps1`. Shader checks pass; both Windows executables and the
+release APK build (`logs/release-0.1.2-*-build.txt`). These are compilation and
+artifact checks. No new game launches, device installs or gameplay tests were
+performed for this release, honoring the user's instruction to stop testing.
+First-run file creation was not exercised at runtime in these final builds.
+The final Windows ZIP contains no separate INI, as requested: defaults remain
+embedded in the EXEs, and Android's defaults remain inside the APK. The runtime
+creates the user's INI on first launch. Final local artifacts are
+`bin/release-0.1.2/reSOT-0.1.2-windows-x64.zip` and
+`bin/release-0.1.2/reSOT-0.1.2-android.apk`, with `SHA256SUMS.txt` alongside.
+Both EXE version resources report 0.1.2; APK output metadata reports 0.1.2 /
+versionCode 3. These ignored outputs are not added to the source commit.
+
+## 2026-10-20: extend the existing effect-quality selector; user confirmation
+
+The user requested one shared quality selector, without additional options,
+covering more than the recognized glow/bloom chain. Auxiliary-target quality
+now applies from the first clear, including the independently traced demo and
+retail 256x256 RGB565 shadow maps. Low/Mid use 50/75 percent dimensions;
+High preserves original effect resolution. Off omits recognized caster and
+dependent projected-shadow draws as well as the existing screen chains, and
+uses 25 percent dimensions for other eligible auxiliary buffers while retaining
+unknown material draws. Display/history buffers and tiny pyramid levels are
+protected. Viewport dimensions avoid retail's padded-pitch classification gap.
+The policy is shared by D3D11 and native D3D12/Vulkan on both hosts.
+
+Evidence and the incomplete all-effects inventory are in
+[POST-PROCESSING.md](POST-PROCESSING.md). In particular, water materials,
+motion blur and time-power composites are not all independently identified;
+this change must not be described as verified control of every visual effect.
+`[FX-SOURCE]` records actual sampled-render-target dependencies during a
+requested frame trace on all hardware backends. The new
+`tools/audit-effect-trace.py` inventories recorded passes without guessing their
+material identities.
+
+Commands completed before the user stopped further testing:
+
+- `python tools/check-hlsl.py`: all shader checks passed for both targets.
+- `tools/recomp.ps1 -Target xbox-demo -BuildOnly`, retail equivalent, and
+  `tools/build-android.ps1`: both Windows executables and the APK built.
+  Logs: `logs/effect-quality-{demo,retail,android}-build.txt`.
+- `python tools/run-build-tool.py cmake --build build/tests/native-gpu --config Release`
+  and the corresponding `ctest --test-dir build/tests/native-gpu -C Release
+  --output-on-failure`: 9/9 pass, including real D3D12/Vulkan readbacks and the
+  new auxiliary-quality/display-protection/shadow-admission test. These are
+  support tests, not full-game effect comparisons.
+- Isolated Windows demo Vulkan runs with temporary EXEs/INIs reached title
+  images; Low/Mid/High traces record their respective quality. The longer Off
+  trace records 22 omitted shadow-caster draws. Longer runs received a window
+  close; do not count those as completed gameplay checks. Player INI unchanged.
+- `adb install -r bin/reSOT-android.apk`: installed. Android demo Off title
+  image inspected (`logs/effect-quality-android-demo-q0.png`), with recognized
+  chain/consumer skips in its trace. This is not a gameplay, water or temporal
+  effect validation. Other scheduled device checks were stopped.
+
+The user then said: "ok basta test ho provato io confermo che funziona".
+Record this as confirmation that the changed option works; no specific target,
+backend or individual effect was supplied. Automatic tests were stopped and
+the phone's original options file restored. No further testing was requested
+or run after that instruction (subsequent release work performs builds only).
+
+## 2026-10-20 (night): retail green screen at Post processing Off, file-error logs
+
+**Retail green screen (user report, reproduced).** Windows, native Vulkan,
+`PostProcessingQuality=0`: title, menus and the first courtyard were covered
+by a green veil, strongest on the left (`run.ps1 -Target xbox-retail
+-Seconds 110 -SnapshotEvery 5`, average G 157-228 in the snapshots). Frame
+traces of the title at Off and High show retail's bloom is longer than the
+chain the runtime recognised: 640 -> 320x240 -> 160x120 (blur) -> 80x60
+(blur) -> 40x30 (blur) -> 20x15 (blur) -> 10x7 (blur), then an additive
+640x480 composite reading 10x7, 20x15, 40x30 and 80x60 on stages 0-3
+(rc prog 08421), then the 160+320 composite and the separate glow chain.
+Only 320/160/80 were classified, so at Off the 40/20/10 passes still ran on
+an 80x60 target that was never drawn, and the four-level composite was not
+skipped because only stage 0 was checked. The chain test now accepts every
+4:3 level from 320x240 down to 10x7 (h = floor(w*3/4), source equal, double
+or half), the Off consumer test checks every enabled stage, the target
+table holds 32 entries, and Low/Mid scaling leaves levels under 40 pixels at
+guest size. After: the Off trace skips all 16 chain passes and all three
+composites (`[POSTFX] chain 10x7/20x15/40x30 ... skipped`, `skipped
+fullscreen consumer ... 10x7`), and the 80-second snapshot run from the
+intro to the first courtyard has no green (average G 26-64). Not checked:
+Low/Mid/High pictures after this change, Android at run time, the demo's
+chain beyond the 320x240 ping-pong it already had, time-power effects.
+
+**Demo HUD as grey boxes at Off (user report, reproduced, not fixed).**
+Windows Vulkan and D3D11 at Off, demo first gameplay (`01_GP01_E3_Long`):
+health bar, "Work in progress" and the logo are uniform boxes; at High they
+are correct. Traces at Off and High had the same shader, bound textures and
+CPU-computed vertex positions/texture coordinates for those draws. The cause
+was not found; one untested hypothesis is a stale render-target surface at
+the HUD texture's address that High's extra chain surfaces evict. The user
+stopped the investigation.
+
+**"win32 err=0" in Android logs.** The demo's sound loader opens
+`sound\english\X.SB2` and falls back to `sound\X.SB2` for every bank (Windows
+log: ERROR_FILE_NOT_FOUND followed by a successful open). The POSIX backend
+never set the Win32 error and printed no path for the demo. It now maps
+errno (ENOENT 2, ENOTDIR 3, EACCES/EPERM 5, EEXIST 183, else 31), logs the
+host path on Android for both targets (first 16 not-found results, other
+errors always), and the bridge logs the first 32 not-found results, then one
+line saying further ones are not logged. Not run on Android.
+
+Builds: `tools/recomp.ps1 -Target xbox-demo -BuildOnly` and the retail
+equivalent, `tools/build-android.ps1` (`logs/postfx-chain-*-build.txt`).
+
+## 2026-10-20: blank Windows console and missing Android log overlay
+
+The user reports that logs remain unavailable on both hosts, specifying that
+Windows opens a console but leaves it empty. The user also confirms that the
+Windows log viewer worked before the post-processing repair builds. This
+supersedes the earlier unverified logging fixes; no working status is inferred
+from those builds.
+
+Source review found an exact Android path mismatch: `redirect_log` writes to
+`<data>/logs/<target>-{err,out}.txt`, but the overlay opened the files in
+`<data>/` instead. The overlay now opens the writer's `logs/` paths. It retains
+the INI-only activation and writes an activation line through the ordinary
+stderr logger.
+
+Windows returns to the original file-tail architecture, removing the pipe
+redirection added during the previous repair attempts. `resot_redirect_log`
+now gives the viewer the precise path it successfully opened. External disk
+redirects use `_fileno(stdout)` / `_fileno(stderr)` instead of fixed descriptors
+1/2; F6's log reader uses the same correction. This removes the GUI CRT
+numbering assumption without changing the game's logging destinations. A
+console header reports connected sources or source-open errors, and visible
+viewing flushes buffered output. The suspected Windows source-selection
+failure has not been reproduced in a running game here.
+
+The post-processing and F11 code is untouched by this logging-only repair.
+No game runs or automated runtime tests were started, following the user's
+standing request. INI files are not rewritten. `python tools/check-hlsl.py`
+passed all ten shader entry points. Both Windows commands,
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly` and the retail equivalent,
+passed (`logs/log-source-demo-build.txt`, `logs/log-source-retail-build.txt`).
+`tools/build-android.ps1` passed (`logs/log-source-android-build.txt`). Outputs
+are `bin/sot-xbox-demo.exe`, `bin/sot-xbox-retail.exe`, and
+`bin/reSOT-android.apk`. The APK was not installed. Visible console output
+and the Android overlay remain subject to user confirmation.
+
+## 2026-10-20: restore Post processing levels, live logs and native F11 frame
+
+The user reports that logging and post-processing settings no longer work in
+the previous build and requests the earlier behavior back, with a focused
+Off fix. The user also reports that F11 in Windows Vulkan moves/resizes a
+borderless image instead of restoring a normal window. No game runs or
+runtime tests were started; the existing request to stop tests is retained.
+
+The previous conservative change (keeping intermediate draws at Off) is
+reverted. Off skips recognized intermediate draws again. It now also skips
+fullscreen consumers whose stage-zero texture belongs to a classified chain
+target in the same frame, including consumers without the final glow's alpha
+blend state. Vertex coverage is checked; disabled texture stages, UI/bar
+rectangles and targets not classified in the current frame do not match.
+Low/Mid/High, texture glow and their INI keys remain available. This
+supersedes the dependency-preserving workaround documented below.
+
+Windows Console logs resolves its file sources before creating the console,
+flushes buffered output while visible, and tees pipe redirects to both their
+original sink and the viewer. The Android INI-only overlay is retained.
+No INI file or saved preferences were reset for this change.
+
+Source evidence for the F11 correction: bundled SDL 3.4.18 adopts the HWND
+and caches BORDERLESS/RESIZABLE from WS_POPUP/WS_THICKFRAME; its Windows
+WM_NCCALCSIZE handler then uses those flags. Changing GWL_STYLE alone leaves
+SDL treating the window as borderless. F11 now updates both SDL flags before
+applying the existing Win32 style and saved placement. The bridge is
+Windows-only, shared by native Vulkan and D3D12; Android fullscreen is unchanged.
+
+Build-only results: `python tools/check-hlsl.py` passed all ten entry points;
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly` and the retail equivalent
+passed (`logs/postfx-restore-demo-build.txt`,
+`logs/postfx-restore-retail-build.txt`); `tools/build-android.ps1` passed
+(`logs/postfx-restore-android-build.txt`). Outputs are the two Windows EXEs
+and the combined Android APK in `bin/`. The APK was not installed.
+The SHA-256 of `bin/resot-options.ini` was unchanged before/after the build:
+`9D29EBF271BAAA03816C071A4AE3539CF01C7C81BDEEF39C37218DD024A95748`.
+The user's original visual report and the reported regressions have not been
+reproduced or verified fixed in a game run here. No performance improvement
+is claimed.
+
+## 2026-10-20: Post processing Off, stale intermediate textures
+
+The user reports that the new options work, but Post processing Off starts
+with a green image; switching it on and off during gameplay leaves a frozen
+image over the live scene. The report did not identify a target or backend.
+Source review found that `hw_skip_postprocess` skipped intermediate producers
+based on render-target dimensions and texture provenance, while only one
+final consumer (the 160x120 glow composite) was classified for suppression.
+Other consumers could therefore sample the initial clear or the last On image.
+
+The shared correction keeps all classified intermediate draws running at Off
+and restores render-target freshness checks for the final composite. Off
+suppresses the verified final composite, while Low/Mid retain their 50%/75%
+intermediate resolution and High retains native resolution. This is a
+conservative dependency fix: Off no longer claims to remove intermediate GPU
+work, or to disable every post-processing effect in the title.
+
+No game runs or automated tests were started, following the user's request
+to stop testing. `python tools/check-hlsl.py` passed all ten shader entry points.
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly` and the retail equivalent
+both completed successfully (`logs/postfx-freshness-demo-build.txt` and
+`logs/postfx-freshness-retail-build.txt`). `tools/build-android.ps1` completed
+successfully for the combined APK (`logs/postfx-freshness-android-build.txt`).
+The updated files are `bin/sot-xbox-demo.exe`, `bin/sot-xbox-retail.exe` and
+`bin/reSOT-android.apk`. The APK was not installed. Startup, live switching,
+visual correction and performance remain unverified here.
+
+## 2026-10-20 (evening): Android demo ISR crash, retail multi-second freezes
+
+Collected with root over adb (POCO F6, `24069PC21G`, Android 16): the crash
+buffer, `/data/tombstones/tombstone_*` and the app's `files/logs/` with
+history (scratch copies, not committed).
+
+**Demo crash (Reception Hall, user report).** Tombstone 21 (16:47:35) and
+the earlier 13–20 that are SIGSEGVs all stop at `sub_002EF6CD+556` on the APU
+interrupt thread, fault at Xbox VA `0xFFFFFFBE` in every one. The lifted code
+and `tools/xbe-dis.py` show why: the ISR `0x002EDD12` takes the voice object
+for the trapped handle, and `0x002EF6CD` reads its neighbour as
+`[obj+0x50] - 0x4C`; with that link zero, EDI = `0xFFFFFFB4` (logged
+register) and the word read at EDI+0xA is `0xFFFFFFBE`. DirectSound's own
+constructor (`0x002F0260`) and remove (`0x002E9F00`) leave the links
+pointing at themselves, never at zero, so the object is not a live voice;
+which path leaves it so was not found. On the console the read lands in the
+flash mirror (0xFF000000–0xFFFFFFFF) and does not fault. The runtime mapped
+only 1 MB of flash; it now maps the full 16 MB (falls back to 1 MB if the
+host cannot place it). Android log: `Flash ROM aperture: 16 MB`. Not yet
+observed: a run through the Reception Hall with this build. The read now
+returns zero instead of a BIOS byte, so the ISR then relinks hardware voice
+0; what the real console does with its ROM value was not examined.
+
+**Retail freezes.** The 10-second averages do not show seconds-long stops,
+but the creation log does: `[HW native] pipeline N (shader 4) created in
+…` 149.9, 259.0 and 1315.8 ms (16:55 run), eight creations totalling
+12,165 ms in the 15:10 run, 2,793 ms at 15:18; demo 16:46 three totalling
+1,885 ms. Shader 4 is `vs_uber` with the full NV2A combiner; the persistent
+cache (2.7 MB loaded) helps only for combinations already seen, so a new
+area stalls the pushbuffer executor while Adreno compiles. Guest-draw
+pipelines are now compiled on two `resot-pso` threads and their draws are
+skipped until ready; the 5-second cache save moved to the same threads.
+`RESOT_ASYNC_PIPELINES` (default on for Android, off on Windows).
+
+Commands: `tools/build-android.ps1` (passed; installed with `adb install
+-r`), `tools/recomp.ps1 -Target xbox-demo -BuildOnly` and `-Target
+xbox-retail -BuildOnly` (both passed). Retail started over adb: log shows
+`pipeline compilation: background … (2 threads)`, creations marked
+`(background)` at 0.3–1.2 ms (all cached), `43 compiled, 146 guest draws
+skipped`, title/menu 57.8–59.5 FPS, no crash. Not checked: gameplay in an
+area with uncached pipelines (the case that froze), the visual effect of
+the skipped draws there, retail occlusion queries over skipped draws, and
+the Windows executables at run time.
+
 ## 2026-10-20: 0.1.1 build and Android power follow-up
 
 Release metadata: Windows file/product version 0.1.1.0 (display 0.1.1),

@@ -136,6 +136,8 @@ function(resot_add_target id exe_name)
     endif()
     # Icon and version resource of the executable.
     target_sources(${exe_name} PRIVATE port/windows/res/resot.rc)
+    set_source_files_properties(port/windows/res/resot.rc PROPERTIES
+        OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/port/windows/default-options.ini")
     set(out "${exe_name}")
     if(RESOT_ABI_CHECK)
         set(out "${exe_name}-abi")

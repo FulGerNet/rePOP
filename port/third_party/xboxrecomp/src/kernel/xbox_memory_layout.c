@@ -113,7 +113,9 @@ static void *g_mcpx_memory = NULL;
  * fault, and this is the half that has an obviously right answer. */
 #define XBOX_FLASH_BASE 0xFF000000u
 #define XBOX_FLASH_SIZE (1u * 1024u * 1024u)
+#define XBOX_FLASH_MIRROR_SIZE (16u * 1024u * 1024u) /* RE-SoT: to 0xFFFFFFFF */
 static void *g_flash_memory = NULL;
+static uint32_t g_flash_size;   /* RE-SoT: what was mapped, see the init */
 /* The contiguous window's backing section. It is a file mapping rather than
  * plain committed memory for one reason: the tiled aperture has to be a
  * second view of the very same bytes, and only a mapping can be mapped
@@ -1539,7 +1541,7 @@ static int peek_readable(uint32_t va)
         { g_contig_memory, XBOX_CONTIG_BASE,  XBOX_CONTIG_SIZE },
         { g_nv2a_memory,   XBOX_NV2A_BASE,    XBOX_NV2A_SIZE },
         { g_mcpx_memory,   XBOX_MCPX_BASE,    XBOX_MCPX_SIZE },
-        { g_flash_memory,  XBOX_FLASH_BASE,   XBOX_FLASH_SIZE },
+        { g_flash_memory,  XBOX_FLASH_BASE,   g_flash_size },
     };
     size_t i;
 
@@ -2709,16 +2711,24 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
     {
         uintptr_t flash_native = XBOX_FLASH_BASE + g_memory_offset;
 
-        g_flash_memory = VirtualAlloc(
-            (LPVOID)flash_native,
-            XBOX_FLASH_SIZE,
-            MEM_RESERVE | MEM_COMMIT,
-            PAGE_READWRITE
-        );
+        /* RE-SoT: the console mirrors flash up to 0xFFFFFFFF. Demo ISR
+         * 0x002EF6CD (+0x22C) reads a voice's neighbour handle through a
+         * zero list link, at 0xFFFFFFB4 + 0xA: a ROM read on hardware, a
+         * SIGSEGV past the 1 MB window here (8 Android tombstones,
+         * 2026-10-18..20, all at Xbox VA 0xFFFFFFBE). Map the whole 16 MB;
+         * keep the 1 MB window if the host cannot place it. */
+        g_flash_size = XBOX_FLASH_MIRROR_SIZE;
+        g_flash_memory = VirtualAlloc((LPVOID)flash_native, g_flash_size,
+                                      MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (!g_flash_memory) {
+            g_flash_size = XBOX_FLASH_SIZE;
+            g_flash_memory = VirtualAlloc((LPVOID)flash_native, g_flash_size,
+                                          MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        }
         if (g_flash_memory) {
             fprintf(stderr, "  Flash ROM aperture: %u MB at Xbox VA "
                     "0x%08X (zeroed, not a real BIOS image)\n",
-                    XBOX_FLASH_SIZE / (1024 * 1024), XBOX_FLASH_BASE);
+                    (unsigned)(g_flash_size / (1024 * 1024)), XBOX_FLASH_BASE);
         } else {
             fprintf(stderr, "  WARNING: flash aperture at 0x%08X failed "
                     "(error %lu); a title reading flash will fault\n",
@@ -3010,6 +3020,7 @@ void xbox_MemoryLayoutShutdown(void)
     if (g_flash_memory) {
         VirtualFree(g_flash_memory, 0, MEM_RELEASE);
         g_flash_memory = NULL;
+        g_flash_size = 0;
     }
 
     /* Close file mapping handle */

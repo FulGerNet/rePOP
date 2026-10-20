@@ -5,8 +5,8 @@
 1 ICON "resot.ico"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,1,1,0
- PRODUCTVERSION 0,1,1,0
+ FILEVERSION 0,1,2,0
+ PRODUCTVERSION 0,1,2,0
  FILEOS VOS_NT_WINDOWS32
  FILETYPE VFT_APP
 BEGIN
@@ -16,8 +16,8 @@ BEGIN
         BEGIN
             VALUE "FileDescription", "reSOT - Prince of Persia: The Sands of Time (Xbox) recompiled"
             VALUE "ProductName", "reSOT"
-            VALUE "FileVersion", "0.1.1"
-            VALUE "ProductVersion", "0.1.1"
+            VALUE "FileVersion", "0.1.2"
+            VALUE "ProductVersion", "0.1.2"
         END
     END
     BLOCK "VarFileInfo"
@@ -29,6 +29,7 @@ END
 // The launcher (src/launcher.c): the logo, and the Atlantis MF face for its
 // title and buttons when the build found res/AtlantisMF.ttf (CMakeLists.txt).
 202 RCDATA "../../../docs/media/reSOT.png"
+203 RCDATA "../default-options.ini"
 #ifdef RESOT_HAVE_LAUNCHER_FONT
 201 RCDATA "AtlantisMF.ttf"
 #endif

@@ -3,7 +3,7 @@
  * <app files>/resot-options.ini.
  *
  * The same settings and bindings as the Windows host (options.c), with the
- * same defaults and the same pad remapping, so a layout behaves alike on
+ * same bindings and the same pad remapping, so a layout behaves alike on
  * both: Graphics (FPS limit, VSync, post-processing; Android's resolution
  * controls internal rendering), Keyboard (a Bluetooth/USB keyboard) and Joystick. There is no
  * F6/F7 panel on Android; the touch controls are configured in the app
@@ -56,12 +56,12 @@ static int s_resolution = 2; /* Android default: guest-sized main targets. */
 
 static SRWLOCK s_lock = SRWLOCK_INIT;
 static volatile LONG s_revision;
-static int s_keys[ACTIONS], s_joy[ACTIONS], s_fps = 60, s_vsync = 1, s_post_processing = 0;
+static int s_keys[ACTIONS], s_joy[ACTIONS], s_fps = 0, s_vsync = 0, s_texture_glow = 0;
 static int s_capture = -1, s_capture_tab, s_capture_armed, s_native_capture;
 static DWORD s_native_since;
 static int s_joy_was[25], s_key_was[256], s_walk, s_walk_was;
 static int s_keyboard_enabled = 1, s_mouse_speed = 43, s_walk_deflection = 12000;
-static int s_look_sensitivity = 100;
+static int s_look_sensitivity = 200;
 static char s_path[1200];
 
 extern int  xbox_FramebufferKeyDown(int);
@@ -69,6 +69,9 @@ extern void xbox_FramebufferTakeMouse(int *, int *);
 extern void xbox_SetFrameLimit(int);
 extern void xbox_SetVSync(int);
 extern void xbox_SetPostProcessing(int);
+extern void xbox_SetPostProcessingQuality(int);
+static int s_post_quality=0;
+static const char *const s_quality_names[]={"Off","Low","Mid","High"};
 extern void xbox_SetRenderScalePercent(int);
 extern void xbox_InputSetHostFilter(void (*)(void *, unsigned));
 extern const char *resot_android_data_dir(void);
@@ -79,11 +82,16 @@ long resot_native_revision(void) { return InterlockedCompareExchange(&s_revision
 void resot_options_summary(char *out, unsigned size)
 {
     AcquireSRWLockShared(&s_lock);
-    snprintf(out, size, "FPS limit %s, VSync %s, post-processing %s, internal resolution %s",
+    snprintf(out, size, "FPS limit %s, VSync %s, texture glow %s, internal resolution %s",
              s_cap_names[s_fps == 30 ? 0 : s_fps == 60 ? 1 : s_fps == 120 ? 2 : 3],
-             s_vsync ? "on" : "off", s_post_processing ? "on" : "off",s_render_names[s_resolution]);
+             s_vsync ? "on" : "off", s_texture_glow ? "on" : "off",s_render_names[s_resolution]);
     ReleaseSRWLockShared(&s_lock);
 }
+
+#include "console_logs_android.h"
+extern void xbox_FramebufferSetOptionsCallbacks(
+    int (*)(const uint32_t **,uint32_t *,uint32_t *),
+    int (*)(void *,unsigned,uintptr_t,intptr_t));
 
 /* No host panel on Android. */
 int resot_diag_panel(const uint32_t **pixels, uint32_t *width, uint32_t *height)
@@ -128,8 +136,10 @@ static int save_config(void)
         mark_dirty();
         return 0;
     }
-    fprintf(f, "[Graphics]\nRenderer=vulkan\nFPSLimit=%d\nVSync=%d\nPostProcessing=%d\nInternalResolutionPercent=%d\n",
-            s_fps, s_vsync, s_post_processing,s_render_scales[s_resolution]);
+    fprintf(f, "[Graphics]\nRenderer=vulkan\nFPSLimit=%d\nVSync=%d\nTextureGlowEffect=%d\nInternalResolutionPercent=%d\n",
+            s_fps, s_vsync, s_texture_glow,s_render_scales[s_resolution]);
+    fprintf(f,"PostProcessingQuality=%d\n",s_post_quality);
+    fprintf(f,"[Diagnostics]\nConsoleLogs=%d\n",s_console_logs);
     fprintf(f, "[Controls]\nLookSensitivityPercent=%d\n",s_look_sensitivity);
     fprintf(f, "[Keyboard]\n");
     for (i = 0; i < ACTIONS; i++) fprintf(f, "Action%d=%d\n", i, s_keys[i]);
@@ -300,7 +310,8 @@ void resot_native_label(int page, int item, char *out, unsigned size)
         switch (item) {
         case 0: snprintf(out, size, "FPS limit: %s", s_cap_names[s_fps == 30 ? 0 : s_fps == 60 ? 1 : s_fps == 120 ? 2 : 3]); break;
         case 1: snprintf(out, size, "VSync: %s", s_vsync ? "On" : "Off"); break;
-        case 2: snprintf(out, size, "Post processing: %s", s_post_processing ? "On" : "Off"); break;
+        case 2: snprintf(out, size, "Texture glow effect: %s", s_texture_glow ? "On" : "Off"); break;
+        case 4: snprintf(out,size,"Post processing: %s",s_quality_names[s_post_quality]); break;
         default: snprintf(out, size, "Internal resolution: %s",s_render_names[s_resolution]); break;
         }
     } else if (page == RESOT_NATIVE_CONTROLS && item == 0) {
@@ -327,7 +338,8 @@ void resot_native_activate(int page, int item)
         switch (item) {
         case 0: s_fps = s_fps == 30 ? 60 : s_fps == 60 ? 120 : s_fps == 120 ? 0 : 30; xbox_SetFrameLimit(s_fps); break;
         case 1: s_vsync = !s_vsync; xbox_SetVSync(s_vsync); break;
-        case 2: s_post_processing = !s_post_processing; xbox_SetPostProcessing(s_post_processing); break;
+        case 2: s_texture_glow = !s_texture_glow; xbox_SetPostProcessing(s_texture_glow); break;
+        case 4: s_post_quality=(s_post_quality+1)%4; xbox_SetPostProcessingQuality(s_post_quality); break;
         case 3: s_resolution=(s_resolution+1)%6; xbox_SetRenderScalePercent(s_render_scales[s_resolution]); break;
         default: break;
         }
@@ -367,12 +379,15 @@ void resot_options_init(void)
     if (s_walk_deflection < 1000) s_walk_deflection = 1000;
     if (s_walk_deflection > 32767) s_walk_deflection = 32767;
     snprintf(s_path, sizeof s_path, "%s/resot-options.ini", resot_android_data_dir());
-    s_look_sensitivity = resot_look_percent(ini_get("Controls","LookSensitivityPercent",100));
-    s_fps = ini_get("Graphics", "FPSLimit", 60);
-    if (s_fps != 0 && s_fps != 30 && s_fps != 60 && s_fps != 120) s_fps = 60;
+    s_look_sensitivity = resot_look_percent(ini_get("Controls","LookSensitivityPercent",200));
+    s_fps = ini_get("Graphics", "FPSLimit", 0);
+    if (s_fps != 0 && s_fps != 30 && s_fps != 60 && s_fps != 120) s_fps = 0;
     env = getenv("RECOMP_HW_VSYNC");
-    s_vsync = ini_get("Graphics", "VSync", !env || *env != '0') != 0;
-    s_post_processing = ini_get("Graphics", "PostProcessing", 0) != 0;
+    s_vsync = ini_get("Graphics", "VSync", env && *env != '0') != 0;
+    s_post_quality=ini_get("Graphics","PostProcessingQuality",0);
+    if(s_post_quality<0 || s_post_quality>3)s_post_quality=0;
+    xbox_SetPostProcessingQuality(s_post_quality);
+    s_texture_glow = ini_get("Graphics", "TextureGlowEffect", 0) != 0;
     {
         int percent=ini_get("Graphics","InternalResolutionPercent",100);
         s_resolution=2;
@@ -388,6 +403,9 @@ void resot_options_init(void)
     }
     xbox_SetFrameLimit(s_fps);
     xbox_SetVSync(s_vsync);
-    xbox_SetPostProcessing(s_post_processing);
+    xbox_SetPostProcessing(s_texture_glow);
+    s_console_logs=ini_get("Diagnostics","ConsoleLogs",0)!=0;
+    if(s_console_logs)fprintf(stderr,"[CONSOLE] On-screen logs enabled (logs/%s-err.txt and -out.txt)\n",RESOT_TARGET_ID);
+    xbox_FramebufferSetOptionsCallbacks(resot_console_panel,NULL);
     xbox_InputSetHostFilter(input);
 }

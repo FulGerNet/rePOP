@@ -89,6 +89,7 @@ static void ng_present(int sync);
 static void ng_flip(void);
 static int ng_readback(uint32_t *dst, uint32_t w, uint32_t h);
 static int ng_postprocess_source(uint32_t offset);
+static int ng_effect_source(uint32_t offset,uint32_t w,uint32_t h); /* RE-SoT: render-target provenance. */
 static void hw_diag_sample(void); /* RE-SoT: shared host diagnostics, either GPU encoder. */
 void nv2a_hw_flush_present(void); /* RE-SoT: native encoder shares deferred presentation. */
 static volatile LONG s_hw_backend;
@@ -854,7 +855,41 @@ static ID3DBlob *hw_compile(const char *entry, const char *target)
  * legacy integer environment scale until the host supplies its INI option. */
 #define HW_PERCENT_SCALE 0x10000u
 #include "nv2a_native_scale.h" /* RE-SoT: tested fractional rounding on both hosts. */
+#include "resot_effect_quality.h" /* RE-SoT: shared auxiliary-effect quality budget. */
 static volatile LONG s_render_percent;
+/* RE-SoT: quality of screen effects and auxiliary render targets, independently
+ * from the final texture-glow switch. Guest timings are unchanged. */
+static volatile LONG s_post_quality=3;
+void xbox_SetPostProcessingQuality(int quality)
+{
+    if(quality<0 || quality>3)quality=3;
+    if(InterlockedExchange(&s_post_quality,quality)!=quality)
+        fprintf(stderr,"[VIDEO] post processing quality %d (0 off, 1 low, 2 mid, 3 high)\n",quality);
+}
+static int hw_post_quality(void) { return (int)InterlockedCompareExchange(&s_post_quality,0,0); }
+/* RE-SoT: only proven fullscreen chains may be omitted as screen effects.
+ * Auxiliary-target resolution has its own shared budget below; shadows have
+ * a separate producer/consumer test and must not enter this chain registry. */
+#define HW_POST_TARGETS 32 /* RE-SoT: retail uses 16 chain targets a frame. */
+static struct { uint32_t offset,w,h,frame; } s_post_targets[HW_POST_TARGETS];
+static int hw_post_target(uint32_t offset,uint32_t w,uint32_t h)
+{
+    unsigned i;
+    for(i=0;i<HW_POST_TARGETS;i++)if(s_post_targets[i].offset==offset && s_post_targets[i].w==w
+        && s_post_targets[i].h==h && s_hw.frame-s_post_targets[i].frame<=2)return 1;
+    return 0;
+}
+static void hw_post_mark(uint32_t offset,uint32_t w,uint32_t h)
+{
+    unsigned i,best=0;
+    for(i=0;i<HW_POST_TARGETS;i++) {
+        if(s_post_targets[i].offset==offset) { best=i;break; }
+        if(!s_post_targets[i].offset || s_post_targets[i].frame<s_post_targets[best].frame)best=i;
+    }
+    s_post_targets[best].offset=offset;s_post_targets[best].w=w;
+    s_post_targets[best].h=h;s_post_targets[best].frame=s_hw.frame;
+}
+
 void xbox_SetRenderScalePercent(int percent)
 {
     if (percent!=50 && percent!=75 && percent!=100 && percent!=150 &&
@@ -872,19 +907,41 @@ static uint32_t hw_px(uint32_t x,uint32_t sc)
     return (uint32_t)((float)x*(float)sc*s_hw.widen+0.5f);
 }
 
-/* RE-SoT: how much finer than the guest a surface is rendered. The display
- * surface (and anything as wide) gets RECOMP_HW_SCALE. Smaller surfaces are
- * the title's post-processing chain (the demo's glow: 640 -> 320 -> 160 ->
- * 80 and back) and shadow buffers; their filters are fixed tap offsets in
- * guest texels, so at twice the resolution each blur covered half the area
- * and left sharp, shifted copies of the scene -- "layers out of register".
- * They stay at the guest's own resolution (RECOMP_HW_FX_SCALE to change). */
+/* RE-SoT: display surfaces follow internal resolution; auxiliary surfaces
+ * follow the one effect-quality budget. Filters retain guest texel offsets:
+ * increasing target sizes without converting offsets previously left sharp,
+ * shifted copies of the scene ("layers out of register"). */
 static uint32_t hw_surface_scale(uint32_t w)
 {
-    /* RE-SoT: effect and shadow surfaces retain their guest resolution. */
     int percent=(int)InterlockedCompareExchange(&s_render_percent,0,0);
+    /* RE-SoT: source coordinates remain guest texels; existing sampling
+     * conversion uses the actual host surface size, including fractional scale. */
+    /* RE-SoT: quality applies from the first clear to ALL auxiliary buffers,
+     * including the independently traced 256x256 shadow maps. Previously only
+     * learned fullscreen blur targets were included, and learning on the first
+     * draw could recreate (erase) a target after its clear. Viewport width also
+     * fixes retail's padded 40/20/10-pixel surfaces. Never skip an unknown
+     * material: its auxiliary buffer gets the minimum budget at Off. */
+    if (w < 640 && !s_gpu.clip_x && !s_gpu.clip_y) {
+        unsigned fx = resot_effect_percent(hw_post_quality(),s_gpu.clip_w,s_gpu.clip_h);
+        if (fx != 100) return HW_PERCENT_SCALE | fx;
+    }
     if(w>=640 && percent) return HW_PERCENT_SCALE | (uint32_t)percent;
     return w >= 640 ? (uint32_t)s_hw.scale : (uint32_t)s_hw.fx_scale;
+}
+
+/* RE-SoT: record actual render-to-texture dependencies during a requested
+ * frame trace on every backend. Prior-frame sources expose temporal effects;
+ * do not label a material as water/motion blur merely from its buffer size. */
+static void hw_trace_effect_source(unsigned stage,uint32_t offset,uint32_t w,
+    uint32_t h,uint32_t frame)
+{
+    if(s_ftrace==2)fprintf(stderr,
+        "[FX-SOURCE] stage=%u offset=%08X size=%ux%u age=%u target=%08X viewport=%ux%u quality=%d mode=%u depth=%u blend=%u:%X/%X\n",
+        stage,offset,w,h,s_hw.frame-frame,dma_resolve(s_gpu.color_offset),
+        s_gpu.clip_w,s_gpu.clip_h,hw_post_quality(),
+        (s_gpu.rc.stage_program>>(stage*5))&31,s_gpu.depth_test,s_gpu.blend_enable,
+        s_gpu.blend_sfactor,s_gpu.blend_dfactor);
 }
 
 #if RESOT_HW_D3D11
@@ -1386,8 +1443,10 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
             fprintf(stderr, "  [HW-TEX] stage=%d offset=%08X declared=%ux%u selected=%ux%u frame=%u now=%u feedback=%d\n",
                 stage, t->offset, t->width, t->height, best->w, best->h,
                 best->drawn_frame, s_hw.frame, best == target);
-        if (best)
+        if (best) {
+            hw_trace_effect_source(stage,best->offset,best->w,best->h,best->drawn_frame); /* RE-SoT */
             return best == target ? NULL : best->srv;
+        }
     }
     if (!hw_mem_ok(t->offset, t->cube ? 6 * tex_face_stride(t) : hw_tex_bytes(t)))
         return NULL;
@@ -2277,11 +2336,70 @@ static void hw_classify_screen(float left, float right, float top, float bottom)
  * blending and no depth test. Source offsets vary with allocation: identify
  * the pass by its decoded state and coverage, never by texture addresses.
  * Smaller UI/bar quads, pause layers and shadow targets do not match. */
+/* RE-SoT: independent frame traces: demo android-demo-simple-trace, frame
+ * 2743, and retail retail-hud-after, frame 3615. Both use linear A8R8G8B8
+ * fullscreen quads through 320x240, 160x120 and 80x60; retail's blur differs
+ * from the demo's, so preserve each title's combiners and tap weights.
+ * No fixed allocation addresses are used. Coverage is checked below. */
+static int hw_post_chain_candidate(uint32_t n)
+{
+    const Texture *t=&s_gpu.texs[0];
+    uint32_t w=s_gpu.clip_w,h=s_gpu.clip_h;
+    /* RE-SoT: a bound texture is not a dependency when stage zero is disabled. */
+    uint32_t mode=s_gpu.rc.stage_program&31;
+    if(s_gpu.rc_seen && (mode<1 || mode>3))return 0;
+    /* RE-SoT (xbox-retail, title and first courtyard, 2026-10-20 trace): the
+     * bloom continues 80x60 -> 40x30 -> 20x15 -> 10x7 and one additive
+     * fullscreen composite samples 10x7, 20x15, 40x30 and 80x60 together.
+     * Recognising only 320/160/80 left the 40/20/10 passes running at Off on
+     * an 80x60 target that was never drawn: the green screen. Accept every
+     * 4:3 level from 320x240 down to 10x7 (h = floor(w*3/4)). */
+    if(n!=4 || s_gpu.prim!=NV_PRIM_QUADS || s_gpu.depth_test
+        || s_gpu.clip_x || s_gpu.clip_y || !t->valid || t->color!=0x12
+        || w>320 || w<10 || h!=w*3/4)return 0;
+    if(!((t->width==w && t->height==h)
+        || (t->width==w*2 && (t->height==h*2 || t->height==h*2+1))
+        || (t->width*2==w && (t->height*2==h || t->height*2+1==h))))return 0;
+    if(hw_post_target(dma_resolve(t->offset),t->width,t->height))return 1;
+    if(ng_active())return ng_effect_source(t->offset,t->width,t->height);
+    for(unsigned i=0;i<HW_MAX_SURFACES;i++)if(s_hw.surf[i].srv
+        && s_hw.surf[i].offset==t->offset && s_hw.surf[i].w==t->width
+        && s_hw.surf[i].h==t->height)return 1;
+    return 0;
+}
+/* RE-SoT: Off must suppress consumers as well as producers. A fullscreen
+ * copy can sample a chain target with blending disabled or at 320x240,
+ * unlike the separately verified 160x120 alpha-blended glow composite.
+ * Require provenance from a chain draw in THIS frame, not a stale allocation.
+ * Restrict this to stage zero and full display coverage (checked below):
+ * merely bound, unused higher stages must not suppress unrelated draws. */
+/* RE-SoT (xbox-retail): the multi-scale bloom composite binds its 10x7,
+ * 20x15, 40x30 and 80x60 levels to stages 0-3 (rc prog 08421), so every
+ * enabled stage is checked, not only stage zero. */
+static int hw_post_disabled_consumer(uint32_t n)
+{
+    unsigned i,stage;
+    if(hw_post_quality()!=0 || n!=4 || s_gpu.prim!=NV_PRIM_QUADS
+        || s_gpu.depth_test || s_gpu.clip_x || s_gpu.clip_y
+        || s_gpu.clip_w!=640 || s_gpu.clip_h!=480)return 0;
+    for(stage=0;stage<4;stage++) {
+        const Texture *t=&s_gpu.texs[stage];
+        uint32_t mode=(s_gpu.rc.stage_program>>(stage*5))&31;
+        if(s_gpu.rc_seen && (mode<1 || mode>3))continue;
+        if(!s_gpu.rc_seen && stage)break;
+        if(!t->valid || t->color!=0x12)continue;
+        for(i=0;i<HW_POST_TARGETS;i++)if(s_post_targets[i].offset==dma_resolve(t->offset)
+            && s_post_targets[i].w==t->width && s_post_targets[i].h==t->height
+            && s_post_targets[i].frame==s_hw.frame)return 1;
+    }
+    return 0;
+}
 static int hw_postprocess_candidate(uint32_t n)
 {
     const Texture *t = &s_gpu.texs[0];
     uint32_t i;
-    if ((xbox_FramebufferPostProcessing() && s_ftrace != 2)
+    if (hw_post_chain_candidate(n) || hw_post_disabled_consumer(n)) return 1;
+    if ((hw_post_quality()!=0 && xbox_FramebufferPostProcessing() && s_ftrace != 2)
         || n != 4 || s_gpu.prim != NV_PRIM_QUADS
         || s_gpu.clip_w != 640 || s_gpu.clip_h != 480
         || s_gpu.depth_test || !s_gpu.blend_enable
@@ -2299,6 +2417,44 @@ static int hw_postprocess_candidate(uint32_t n)
     return 0;
 }
 
+/* RE-SoT: projected-shadow producer/consumer pairs, independently present in
+ * demo android-demo-simple-trace and retail retail-hud-after-err. Addresses
+ * are allocations, not XBE constants. Current-frame provenance prevents a
+ * reused/static RGB565 texture from suppressing unrelated geometry. */
+static struct { uint32_t offset,frame; int valid; } s_shadow_targets[32];
+static int hw_skip_shadow(void)
+{
+    unsigned i,best=0;
+    const Texture *t=&s_gpu.texs[0];
+    if (resot_shadow_target(s_gpu.format,s_gpu.pitch,s_gpu.clip_x,s_gpu.clip_y,
+            s_gpu.clip_w,s_gpu.clip_h,s_gpu.zeta_offset,s_gpu.depth_test,s_gpu.blend_enable)) {
+        uint32_t offset=dma_resolve(s_gpu.color_offset);
+        for(i=0;i<32;i++) {
+            if(s_shadow_targets[i].valid && s_shadow_targets[i].offset==offset) { best=i;break; }
+            if(!s_shadow_targets[i].valid || s_shadow_targets[i].frame<s_shadow_targets[best].frame)best=i;
+        }
+        s_shadow_targets[best].offset=offset;s_shadow_targets[best].frame=s_hw.frame;
+        s_shadow_targets[best].valid=1;
+        if(hw_post_quality()==0) {
+            if(s_ftrace==2)fprintf(stderr,"[POSTFX] shadow caster skipped\n");
+            return 1;
+        }
+    }
+    if(hw_post_quality()!=0 || !s_gpu.blend_enable || s_gpu.blend_sfactor!=0
+        || s_gpu.blend_dfactor!=0x301 || s_gpu.depth_mask
+        || !t->valid || (t->color!=0x05 && t->color!=0x11)
+        || t->width!=256 || t->height!=256)return 0;
+    /* RE-SoT: an unused, still-bound stage is not a shadow dependency. */
+    if(s_gpu.rc_seen && ((s_gpu.rc.stage_program&31)<1 || (s_gpu.rc.stage_program&31)>3))return 0;
+    for(i=0;i<32;i++)if(s_shadow_targets[i].valid
+        && s_shadow_targets[i].offset==dma_resolve(t->offset)
+        && s_shadow_targets[i].frame==s_hw.frame) {
+        if(s_ftrace==2)fprintf(stderr,"[POSTFX] projected shadow skipped\n");
+        return 1;
+    }
+    return 0;
+}
+
 static int hw_skip_postprocess(const Nv2aVshOutput *v, uint32_t n)
 {
     float left = 1e9f, right = -1e9f, top = 1e9f, bottom = -1e9f;
@@ -2312,10 +2468,21 @@ static int hw_skip_postprocess(const Nv2aVshOutput *v, uint32_t n)
         if (v[i].pos[1] < top) top = v[i].pos[1];
         if (v[i].pos[1] > bottom) bottom = v[i].pos[1];
     }
-    if (left < -1 || left > 1 || right < 639 || right > 641
-        || top < -1 || top > 1 || bottom < 479 || bottom > 481)
+    if (left < -1 || left > 1 || right < s_gpu.clip_w-1 || right > s_gpu.clip_w+1
+        || top < -1 || top > 1 || bottom < s_gpu.clip_h-1 || bottom > s_gpu.clip_h+1)
         return 0;
-    enabled = xbox_FramebufferPostProcessing();
+    if(hw_post_chain_candidate(n)) {
+        hw_post_mark(dma_resolve(s_gpu.color_offset),s_gpu.clip_w,s_gpu.clip_h);
+        if(s_ftrace==2)fprintf(stderr,"[POSTFX] chain %ux%u quality=%d %s\n",
+            s_gpu.clip_w,s_gpu.clip_h,hw_post_quality(),hw_post_quality()?"drawn":"skipped");
+        return hw_post_quality()==0;
+    }
+    if(hw_post_disabled_consumer(n)) {
+        if(s_ftrace==2)fprintf(stderr,"[POSTFX] skipped fullscreen consumer source=%08X %ux%u\n",
+            s_gpu.texs[0].offset,s_gpu.texs[0].width,s_gpu.texs[0].height);
+        return 1;
+    }
+    enabled = hw_post_quality()!=0 && xbox_FramebufferPostProcessing();
     if (s_ftrace == 2)
         fprintf(stderr, "  [POSTFX] final glow composite %s frame=%u source=%08X 160x120\n",
                 enabled ? "on" : "skipped", s_hw.frame, s_gpu.texs[0].offset);
@@ -2492,6 +2659,7 @@ static int hw_draw_program_batch(void)
 
     if (s_hw.cpu_vsh || n < 3 || n > NV_MAX_INDICES)
         return 0;
+    if (hw_skip_shadow()) return 1; /* RE-SoT: before conversion/upload. */
     /* RE-SoT: verify the four corners of a possible final glow composite. */
     if (hw_postprocess_candidate(n)) {
         Nv2aVshOutput post[4];
@@ -2746,7 +2914,7 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
 #endif
     uint32_t i, count = 0;
 
-    if (hw_skip_postprocess(v, n)) return; /* RE-SoT: CPU-transformed batches too. */
+    if (hw_skip_shadow() || hw_skip_postprocess(v, n)) return; /* RE-SoT: CPU-transformed batches too. */
 
     /* Full-width 2D keeps its width (see hw_draw_program_batch). */
     {

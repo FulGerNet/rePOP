@@ -61,6 +61,7 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
             WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         base = getExternalFilesDir(null);
         if (base == null) base = getFilesDir();
+        DefaultOptions.ensure(this);
         view = new LauncherView(this, this);
         setContentView(view);
         view.requestFocus();

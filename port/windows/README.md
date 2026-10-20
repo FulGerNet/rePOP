@@ -1,6 +1,15 @@
 # reSOT on Windows
 
-Version 0.1.1 includes the shared timer lock reduction and preceding APU/
+Version 0.1.2 bundles [the supplied Windows defaults](default-options.ini):
+D3D11, unlimited FPS, VSync/glow/logs off, 720p (150%), post-processing Low
+and look sensitivity 200%. A missing INI is created before the launcher;
+existing preferences are retained. The release ZIP contains no separate INI;
+the executable creates it on first launch from its embedded defaults.
+No ISO or game-installation path is bundled.
+It also includes the effect-quality and
+logging repairs recorded in [validation](../../docs/VALIDATION.md).
+
+The preceding 0.1.1 release includes the shared timer lock reduction and APU/
 IRQL and Vulkan changes. Android display/lifecycle controls are host-specific;
 Windows retains its full-size compositor. See [validation](../../docs/VALIDATION.md).
 
@@ -84,10 +93,10 @@ and internal rendering resolution (240p, 360p, 480p, 720p, 1080p, 1440p);
 each choice cycles its value. Resolution changes from either menu or F7 preserve the current
 fullscreen/window state; only F11 toggles it, including while F7 is open.
 The INI key is `[Graphics] InternalResolutionPercent` (50/75/100/150/225/300,
-default 100). The old `Resolution` window-size index is no longer used.
+default 150). The old `Resolution` window-size index is no longer used.
 The labels assume a 480-line guest target; aspect ratio remains unchanged.
-Movies and options retain display resolution; effects retain guest resolution.
- Controls has **Look sensitivity** (25–200% in steps of 25, default 100%),
+Movies and options retain display resolution; auxiliary effects follow effect quality.
+ Controls has **Look sensitivity** (25–200% in steps of 25, default 200%),
 also in F7, and the keyboard and joystick
 bindings in three pages each; choosing a binding waits for the next key,
 mouse button or joystick input (Esc cancels), and `Reset all bindings`
@@ -132,7 +141,10 @@ D3D11 renderer. NV2A vertex programs run on the GPU in `vs_uber`, a shader
 compiled offline that interprets the program (no shader compiler at run
 time); programs that write constants or read more than eight inputs still use
 the CPU interpreter. `RESOT_NATIVE_CPU_VSH=1` puts every program back on the
-CPU, for comparison.
+CPU, for comparison. `RESOT_ASYNC_PIPELINES=1` compiles new D3D12/Vulkan
+pipelines on background threads and skips their draws until ready, as
+Android does by default (see port/android/README.md); off on Windows, where
+no compile stall has been measured.
 
 `RESOT_RENDERER=d3d11`, `d3d12` or `vulkan` overrides the saved choice for one
 run. D3D11 stays the default. The panel reports the actual active backend,
@@ -257,3 +269,28 @@ rasteriser, for comparison), `-Seconds N`, `-SnapshotEvery S` (frame dumps in
 `logs/fb`), `-Set @{RECOMP_HW_SCALE='3'}` (internal resolution multiple),
 `-Set @{RECOMP_APU_WAV='out.wav'}` (record the sound). More in
 [docs/RECOMP.md](../../docs/RECOMP.md).
+
+### Post processing quality and texture glow
+
+`Texture glow effect` uses `[Graphics] TextureGlowEffect=0` by default.
+`Post processing` is separate: `PostProcessingQuality=0/1/2/3` selects
+Off/Low/Mid/High (Windows default Low). Low and Mid now budget auxiliary buffers,
+including projected-shadow maps, at 50% and 75% width/height. High retains
+original effect resolution. Off omits recognized blur/bloom chains, their
+fullscreen consumers, the final glow composite and recognized projected
+shadows; other auxiliary buffers use 25% while retaining their materials.
+Display/history buffers and tiny bloom levels are protected. The user confirms
+the option works (2026-10-20). See the shared [effect study](../../docs/POST-PROCESSING.md)
+for exact coverage and the remaining water/motion-blur identification work.
+
+F11 synchronizes the adopted SDL window's border and resize flags with Win32
+when switching native Vulkan/D3D12 between fullscreen and a movable, resizable
+window. Console logs read the existing session files live, including startup,
+without redirecting game output. The host supplies the exact file paths it
+opened; external disk redirects are resolved from the actual stdout/stderr
+FILE descriptors. A visible console header reports each source or an open
+error. Existing INI settings are retained.
+
+The F7-only `Console logs` switch is saved as `[Diagnostics] ConsoleLogs=1`.
+Error messages are red; warnings are yellow. The original file logs remain
+in `logs/<target>-err.txt` and `logs/<target>-out.txt`.

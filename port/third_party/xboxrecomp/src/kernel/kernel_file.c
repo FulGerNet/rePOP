@@ -60,8 +60,7 @@ static const char* get_xbox_path(PXBOX_OBJECT_ATTRIBUTES ObjectAttributes)
  * with an undefined symbol -- invisible until something links an executable,
  * because a static archive never resolves its own references.
  *
- * The POSIX backend does not populate this yet, so it reads 0 there; that is a
- * missing detail rather than a missing symbol, and it is visible here. */
+ * RE-SoT: the POSIX backend maps errno to the matching Win32 code. */
 uint32_t g_xbox_last_file_error;
 
 uint32_t xbox_LastFileError(void)
@@ -866,6 +865,21 @@ static NTSTATUS errno_to_status(int e)
     }
 }
 
+/* RE-SoT: the bridge's "[FILE] -> ... FAILED (win32 err=...)" line read 0 on
+ * every POSIX failure, so a title's expected probe (the demo's sound loader
+ * tries sound\english\X.SB2 before sound\X.SB2) looked like an unknown error. */
+static uint32_t errno_to_win32(int e)
+{
+    switch (e) {
+        case ENOENT:  return 2u;    /* ERROR_FILE_NOT_FOUND */
+        case ENOTDIR: return 3u;    /* ERROR_PATH_NOT_FOUND */
+        case EACCES:
+        case EPERM:   return 5u;    /* ERROR_ACCESS_DENIED */
+        case EEXIST:  return 183u;  /* ERROR_ALREADY_EXISTS */
+        default:      return 31u;   /* ERROR_GEN_FAILURE */
+    }
+}
+
 NTSTATUS __stdcall xbox_NtCreateFile(
     PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
     PXBOX_OBJECT_ATTRIBUTES ObjectAttributes, PXBOX_IO_STATUS_BLOCK IoStatusBlock,
@@ -917,11 +931,17 @@ NTSTATUS __stdcall xbox_NtCreateFile(
 
     if (fd < 0) {
         int e = errno;
-#if defined(__ANDROID__) && RESOT_RUNTIME_RETAIL
-        /* RE-SoT: release-build diagnostics must retain the POSIX cause,
-         * not only the bridge's NTSTATUS and an unpopulated Win32 error. */
-        fprintf(stderr, "  [FILE] open FAILED: %s (options=0x%X errno=%d: %s)\n",
-                host_path, (unsigned)CreateOptions, e, strerror(e));
+        g_xbox_last_file_error = errno_to_win32(e);
+#if defined(__ANDROID__)
+        /* RE-SoT: release-build diagnostics must retain the POSIX cause and
+         * the path, on both targets. A missing file is usually a probe the
+         * title falls back from: log the first ones, every other cause always. */
+        {
+            static unsigned not_found;
+            if ((e != ENOENT && e != ENOTDIR) || ++not_found <= 16)
+                fprintf(stderr, "  [FILE] open FAILED: %s (options=0x%X errno=%d: %s)\n",
+                        host_path, (unsigned)CreateOptions, e, strerror(e));
+        }
 #endif
         XBOX_TRACE(XBOX_LOG_FILE, "NtCreateFile FAILED: %s (errno=%d)", host_path, e);
         if (IoStatusBlock) {
