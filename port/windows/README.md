@@ -1,7 +1,23 @@
 # reSOT on Windows
 
+Version 0.1.1 includes the shared timer lock reduction and preceding APU/
+IRQL and Vulkan changes. Android display/lifecycle controls are host-specific;
+Windows retains its full-size compositor. See [validation](../../docs/VALIDATION.md).
+
+Vulkan specialization update (2026-10-20): the optional native Vulkan
+renderer shares Android's cached constant combiner programs. Both target
+builds and all 8 GPU/support tests pass; a 20-second retail Vulkan startup
+check reaches the title. Initial shader compilation can still stall. See
+[the study](../../docs/VULKAN-PERFORMANCE.md).
+
 The Windows build: a 64-bit executable per target, Direct3D 11 (default),
-experimental native D3D12/Vulkan for the demo, XInput and XAudio2.
+experimental native D3D12/Vulkan for both targets, XInput and XAudio2.
+
+The Android correction/optimization audit is in
+[PLATFORM-PARITY.md](../../docs/PLATFORM-PARITY.md). Shared APU/IRQL fixes
+and native renderer optimizations also compile into these executables;
+Android-specific host changes and intentional backend differences are
+listed there.
 
 ## Play (portable folder)
 
@@ -90,8 +106,8 @@ the Android counterpart applies the same setting to touch look too.
 F7 Graphics selects `Direct3D 11`, `D3D12 (native)` or `Vulkan (native)`
 after restarting the game. The two native modes use SDL GPU's D3D12/Vulkan
 command encoders, with DXIL/SPIR-V shaders, native GPU resources and GPU draws.
-They do not create a D3D11 device or use D3D11On12/DXVK. NV2A vertex programs
-currently run in the CPU interpreter, so performance differs from D3D11.
+They do not create a D3D11 device or use D3D11On12/DXVK. Supported NV2A vertex
+programs run on the GPU; unsupported programs retain the CPU interpreter.
 
 Run `./tools/setup-native-gpu.ps1` once before building, and again when
 upgrading from a native build without retail queries. It downloads pinned,
@@ -109,7 +125,8 @@ uses actual hardware visibility queries, read asynchronously after submission
 fences, with immutable reports that survive counter clears. An older SDL DLL
 without the query extension or a device without the required query capability
 produces an explicit D3D11 fallback. Demo does not enable retail's report rules.
-Border-address sampling currently clamps to the texture edge; broader gameplay
+Retail white light-map borders and forming sand-tank alignment share the
+Android corrections and pass host GPU readbacks; broader gameplay
 validation remains pending. Stencil support is still incomplete, as on the
 D3D11 renderer. NV2A vertex programs run on the GPU in `vs_uber`, a shader
 compiled offline that interprets the program (no shader compiler at run

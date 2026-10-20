@@ -20,6 +20,7 @@ import org.libsdl.app.SDLActivity;
 public class GameActivity extends SDLActivity {
     static final String EXTRA_TARGET = "target", EXTRA_GAME_DIR = "game";
     private TouchControls touchControls;
+    private int renderFrameLimit = 60;
 
     private boolean retail() {
         return "retail".equals(getIntent().getStringExtra(EXTRA_TARGET));
@@ -56,11 +57,12 @@ public class GameActivity extends SDLActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        preferHighestRefreshRate();
+        applyRefreshRate();
     }
 
     @Override protected void onResume() {
         super.onResume();
+        applyRefreshRate();
         if (touchControls != null) touchControls.start();
     }
 
@@ -76,18 +78,27 @@ public class GameActivity extends SDLActivity {
         super.onWindowFocusChanged(hasFocus);
     }
 
-    /** The game presents a frame at every refresh it can; Android otherwise
-     *  often keeps an app at 60 Hz on a faster display. */
-    private void preferHighestRefreshRate() {
+    /** Match the selected render cap instead of keeping a 120/144 Hz panel
+     *  active for a 60 FPS game. Uncapped rendering still requests the fastest mode. */
+    public void setRenderFrameLimit(final int fps) {
+        runOnUiThread(() -> { renderFrameLimit = fps; applyRefreshRate(); });
+    }
+
+    private void applyRefreshRate() {
         Display display = getWindowManager().getDefaultDisplay();
-        Display.Mode current = display.getMode(), best = current;
+        Display.Mode current = display.getMode(), best = null, fastest = current;
+        float wanted = Math.max(60, renderFrameLimit);
         for (Display.Mode mode : display.getSupportedModes())
             if (mode.getPhysicalWidth() == current.getPhysicalWidth()
-                    && mode.getPhysicalHeight() == current.getPhysicalHeight()
-                    && mode.getRefreshRate() > best.getRefreshRate())
-                best = mode;
+                    && mode.getPhysicalHeight() == current.getPhysicalHeight()) {
+                if (mode.getRefreshRate() > fastest.getRefreshRate()) fastest = mode;
+                if (mode.getRefreshRate() + 0.5f >= wanted
+                        && (best == null || mode.getRefreshRate() < best.getRefreshRate())) best = mode;
+            }
+        if (renderFrameLimit == 0 || best == null) best = fastest;
         WindowManager.LayoutParams attributes = getWindow().getAttributes();
         attributes.preferredDisplayModeId = best.getModeId();
+        attributes.preferredRefreshRate = best.getRefreshRate();
         getWindow().setAttributes(attributes);
     }
 

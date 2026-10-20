@@ -85,6 +85,42 @@ def main():
         hlsl += "\nfloat4 ps_vertex_probe(VO i) : SV_Target { return float4(i.d0.x,i.fog.x,i.t0.x,i.t0.y); }\n"
     src = output / "nv2a-native.hlsl"
     src.write_text(hlsl, encoding="ascii")
+    # RE-SoT: Vulkan specialization constants preserve the generic combiner
+    # semantics until pipeline creation, where the driver can fold register
+    # selection and unused stages. Defaults are patched from draw snapshots;
+    # no game shader/data or additional runtime compiler is embedded.
+    specialized = hlsl
+    declarations = []
+    fields = [(f"cw[{s}].{c}", s*4+j) for s in range(8) for j,c in enumerate("xyzw")]
+    fields += [(f"ctl.{c}", 32+j) for j,c in enumerate("xyzw")]
+    fields += [("atest.x",36),("atest.y",37),("atest.w",38),("misc.x",39)]
+    # Expand the eight stages so every instruction word has a constant index.
+    begin = specialized.index("    [loop] for (uint s = 0; s < n; s++) {")
+    end = specialized.index("    if (ctl.z != 0 || ctl.w != 0)", begin)
+    body = specialized[begin:end]
+    body = body[body.index("\n")+1:body.rfind("    }")]
+    specialized = specialized[:begin] + "".join(
+        f"    if ({s}u < n) {{\n" + re.sub(r"\bs\b", str(s), body) + "    }\n"
+        for s in range(8)) + specialized[end:]
+    for field, ident in fields:
+        name = f"ng_spec_{ident}"
+        declarations.append(f"[[vk::constant_id({ident})]] const uint {name} = 0;\n")
+        specialized = specialized.replace(field, name)
+    specialized = "".join(declarations) + specialized
+    spec_src = output / "nv2a-native-specialized.hlsl"
+    spec_src.write_text(specialized, encoding="ascii")
+    spec_sources = {8: spec_src}
+    # RE-SoT: do not hand mobile drivers eight expanded stages for a one-
+    # or two-stage program; this also reduces first-use compiler latency.
+    for limit in (1,2,4):
+        variant = hlsl[:begin] + "".join(
+            f"    if ({s}u < n) {{\n" + re.sub(r"\bs\b",str(s),body) + "    }\n"
+            for s in range(limit)) + hlsl[end:]
+        for field,ident in fields:
+            variant = variant.replace(field,f"ng_spec_{ident}")
+        path = output / f"nv2a-native-specialized-{limit}.hlsl"
+        path.write_text("".join(declarations)+variant,encoding="ascii")
+        spec_sources[limit]=path
     small = hlsl
     for register in range(4, 12):
         small = small.replace(f", inout float4 R{register}", "")
@@ -142,6 +178,19 @@ def main():
             header.append(f"static const unsigned char ng_{entry}_{fmt}[] = {{\n")
             header.extend(",".join(str(b) for b in data[i:i+32]) + ",\n" for i in range(0, len(data), 32))
             header.append("};\n")
+    for limit,path in spec_sources.items():
+        binary = output / f"ps_specialized_{limit}.spirv"
+        subprocess.run([args.dxc, str(path), "-E", "ps_main", "-T", "ps_6_0",
+                        "-O2", "-Ges", "-Wno-ignored-attributes", "-Fo", str(binary),
+                        "-spirv", "-fspv-target-env=vulkan1.0", "-fvk-use-dx-layout", "-fspv-reflect"], check=True)
+        data = binary.read_bytes()
+        header.append(f"static const unsigned char ng_ps_specialized_{limit}_spirv[] = {{\n")
+        header.extend(",".join(str(b) for b in data[i:i+32]) + ",\n" for i in range(0,len(data),32))
+        header.append("};\n")
+    header.append("static const unsigned char *ng_ps_specialized_source(unsigned stages, size_t *bytes) {\n")
+    for limit in (1,2,4,8):
+        header.append(f"  if ({'1' if limit==8 else f'stages <= {limit}'}) {{ *bytes=sizeof ng_ps_specialized_{limit}_spirv; return ng_ps_specialized_{limit}_spirv; }}\n")
+    header.append("}\n")
     (output / "nv2a_native_shaders.h").write_text("".join(header), encoding="ascii")
 
 

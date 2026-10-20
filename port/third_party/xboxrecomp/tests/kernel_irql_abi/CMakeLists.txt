@@ -4,7 +4,7 @@ if(NOT WIN32)
     message(FATAL_ERROR "This synthetic-memory regression uses Windows VirtualAlloc")
 endif()
 set(CMAKE_C_STANDARD 11)
-# RE-SoT: exercise demo interrupt ownership without changing retail tests.
+# RE-SoT: run ownership/contention regressions separately for both targets.
 option(RESOT_TEST_DEMO "Test demo interrupt dispatch restoration" OFF)
 if(RESOT_TEST_DEMO)
     add_compile_definitions(RESOT_RUNTIME_DEMO=1)

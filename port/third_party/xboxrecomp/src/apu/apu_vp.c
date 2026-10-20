@@ -184,8 +184,16 @@ static void fe_method(MCPXAPUState *d, uint32_t method, uint32_t argument)
 {
     unsigned int slot;
 
-    d->regs[NV_PAPU_FEDECMETH] = method;
-    d->regs[NV_PAPU_FEDECPARAM] = argument;
+    /* RE-SoT: the trap is a latched method/argument pair, consumed by demo
+     * ISR 0x002EE257 / retail ISR 0x003E96EE in separate reads. A PIO write
+     * between those reads used to replace its handle (including with zero),
+     * sending demo 0x002EDD12 into 0x002EF6CD with a null voice object.
+     * Execute guest PIO commands without replacing an outstanding trap. */
+    if ((d->regs[NV_PAPU_FECTL] & NV_PAPU_FECTL_FEMETHMODE) !=
+            NV_PAPU_FECTL_FEMETHMODE_TRAPPED) {
+        d->regs[NV_PAPU_FEDECMETH] = method;
+        d->regs[NV_PAPU_FEDECPARAM] = argument;
+    }
     unsigned int selected_handle, list;
 
     switch (method) {
@@ -1206,6 +1214,12 @@ void mcpx_apu_vp_frame(MCPXAPUState *d,
     int active[3] = {0, 0, 0}, streams = 0, locked = 0;
     memset(d->vp.sample_buf, 0, sizeof(d->vp.sample_buf));
 
+    /* RE-SoT: do not generate another idle request until DirectSound has
+     * serviced the current one and released FECTL (both XBE ISRs above). */
+    if ((d->regs[NV_PAPU_FECTL] & NV_PAPU_FECTL_FEMETHMODE) !=
+            NV_PAPU_FECTL_FEMETHMODE_FREE_RUNNING)
+        return;
+
     for (int list = 0; list < 3; list++) {
         hwaddr top, current, next;
         top = voice_list_regs[list].top;
@@ -1227,6 +1241,11 @@ void mcpx_apu_vp_frame(MCPXAPUState *d,
             if (!voice_get_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
                                 NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE)) {
                 fe_method(d, SE2FE_IDLE_VOICE, v);
+                /* RE-SoT: preserve the first trap, its current/next cursors
+                 * and handle. Continuing the scan overwrote the request. */
+                if ((d->regs[NV_PAPU_FECTL] & NV_PAPU_FECTL_FEMETHMODE) ==
+                        NV_PAPU_FECTL_FEMETHMODE_TRAPPED)
+                    goto vp_done;
             } else {
                 /* RE-SoT: xemu's voice_work_dispatch waits while DirectSound
                  * holds a voice locked (NV1BA0_PIO_VOICE_LOCK) to rewrite its
@@ -1249,6 +1268,7 @@ void mcpx_apu_vp_frame(MCPXAPUState *d,
         }
     }
 
+vp_done: /* RE-SoT: a trapped scan still finishes this sub-frame's mix. */
     s_vp_diag[0] = active[0]; s_vp_diag[1] = active[1]; s_vp_diag[2] = active[2];
     s_vp_diag[3] = streams; s_vp_diag[4] = locked;
     s_vp_diag[5]++;

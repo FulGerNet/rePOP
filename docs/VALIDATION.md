@@ -1,5 +1,227 @@
 # Validation log
 
+## 2026-10-20: 0.1.1 build and Android power follow-up
+
+Release metadata: Windows file/product version 0.1.1.0 (display 0.1.1),
+Android versionName 0.1.1, versionCode 2. Includes the preceding APU/IRQL
+corrections, platform audit and Vulkan specialization work.
+
+Power follow-up changes: Android requests the lowest supported display mode
+meeting the selected FPS cap (at least 60 Hz; uncapped retains fastest).
+The timer scans inactive slots under one lock per tick, releasing it around
+callbacks/signals as before; the 1 ms cadence and dispatch exclusion remain.
+Android's no-overlay/no-letterbox path copies the frame at its existing
+internal resolution before one final upscale, retaining deferred-frame
+lifetime. Movies, native panels and letterboxing retain the general path;
+Windows retains its full-size compositor. Lifecycle events also gate new
+GPU encoding on a foreground condition; long background/resume behavior
+still needs broader validation.
+
+`tools/build-android.ps1` and both `tools/recomp.ps1 -Target <target>
+-BuildOnly` builds passed for these changes. Rebuilt APU/IRQL tests pass
+for both targets (4/4), and native GPU/support CTest passes 8/8. The texture
+cycling test now also verifies exact frame-copy readbacks on Vulkan/D3D12.
+Local logs: `logs/thermal-*-build.txt` (ignored).
+
+Device observations: the first power build's retail title remains around
+58.1–58.4 FPS. Timer thread samples decrease from approximately 9–16% to
+8–8.5% of one CPU, but samples are short and other threads vary. The display
+was already at 60 Hz under OS policy before this change; the new window
+request explicitly matches 60 Hz, so no measured display-power saving is
+claimed on this phone. The exact-copy path logs 1067x480 versus a
+2712x1220 display. Synthetic copy correctness passes; broader on-device
+copy-path gameplay and movie-transition validation remains incomplete.
+`logs/thermal-{baseline,after}-*` and `thermal-snapshot-retail.*` retain
+the local evidence. Charging, temperature history and changing load prevent
+a controlled power/thermal comparison. No temperature reduction established.
+
+The user reported a pre-existing intermittent black renderer after leaving
+and returning. Subsequent automatic and user retests returned the image;
+the user accepts the current state and requests the 0.1.1 builds. This is
+not recorded as a proven lifecycle fix. Local reproduction logs/images:
+`logs/resume-{repro,long}-*` and `resume-long.png`.
+
+## 2026-10-20: Vulkan combiner specialization after OpenCE study
+
+Compared OpenCE's `d3d8_gl.c`, `nv2a_vsh.c`, `nv2a_psh.c`; no code copied.
+[VULKAN-PERFORMANCE.md](VULKAN-PERFORMANCE.md) records the findings and
+implementation. Added 1/2/4/8-stage host SPIR-V templates, immutable program
+keys, bounded shader caching and specialization coverage counters. Shared
+Android/Windows Vulkan; existing simple shaders and other APIs retained.
+
+Commands/results:
+
+- `python tools/check-hlsl.py`: all 10 shared entries pass.
+- `cmake --build build/tests/native-gpu --config Release` and
+  `ctest --test-dir build/tests/native-gpu -C Release --output-on-failure`:
+  8/8 pass. Vulkan compares 64 separately rendered generic/specialized
+  images (1–8 stages, zero stages, factors, borders, fog, alpha comparisons
+  and discard masks), with at most 2/255 difference allowed per channel.
+  Existing 576 simple-combiner comparisons and vertex readbacks also pass.
+- `tools/recomp.ps1 -Target xbox-demo -BuildOnly`, retail equivalent and
+  `tools/build-android.ps1`: both Windows targets and release APK build.
+  Logs: `logs/opence-specialize-*-final-build.txt` (ignored).
+- `tools/run.ps1 -Target xbox-retail -Windowed -Seconds 20 -Set
+  @{RESOT_RENDERER='vulkan'; RECOMP_PAD_SCRIPT='2000:a:200,6000:a:200'}`:
+  title reached, specialization active; steady windows 148–155 FPS on PC.
+  Not a controlled Windows performance comparison. Local evidence:
+  `logs/opence-windows-retail-vulkan-err.txt`.
+- `adb install -r bin/reSOT-android.apk`, rooted `am start` for each target,
+  `adb pull .../files/logs/<target>-err.txt`, `adb shell screencap -p`:
+  final APK installed; demo and retail title images inspected by eye.
+
+Connected SM8635, 480p/100%, FPS limit 60, VSync on: retail title baseline
+30.9–31.0 FPS (`logs/opence-baseline-retail-final.txt`); first specialization
+build 59.1–59.6 FPS in consecutive five-second windows
+(`logs/opence-specialized-retail-v1.txt`). Final compact-template retail
+check reaches the title at approximately 59 FPS (`logs/opence-final-retail.*`).
+Final demo title 58.8–59.6 FPS; opening `0101_Entree`/`01_GP01_E3_Long`
+scenes 54.4–59.4 FPS, later 46.2–51.4 FPS at about 518–690 draws/frame
+(`logs/opence-final-demo.*`). These are window averages, not frame-time
+percentiles. The user confirms approximately 60 FPS, subsequently reports
+drops to about 49, and accepts this improvement for now.
+
+First-use compilation remains visible: some final compact pipelines took
+354–876 ms; the initial eight-stage-only prototype took 1.2–1.8 s. Existing
+disk caching remains enabled. Some first-run windows include movies/loading
+and compilation. Early retail runs also included app backgrounding and
+capture interruptions; do not count those as steady gameplay measurements.
+No matched demo baseline, long retail gameplay check, console comparison,
+sustained full-game 60 FPS or thermal/power improvement established here.
+
+## 2026-10-20: Android corrections audited against Windows
+
+Reviewed changes from the Android bring-up (`e703efa`) through `9e4ed65`
+and the subsequent uncommitted APU/IRQL corrections. Compared platform
+guards, host defaults, native shader generation, SDL setup and file I/O.
+[PLATFORM-PARITY.md](PLATFORM-PARITY.md) records each reviewed category.
+No additional missing Windows runtime correction was found: the applicable
+APU/IRQL, texture and native-renderer changes already compile for Windows.
+POSIX save handling, AArch64 traps, Android scheduling/UI/driver changes
+retain their platform-specific implementations. D3D12's fixed vertex pitch
+is an intentional restriction, not an optimization accidentally left out.
+
+`llvm-readobj --coff-exports bin/SDL3.dll` confirms both Vulkan cache exports
+(`RESOT_SetVulkanPipelineCachePath`, `RESOT_SaveVulkanPipelineCache`) and
+both D3D12/Vulkan query APIs in the DLL used by Windows. No dependency
+download or DLL replacement was needed.
+
+Validation commands and results:
+
+- `python tools/check-hlsl.py`: all 10 shader entries pass.
+- `cmake --build build/tests/native-gpu --config Release` and
+  `ctest --test-dir build/tests/native-gpu -C Release --output-on-failure`:
+  8/8 pass, including real Vulkan/D3D12 pixel/vertex-program readbacks,
+  internal scale, save access and bulk texture conversion.
+- CTest in `build/tests/kernel-irql-demo`, `kernel-irql-retail`,
+  `apu-frontend-demo` and `apu-frontend-retail` (`-C Release`, selecting
+  `apu_frontend_test` in the latter two): 1/1 each, 4/4 total.
+- `tools/recomp.ps1 -Target xbox-demo -BuildOnly` and retail equivalent:
+  both executables build, including the latest shared audio fixes.
+
+Six sequential Windows startup checks used:
+
+```powershell
+./tools/run.ps1 -Target <xbox-demo|xbox-retail> -Windowed -Seconds 20 -Set @{
+    RESOT_RENDERER = '<d3d11|vulkan|d3d12>'
+    RECOMP_PAD_SCRIPT = '2000:a:200,6000:a:200'
+    RECOMP_FB_DUMP = '<absolute logs/windows-parity-<target>-<renderer>.bmp>'
+    RECOMP_FB_WINDOW_DUMP_EVERY = '120'
+}
+```
+
+Each run logged the requested active backend, without D3D11 fallback or a
+crash marker, and a non-silent ten-second APU report with zero dropped or
+starved output frames in that report. Native runs explicitly logged GPU
+vertex programs. Saved images show the demo menu in all three modes,
+retail menu in D3D11/D3D12 and retail title screen in Vulkan; inspected by
+eye only. The harness stopped each process at 20 s. Logs/images are retained
+locally as `logs/windows-parity-<target>-<renderer>.*` (ignored).
+
+These are startup/rendering/audio-production checks, not acoustic listening,
+a pixel-exact console comparison, a controlled FPS benchmark, Windows
+Sand Birds gameplay, a complete making-of video, or save/relaunch/load.
+No claim of a new Windows performance gain is made. No runtime change was
+needed in this audit. Corrected obsolete native-renderer documentation and
+the packaged F11 fullscreen instruction; game source and data were untouched.
+
+## 2026-10-20: Android Sand Birds crash and retail making-of audio loss
+
+Collected `adb pull /sdcard/Android/data/com.fulger.resot/files/logs
+logs/android-20261020-sandbirds`, crash logcat and exit-info. The new demo
+crash is **11:09:55**, PID 17251, APU thread `resot-1003`, uptime 206 s:
+`sub_002EF6CD+0x22C`, guest address `0xFFFFFFBE`, ESI zero. This is a new
+occurrence after the previous dispatch-timeout correction, not merely the
+old 2026-10-19 crash. The user identifies the scene as Sand Birds.
+
+The demo trap ISR `0x002EE257` reads FECTL, FEDECMETH and FEDECPARAM
+separately, then `0x002EDD12` uses the handle to look up a voice object
+before calling `0x002EF6CD`. The runtime overwrote these decode registers
+for every PIO command and continued scanning after trapping an idle voice.
+An intervening PIO command with argument zero can therefore substitute
+handle zero for the pending idle request. This explains a possible route
+to the recorded null voice object; no instruction-level trace of the
+original fault was captured. Retail `0x003E96EE` reads the same trap fields.
+
+Added `tests/apu_frontend`: two idle voices must report the first one, PIO
+writes and another VP poll must preserve that trap, and acknowledgement
+must allow the next voice. Before the correction, the retail-mode test
+failed all three preservation checks (handle 8 replacing 7; then PIO
+method 0x120 / handle zero). After correction, both demo and retail modes
+pass. The VP stops scanning at the first trap and waits for acknowledgement;
+PIO commands preserve pending decode fields. MMIO writes serialize against
+the VP's device mutex. HALTED no longer counts as TRAPPED when raising IRQs.
+
+The retail user log contains five dispatch-lock bypass warnings and forced
+DPC delivery. The user reports that all audio stopped during the Extra
+Features making-of and remained absent after returning to the menu. The
+log's APU output reports cease while movie reads/presentation continue;
+it does not identify the stalled instruction or establish that the trap
+overwrite caused that failure. A baseline phone retest continued producing
+audio, confirmed by the user. With the user's root access, `adb shell su -c
+'debuggerd -b 17583'` captured APU stacks during that healthy retest;
+no stalled stack was captured. Raw logs/stacks remain under ignored `logs/`.
+
+Retail DirectSound's IRQL scope `0x003E53D0` has the demo scope's exclusion
+contract. Extended `tests/kernel_irql_abi` to run ownership/contention checks
+in retail mode too: before correction it failed nested callback ownership
+and bypassed a competing dispatch owner after 109 ms. Both modes now pass:
+callback epilogues restore ownership independently of IRQL, guest raises
+wait for exclusion, DPC drains process their entry snapshot, and APU/DPC
+delivery stays pending rather than forcing past an owner. These correct
+reproduced synchronization defects. The corrected-APK device retest and
+user confirmation are recorded below; the exact stalled instruction in
+the original making-of session remains unknown.
+
+Validation commands: `python tools/check-hlsl.py` (10 entries pass);
+`cmake --build build/tests/apu-frontend-<demo|retail> --config Release
+--target apu_frontend_test` and their `ctest -C Release -R apu_frontend_test
+--output-on-failure` (1/1 each); corresponding `kernel-irql-<demo|retail>`
+builds and ctests (1/1 each); `tools/recomp.ps1 -Target <target> -BuildOnly`
+(both Windows builds pass); `tools/build-android.ps1` (release APK builds).
+`adb install -r bin/reSOT-android.apk` succeeded, without uninstall/data clear.
+Temporary sampling instrumentation was removed before this final APK.
+
+Device retest of the final APK:
+
+- Demo PID 19172: user navigated to Sand Birds; the log confirms
+  `04_GP61_Cour_Interieure` / `ACT_SandBird_01`. There are 26 ten-second
+  audio reports (about 260 s of output), no crash marker, and a regular
+  `HalReturnToFirmware routine=2` exit. Original crash uptime was 206 s;
+  exceeding that duration does not prove the same inputs were replayed.
+  Evidence: `logs/sandbirds-demo-fixed-exit.txt` and root stack capture.
+- Retail PID 23368: user launched the making-of and returned to the menu.
+  The user explicitly confirms that audio remained audible and considers
+  the issue resolved. The log contains 12 ten-second audio reports (about
+  120 s), non-silent output continuing in the menu, and no crash marker.
+  Evidence: `logs/sandbirds-retail-fixed-final.txt` and root stack capture.
+  The startup lock waits finish without the old forced-delivery warnings.
+
+The user confirms both fixes after these tests. Full Sand Birds completion,
+longer/repeated making-of sessions and broader gameplay/audio accuracy have
+not been established. Windows gameplay was not run. No generated C, seeds,
+guest assets or save data were edited.
+
 ## 2026-10-20: launcher restyle (gold on night blue); Android launcher full screen
 
 Both launchers (`port/windows/src/launcher.c`, `LauncherView.java`) were

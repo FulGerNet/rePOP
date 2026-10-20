@@ -51,7 +51,7 @@ F6: diagnostics. F7: graphics and controls options (saved beside the executable)
 D3D11 is the default; native D3D12 / Vulkan require a restart.
 Native backends support demo and retail with the included SDL query extension.
 They remain experimental; see docs/VALIDATION.md for observed limits.
-Alt+Enter / F11: full screen or window. Alt+F4: exit.
+F11: full screen or window. Alt+F4: exit.
 Keyboard: WASD move, Space jump, Esc pause, mouse camera.
 
 This folder contains your own disc files. Do not redistribute them.

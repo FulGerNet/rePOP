@@ -215,8 +215,8 @@ static void irql_track(KIRQL old_level, KIRQL new_level, void *ra)
  *
  * A guest thread owns this lock from its raise to DISPATCH_LEVEL until it
  * lowers below it; DPC drains and the APU ISR only run while they can take
- * it. Delivery threads never wait for it. Retail retains its bounded guest
- * wait; the demo never bypasses exclusion (audio-list crash, 2026-10-20).
+ * it. Delivery threads never wait for it. Neither target bypasses exclusion:
+ * demo 0x002E9F30 and retail 0x003E53D0 protect DirectSound voice mutations.
  * Recursive for the owner, so a DPC that raises nests. */
 static volatile LONG s_disp_owner;
 static LONG s_disp_depth;                       /* owner thread only */
@@ -257,19 +257,13 @@ static void dispatch_guest_raise(void)
         if (GetTickCount() - start > 100) {
             static volatile LONG told;
             if (InterlockedIncrement(&told) <= 5)
-#if RESOT_RUNTIME_DEMO
                 /* RE-SoT: demo D3D DPC 0x0029FEE0 can take >100 ms during
-                 * startup. Bypassing its lock races the voice-list service
-                 * at 0x002EF6CD; time passing never grants ownership. */
+                 * startup; retail logs also show this timeout bypass.
+                 * Both DirectSound scopes above require real exclusion;
+                 * time passing never grants ownership. */
                 fprintf(stderr, "  [IRQL] tid %lu waiting for dispatch lock"
                         " held by tid %ld (depth %ld)\n",
                         (unsigned long)me, (long)s_disp_owner, (long)s_disp_depth);
-#else
-                fprintf(stderr, "  [IRQL] tid %lu raised without the dispatch lock"
-                        " (held by tid %ld for >100 ms, depth %ld)\n",
-                        (unsigned long)me, (long)s_disp_owner, (long)s_disp_depth);
-            return;
-#endif
         }
         if (++spins < 64) SwitchToThread(); else Sleep(1);
     }
@@ -306,12 +300,11 @@ static void dispatch_guest_edge(KIRQL old_level, KIRQL new_level)
 int xbox_IrqlEnterInterrupt(int level)
 {
     int saved = (int)g_current_irql;
-#if RESOT_RUNTIME_DEMO
     /* RE-SoT: preserve guest ownership independently of IRQL. A nested ISR
      * can lower and raise back to the same level while creating a guest
-     * reference; level-only restoration then leaks the dispatch lock. */
+     * reference; level-only restoration then leaks the dispatch lock.
+     * Applies to both targets; covered by kernel_irql_abi in both modes. */
     saved |= t_disp_guest << 8;
-#endif
     if (g_current_irql != (KIRQL)level) {
         irql_track(g_current_irql, (KIRQL)level, IRQL_CALLER());
         g_current_irql = (KIRQL)level;
@@ -322,7 +315,6 @@ int xbox_IrqlEnterInterrupt(int level)
 
 void xbox_IrqlLeaveInterrupt(int saved)
 {
-#if RESOT_RUNTIME_DEMO
     /* RE-SoT: balance references even if the callback returns at its saved
      * level. Keep the delivery caller's separate dispatch reference intact. */
     int saved_guest = (saved >> 8) & 1;
@@ -331,7 +323,6 @@ void xbox_IrqlLeaveInterrupt(int saved)
         dispatch_guest_lower();
     else if (!t_disp_guest)
         dispatch_guest_raise();
-#endif
     if (g_current_irql != (KIRQL)saved) {
         irql_track(g_current_irql, (KIRQL)saved, IRQL_CALLER());
         g_current_irql = (KIRQL)saved;

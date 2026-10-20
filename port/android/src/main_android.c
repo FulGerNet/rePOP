@@ -18,6 +18,7 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
+#include <jni.h>
 #include <android/log.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -70,6 +71,44 @@ static SDL_Window *s_window;
 static volatile int s_game_running;
 static pthread_t s_event_thread, s_title_thread;
 static __thread int s_profile_role = -1;
+static pthread_mutex_t s_foreground_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t s_foreground_changed = PTHREAD_COND_INITIALIZER;
+static int s_foreground = 1;
+
+/* Park GPU work when the activity is hidden. The SDL event thread remains
+ * available to wake it, so no polling or guest timing changes are needed. */
+void resot_android_wait_foreground(void)
+{
+    pthread_mutex_lock(&s_foreground_lock);
+    while (!s_foreground) pthread_cond_wait(&s_foreground_changed, &s_foreground_lock);
+    pthread_mutex_unlock(&s_foreground_lock);
+}
+
+static void set_foreground(int active)
+{
+    pthread_mutex_lock(&s_foreground_lock);
+    s_foreground = active;
+    pthread_cond_broadcast(&s_foreground_changed);
+    pthread_mutex_unlock(&s_foreground_lock);
+    fprintf(stderr,"[POWER] renderer %s\n",active?"resumed":"suspended in background");
+}
+
+/* Keep the display request in step with the shared live FPS option. */
+void resot_android_set_frame_limit(int fps)
+{
+    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    jobject activity = (jobject)SDL_GetAndroidActivity();
+    if (!env || !activity) return;
+    jclass cls = (*env)->GetObjectClass(env, activity);
+    jmethodID method = cls ? (*env)->GetMethodID(env, cls, "setRenderFrameLimit", "(I)V") : NULL;
+    if (method) (*env)->CallVoidMethod(env, activity, method, (jint)fps);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        fprintf(stderr, "[VIDEO] display frame-limit request failed\n");
+    }
+    if (cls) (*env)->DeleteLocalRef(env, cls);
+    (*env)->DeleteLocalRef(env, activity);
+}
 static uintptr_t s_profile_pc[2];
 
 static void profile_signal(int signal_number, siginfo_t *info, void *context)
@@ -475,6 +514,8 @@ int SDL_main(int argc, char **argv)
     for (;;) {
         SDL_Event event;
         while (SDL_WaitEventTimeout(&event, 8)) {
+            if (event.type == SDL_EVENT_WILL_ENTER_BACKGROUND) set_foreground(0);
+            if (event.type == SDL_EVENT_DID_ENTER_FOREGROUND) set_foreground(1);
             if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_TERMINATING) {
                 fprintf(stderr, "  [FBWIN] close requested; exiting game process\n");
                 fflush(stderr);

@@ -2442,53 +2442,33 @@ static void kernel_vblank_tick(void)
 extern int  xbox_DispatchTryEnter(void);
 extern void xbox_DispatchLeave(void);
 
-/* RE-SoT: may deferred work run now? Not while a guest thread is at
- * DISPATCH_LEVEL or above, as on the single-CPU console. Retail retains its
- * logged 250 ms escape for a leaked raise; demo always defers while owned.
- * Returns 1 owned, 2 forced (retail only), 0 no. */
+/* RE-SoT: both DirectSound scopes (demo 0x002E9F30, retail 0x003E53D0)
+ * require exclusion from DPCs. A timeout does not make concurrent mutation
+ * safe. Returns 1 owned, 0 deferred. */
 static int kernel_dispatch_enter(void)
 {
-    static DWORD refused_since;
     if (xbox_DispatchTryEnter()) {
-        refused_since = 0;
         return 1;
     }
-#if RESOT_RUNTIME_DEMO
     /* RE-SoT: demo 0x002EF6CD shares its voice lists with DirectSound DPCs.
      * Time passing cannot make a raised-IRQL list mutation safe to interrupt.
      * Keep queued work pending instead of racing it after the old timeout. */
     return 0;
-#else
-    if (!refused_since)
-        refused_since = GetTickCount() | 1;
-    if (GetTickCount() - refused_since > 250) {
-        static int told;
-        if (told++ < 5)
-            fprintf(stderr, "  [KERNEL] DPCs held off >250 ms by raised IRQL;"
-                            " running them anyway\n");
-        refused_since = 0;
-        return 2;
-    }
-    return 0;
-#endif
 }
 
 /* Run whatever is queued. Called from the timer thread, which has the guest
  * stack and TIB that a deferred routine needs, with the dispatch lock held. */
 static void kernel_drain_dpcs(void)
 {
-#if RESOT_RUNTIME_DEMO
     /* RE-SoT: demo audio can requeue deferred work. Drain only the entry
-     * snapshot so producers cannot monopolize the dispatch lock forever. */
+     * snapshot so producers cannot monopolize the dispatch lock forever.
+     * Retail uses the same queue and DirectSound DPC contract. */
     LONG remaining;
     dpc_lock();
     remaining = (g_dpc_tail - g_dpc_head + XBOX_MAX_PENDING_DPC) % XBOX_MAX_PENDING_DPC;
     LeaveCriticalSection(&g_dpc_lock);
-#endif
     for (;;) {
-#if RESOT_RUNTIME_DEMO
         if (remaining-- == 0) break;
-#endif
         PendingDpc d;
         dpc_lock();
         if (g_dpc_head == g_dpc_tail) {
@@ -2780,13 +2760,16 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
             kernel_drain_dpcs();   /* deferred work, before due timers */
         now = (long long)GetTickCount64();
 
+        /* RE-SoT: scan inactive timers under one lock instead of taking
+         * 32 locks per 1 ms tick. Release around each callback and signal,
+         * so guest routines can still cancel/rearm any subsequent slot. */
+        EnterCriticalSection(&g_timer_lock);
+
         for (i = 0; i < XBOX_MAX_TIMERS; i++) {
             uint32_t dpc, fired_va;
 
-            EnterCriticalSection(&g_timer_lock);
             if (!g_timers[i].timer_va || now < g_timers[i].due_ms
                 || (!disp && g_timers[i].dpc_va)) {
-                LeaveCriticalSection(&g_timer_lock);
                 continue;
             }
             fired_va = g_timers[i].timer_va;
@@ -2810,7 +2793,9 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
                     BRIDGE_MEM32(fired_va + 4) = 1;   /* SignalState */
                 }
             }
+            EnterCriticalSection(&g_timer_lock); /* RE-SoT: resume the live scan after guest callbacks. */
         }
+        LeaveCriticalSection(&g_timer_lock); /* RE-SoT */
         if (disp == 1)
             xbox_DispatchLeave();
     }

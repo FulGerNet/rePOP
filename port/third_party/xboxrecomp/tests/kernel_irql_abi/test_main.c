@@ -5,8 +5,7 @@
 #include <stdlib.h>
 #include "resot_runtime.h"
 
-#if RESOT_RUNTIME_DEMO
-/* RE-SoT: nested demo ISR ownership must restore even at the same IRQL. */
+/* RE-SoT: both targets must restore ISR ownership and wait for exclusion. */
 extern int xbox_DispatchTryEnter(void);
 extern void xbox_DispatchLeave(void);
 extern int xbox_IrqlEnterInterrupt(int level);
@@ -71,7 +70,6 @@ static int interrupt_ownership(void) {
     if (failed) fputs("FAIL nested interrupt dispatch ownership\n",stderr);
     return failed;
 }
-#endif
 typedef void (*guest_fn)(void);
 extern guest_fn recomp_lookup_kernel(uint32_t);
 extern RECOMP_TLS uint32_t g_eax, g_ecx, g_esp;
@@ -109,10 +107,8 @@ int main(void) {
     failed|=call_irql(160,0x12340003,2,3);
     failed|=call_irql(161,0xFACE0002,0,2);
     failed|=call_irql(161,0xABCD0000,0,0);
-#if RESOT_RUNTIME_DEMO
     failed|=interrupt_ownership();
     failed|=dispatch_contention();
-#endif
     VirtualFree(memory,0,MEM_RELEASE);
     if(!failed) puts("PASS fastcall IRQL: CL arguments, old levels, nesting and stack canary");
     return failed;

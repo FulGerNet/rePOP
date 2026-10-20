@@ -140,7 +140,9 @@ static volatile LONG s_irq_line;
 
 static void update_irq(MCPXAPUState *d)
 {
-    if (d->regs[NV_PAPU_FECTL] & NV_PAPU_FECTL_FEMETHMODE_TRAPPED) {
+    /* RE-SoT: FEMETHMODE is an enum; HALTED (0x80) is not TRAPPED (0xE0). */
+    if ((d->regs[NV_PAPU_FECTL] & NV_PAPU_FECTL_FEMETHMODE) ==
+            NV_PAPU_FECTL_FEMETHMODE_TRAPPED) {
         qatomic_or(&d->regs[NV_PAPU_ISTS], NV_PAPU_ISTS_FETINTSTS);
     }
     if ((d->regs[NV_PAPU_IEN] & NV_PAPU_ISTS_GINTSTS) &&
@@ -195,9 +197,10 @@ void xbox_ApuGuestScopeLeave(void) { }
  * while a guest thread sits at raised IRQL, which is when the single-CPU
  * console could not have taken the interrupt. The routine acknowledges by
  * writing ISTS, which drops the line through update_irq. */
-#if RESOT_RUNTIME_DEMO
-/* RE-SoT: xbox-demo. The ISR never forces its way past a raised guest
- * IRQL (crash at 0x002EF6CD); see the comment inside. */
+/* RE-SoT: demo ISR 0x002EE410 and retail ISR 0x003E98A7 share hardware
+ * state with their DirectSound IRQL scopes (0x002E9F30 / 0x003E53D0).
+ * Keep level-triggered interrupts pending while a guest/DPC owns dispatch;
+ * the retail 300-poll escape could race those scopes just like the demo. */
 static void apu_deliver_irq(MCPXAPUState *d)
 {
     static int tib_ready;
@@ -262,75 +265,6 @@ static void apu_deliver_irq(MCPXAPUState *d)
         }
     }
 }
-#else
-/* RE-SoT: xbox-retail. Forced after 300 polls, logged. */
-static void apu_deliver_irq(MCPXAPUState *d)
-{
-    static int tib_ready;
-    static unsigned held_off;
-    uint32_t kint, routine, context;
-    apu_guest_fn fn;
-    int slot, owned;
-
-    if (!InterlockedCompareExchange(&s_irq_line, 0, 0))
-        return;
-    /* RE-SoT: the ISR runs only while no guest thread is at raised IRQL
-     * (the dispatch lock, kernel_hal.c), and holds the lock while it runs so
-     * DirectSound cannot raise and edit its lists halfway through. The old
-     * 50-poll (~33 ms) escape could admit the ISR while DirectSound was at
-     * raised IRQL; it now takes 300 polls (~200 ms) and is logged. */
-    owned = xbox_DispatchTryEnter();
-    if (!owned && ++held_off <= 300)
-        return;
-    if (!owned) {
-        static int told;
-        if (told++ < 5)
-            fprintf(stderr, "[APU] interrupt forced past raised IRQL after %u polls\n",
-                    held_off);
-    }
-    held_off = 0;
-    kint = xbox_GetConnectedInterrupt(APU_VECTOR);
-    if (!kint)
-        goto done;
-    routine = *(uint32_t *)(g_apu_ram_ptr + kint + 0);
-    context = *(uint32_t *)(g_apu_ram_ptr + kint + 4);
-    fn = routine ? recomp_lookup(routine) : NULL;
-    if (!fn)
-        goto done;
-    if (!tib_ready) {
-        uint32_t tib = xbox_AllocThreadTib();
-        if (!tib)
-            goto done;
-        g_fs_base = tib;
-        tib_ready = 1;
-    }
-    slot = xbox_worker_stack_alloc();
-    if (slot < 0)
-        goto done;
-
-    qemu_mutex_unlock(&d->lock);
-    g_esp = XBOX_WORKER_STACK_TOP(slot);
-    g_eax = g_ecx = g_edx = g_ebx = g_esi = g_edi = 0;
-    g_esp -= 4; *(uint32_t *)(g_apu_ram_ptr + g_esp) = context;
-    g_esp -= 4; *(uint32_t *)(g_apu_ram_ptr + g_esp) = kint;
-    g_esp -= 4; *(uint32_t *)(g_apu_ram_ptr + g_esp) = 0xDEADBEEFu;
-    { int _irql = xbox_IrqlEnterInterrupt(16); fn(); xbox_IrqlLeaveInterrupt(_irql); }
-    if (owned) { xbox_DispatchLeave(); owned = 0; }   /* before the device lock */
-    xbox_worker_stack_free(slot);
-    qemu_mutex_lock(&d->lock);
-
-    {
-        static unsigned n;
-        if (n++ < 3) {
-            fprintf(stderr, "[APU] interrupt delivered to 0x%08X -> %s\n",
-                    routine, (g_eax & 1) ? "claimed" : "declined");
-            fflush(stderr);
-        }
-    }
-done:
-    if (owned) xbox_DispatchLeave();
-}
-#endif /* RESOT_RUNTIME_DEMO */
 
 /* ============================================================
  * MMIO Read / Write
@@ -1070,7 +1004,12 @@ uint64_t mcpx_apu_mmio_read(MCPXAPUState *d, uint64_t addr, unsigned int size)
 void mcpx_apu_mmio_write(MCPXAPUState *d, uint64_t addr, uint64_t val, unsigned int size)
 {
     if (!d) return;
+    /* RE-SoT: serialize method/argument latching and FECTL acknowledgement
+     * with the VP scan. voice_lock nests this recursive device mutex. The
+     * guest ISR runs outside it, so its MMIO can take it normally. */
+    qemu_mutex_lock(&d->lock);
     mcpx_apu_dispatch_mmio(d, (hwaddr)addr, val, size, true);
+    qemu_mutex_unlock(&d->lock);
 }
 
 /* ============================================================

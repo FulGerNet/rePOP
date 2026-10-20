@@ -359,6 +359,12 @@ void xbox_SetFrameLimit(int fps)
     if (fps != 30 && fps != 60 && fps != 120) fps = 0;
     InterlockedExchange(&s_frame_limit, fps);
     InterlockedIncrement(&s_frame_limit_generation);
+#if defined(__ANDROID__)
+    /* RE-SoT: avoid driving a high-refresh mobile display for a capped game;
+     * the Android host requests the lowest supported mode meeting this cap. */
+    extern void resot_android_set_frame_limit(int);
+    resot_android_set_frame_limit(fps);
+#endif
     /* RE-SoT: record the actual selected limit for performance comparisons. */
     fprintf(stderr, "  [FBWIN] FPS limit: %d (0 = None)\n", fps);
 }

@@ -8,8 +8,18 @@ renderer (`port/third_party/xboxrecomp/src/kernel/nv2a_hw_native.inc`); there
 is no Direct3D 11 on Android.
 
 **State: device validation in progress.** User logs show both games running
-on Android. The demo audio-service crash's unsafe dispatch-lock timeout is
-removed (2026-10-20); wider crash validation remains incomplete. The user
+on Android. A new Sand Birds crash (2026-10-20, 11:09) persisted after the
+dispatch-timeout fix: the APU could overwrite a pending idle-voice trap's
+handle before DirectSound read it. Trap latching and VP scan ordering are
+corrected; synthetic APU and IRQL tests pass separately for both targets.
+Retail now also restores callback lock ownership and defers callbacks while
+dispatch is owned, without timeout bypasses. User-reported loss of all audio
+during the Extra Features making-of was not reproduced in a baseline retest.
+The corrected APK is installed: the user confirms audio persists through
+the video and return to the menu, and the Sand Birds retest records about
+260 s of audio followed by a regular exit without a crash. The user confirms
+the two fixes; broader gameplay/audio validation remains incomplete.
+See the latest audio entry in `docs/VALIDATION.md`. The user
 confirms system UI responsiveness after the scheduling changes, but demo
 menu performance still fluctuates at 40–57 FPS. Renewed ADB tests measured
 the subsequent retail performance build at about 29–31 FPS at 480p and
@@ -17,6 +27,24 @@ the subsequent retail performance build at about 29–31 FPS at 480p and
 remain under validation; see [VALIDATION.md](../../docs/VALIDATION.md).
 
 ## What is in the APK
+
+Version 0.1.1 (Android versionCode 2) keeps the Vulkan specialization and
+adds power follow-ups: display refresh follows the selected FPS cap,
+inactive timer scans use fewer locks, and eligible frames use an exact
+internal-size snapshot with one final upscale. Movies, native panels and
+letterboxing retain the general compositor. Windows retains its full-size
+compositor because this optimization targets mobile bandwidth. Thermal
+improvement is not established; background/resume testing remains partial.
+The user reports that the intermittent black-on-return issue did not recur
+in the final retest. See [validation](../../docs/VALIDATION.md).
+
+Vulkan specialization update (2026-10-20): complex pixel combiners now use
+cached SPIR-V variants alongside the simple shaders. On SM8635, retail's
+480p title improved from about 31 to 59 FPS. Demo opening scenes include
+54–59 FPS windows, with later 46–51 FPS windows. The user reports about 60
+with drops to 49 and accepts this result for now. First-use shader stalls
+remain; full-game sustained 60 FPS is unverified. The APK is installed; see
+[the study](../../docs/VULKAN-PERFORMANCE.md).
 
 | Library | Contents |
 | --- | --- |

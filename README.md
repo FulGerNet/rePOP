@@ -125,6 +125,31 @@ In short, on Windows:
 
 ## Development status
 
+Version 0.1.1 includes Android power follow-ups: display refresh follows
+the FPS limit, inactive timer scans use fewer locks, and eligible frames
+keep their internal-size snapshot until the final upscale. Thermal benefit
+and broader background/resume behavior remain under validation; an
+intermittent black-on-return report did not recur in the user's final retest.
+
+Vulkan specialization update (2026-10-20): an OpenCE rendering study led to
+cached constant combiner programs for Android and Windows Vulkan. Retail's
+480p title improved from about 31 to 59 FPS on SM8635. Demo opening scenes
+include 54–59 FPS windows, with later 46–51 FPS windows. The user reports
+about 60 FPS with drops to 49 and accepts this result for now. Both Windows
+targets and the APK build; all 8 GPU/support tests pass, including 64
+specialized-combiner comparisons. First-use shader stalls remain; sustained
+60 FPS throughout both games is unverified. See
+[the study](docs/VULKAN-PERFORMANCE.md) and [validation](docs/VALIDATION.md).
+
+Windows/Android parity audit (2026-10-20): the applicable recent APU/IRQL,
+texture and native-renderer corrections are already shared. Both Windows
+targets build; 8 GPU/support tests and 4 target APU/IRQL tests pass. Six
+20-second Windows startup checks (demo/retail, D3D11/Vulkan/D3D12) reached
+title/menu images with non-silent audio production and no recorded crash
+or backend fallback. These are not full-game checks or performance gains.
+See [PLATFORM-PARITY.md](docs/PLATFORM-PARITY.md) for the per-component audit
+and intentional host/backend differences.
+
 Android optimization update (2026-10-20): retail's small vertex interpreter
 now skips calculations whose results are unused. Android and both Windows
 builds pass, with 8/8 native GPU/support tests including Vulkan/D3D12 shader
@@ -146,13 +171,13 @@ see [VALIDATION.md](docs/VALIDATION.md).
 | External game folder / options / F6 diagnostics (F7 panel restored: both builds pass, in-game check pending) | 🟢 verified by the user (2026-10-18), including Load Map; launcher with ISO installation run once by the user (demo ISO, 2026-10-18) | 🟢 verified by the user (2026-10-18); no hidden level select exists in this XBE |
 | Movies (Bink via overlay) | 🟢 audio and video verified by the user (2026-10-18) | 🟢 audio and video verified by the user (2026-10-18) |
 | Menus | 🟢 verified by the user (2026-10-18) | 🟢 verified by the user (2026-10-18); Xbox Live removed from the main menu (2026-10-19) |
-| Native D3D12 (optional in F7; restart required; SDL GPU, no 11On12) | 🟡 builds; 55-second runs (2026-10-18): post-processing off skips the glow composite (trace), FPS limit/VSync options logged as applied; vertex programs on CPU; 43–87 FPS in sampled windows (not an A/B comparison); gameplay validation pending | 🟡 builds; 90-second run (2026-10-18) after the encoder changes, 38–59 FPS in sampled windows; post-processing skip not seen in the traced retail frame; native visibility contract passes GPU tests; full gameplay/performance validation pending |
-| Native Vulkan (optional in F7; restart required; SDL GPU, no DXVK) | 🟡 builds; vertex programs now run on the GPU (`vs_uber`, 2026-10-19), demo not yet run with it; device validation pending | 🟡 vertex programs on the GPU (`vs_uber`, 2026-10-19): scripted run to the first courtyard, menu executor 4.6–6.7 ms (CPU interpreter 16.2–16.6 ms), courtyard 66–124 FPS, snapshots correct by eye; retail light-map borders and cycled texture lifetime pass host Vulkan/D3D12 GPU readbacks; simple combiner shaders plus reduced native vertex-interpreter operand work measured about 27-28 FPS at 480p on the connected phone (was 16.9 generic, then 24.7 fragment-only; 2026-10-19); 30 FPS minimum remains unmet; broader gameplay/performance validation pending |
+| Native D3D12 (optional in F7; restart required; SDL GPU, no 11On12) | 🟡 GPU vertex programs; 20-second Windows menu check with non-silent audio and no recorded crash (2026-10-20); native GPU readbacks pass; broader gameplay/performance validation pending | 🟡 GPU vertex programs; 20-second Windows menu check with non-silent audio and no recorded crash (2026-10-20); native visibility and vertex-program GPU tests pass; full gameplay/performance validation pending |
+| Native Vulkan (optional in F7; restart required; SDL GPU, no DXVK) | 🟡 GPU vertex programs; 20-second Windows menu check with non-silent audio and no recorded crash (2026-10-20); Android menu/gameplay observations below; broader validation pending | 🟡 vertex programs on the GPU (`vs_uber`, 2026-10-19): scripted run to the first courtyard, menu executor 4.6–6.7 ms (CPU interpreter 16.2–16.6 ms), courtyard 66–124 FPS, snapshots correct by eye; retail light-map borders and cycled texture lifetime pass host Vulkan/D3D12 GPU readbacks; simple combiner shaders plus reduced native vertex-interpreter operand work measured about 27-28 FPS at 480p on the connected phone (was 16.9 generic, then 24.7 fragment-only; 2026-10-19); 30 FPS minimum remains unmet; broader gameplay/performance validation pending |
 | In-level rendering | 🟡 projected shadows; cube-map upload/sampling implemented and host GPU test passed, game appearance unverified; first-level flickering/distortion traced to ordered GPU fences: gone for the user with them off (2026-10-17), now the demo default; no stencil | 🟡 substantial retail gameplay reported without crashes (2026-10-19); black garden panels traced to missing white light-map borders and corrected, confirmed by the user; forming sand-tank ring aligned in GPU readback; other scenes and console accuracy remain unverified |
-| Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or Alt+Enter/F11; culling widened to the new sides; pause backdrop expanded; HUD at its 4:3 proportions and anchored to the screen's left edge, confirmed by the user (2026-10-18); the menu garden is not modelled past its 4:3 edge | 🟡 16:9 by default; demo's projection and culling hooks ported to the retail addresses, projected-UI policy on (menu backdrop full width); dialog text wider than its box at 16:9; health bar anchored to the left edge in first-level readbacks (2026-10-18), tutorial text unchanged |
+| Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or F11; culling widened to the new sides; pause backdrop expanded; HUD at its 4:3 proportions and anchored to the screen's left edge, confirmed by the user (2026-10-18); the menu garden is not modelled past its 4:3 edge | 🟡 16:9 by default; demo's projection and culling hooks ported to the retail addresses, projected-UI policy on (menu backdrop full width); dialog text wider than its box at 16:9; health bar anchored to the left edge in first-level readbacks (2026-10-18), tutorial text unchanged |
 | Frame rate | 🟡 120+ FPS reported by the user (2026-10-18); first-use shader stalls moved off the executor (hourglass room: lowest 80 fps, was 7); batches reused across frames (garden 93-100 fps at ~880 draws, was 67-78); title and executor still run in lockstep; broader performance validation incomplete | 🟡 latest user session: 302 timing windows, median 146.3 FPS, minimum 48.6 (not frame percentiles); P8/ARGB upload conversion optimized, native pipeline lookup and texture reuse improved (2026-10-19); matched-scene and Android performance comparison pending |
 | Controller / keyboard | 🟢 verified by the user (2026-10-18) | 🟢 verified by the user (2026-10-18) |
-| Audio | 🟡 audio corrected, confirmed by the user (2026-10-18); bath-fight stutter fixed, user confirmed (2026-10-18 evening); broader audio validation incomplete | 🟡 audio corrected, confirmed by the user (2026-10-18); broader audio validation incomplete |
+| Audio | 🟡 audio corrected, confirmed by the user (2026-10-18); bath-fight stutter fixed, user confirmed. Android Sand Birds crash (2026-10-20): APU idle-trap overwrite corrected; APU/IRQL tests pass, device retest records about 260 s of audio and a regular exit without a crash; user confirms the fix | 🟡 audio corrected, confirmed by the user (2026-10-18). Android making-of audio loss (2026-10-20): dispatch timeout bypasses and callback lock leak corrected; APU/IRQL tests pass, user confirms audio persists through the video and return to the menu; broader audio validation incomplete |
 | Save / load, memory unit | 🟡 save crash reported resolved by the user (2026-10-18); full save/load and memory-unit validation incomplete | 🟡 save crash reported resolved by the user (2026-10-18); Android random-write and migration corrections pass host tests (2026-10-19); "damaged profile" on Android traced to a stale directory search, fix built, device save/relaunch/load still unverified |
 | Virtual memory reservations | 🟡 reserve/commit fix tested on synthetic input; optional, gameplay with this option not checked | 🟡 corrected reserve/commit and audio address translation; user passed the previous crash point; checkpoint save/load still untested |
 | Xbox Live (retail only) | n/a | ⚪ not planned |

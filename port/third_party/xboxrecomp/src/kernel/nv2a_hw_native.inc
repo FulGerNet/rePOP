@@ -23,6 +23,10 @@ static void (SDLCALL *s_ng_cache_path)(const char *);
 static bool (SDLCALL *s_ng_cache_save)(SDL_GPUDevice *);
 
 #include "resot_native_vsh.h" /* RE-SoT: exact small-register program admission. */
+#include "resot_native_specialize.h" /* RE-SoT: constant Vulkan combiner programs. */
+/* RE-SoT: the specialization key reads only these immutable program words. */
+_Static_assert(sizeof(HwPsConst)==168*4 && offsetof(HwPsConst,ctl)==96*4 &&
+               offsetof(HwPsConst,misc)==132*4,"Native fragment constant ABI changed");
 
 typedef struct {
     SDL_GPUTexture *color, *depth;
@@ -41,6 +45,7 @@ typedef struct {
     uint32_t shader, mask, blend, src, dst, op, depth, write, cmp, cull, ccw;
     uint32_t vertex_stride; /* RE-SoT: compact native program inputs, zero for HwVertex. */
     uint32_t small_vsh; /* RE-SoT: no reads of temporary registers R4..R11. */
+    uint32_t specialized_ps; /* RE-SoT: immutable fragment variant, zero is generic. */
     SDL_GPUTextureFormat format;
 } NgPipelineKey;
 _Static_assert(sizeof(HwVertex) == 128, "Native vertex ring alignment requires 128-byte HwVertex"); /* RE-SoT: compact pitches divide this alignment. */
@@ -82,6 +87,10 @@ static struct {
     uint64_t simple_draws, guest_draws; /* RE-SoT: observe fast-path coverage on-device. */
     uint64_t small_vsh_draws; /* RE-SoT: measure actual program admission. */
     SDL_GPUShader *small_vs; /* RE-SoT: fewer live temporary vectors on mobile GPUs. */
+    /* RE-SoT: bounded variants; retain failed entries to avoid retrying every draw. */
+    struct { uint32_t key[RESOT_PS_SPEC_WORDS]; SDL_GPUShader *shader; } spec_ps[256];
+    uint32_t spec_ps_count;
+    uint64_t spec_ps_draws; /* RE-SoT: measure specialization coverage. */
     SDL_GPUBuffer *vertices;
     SDL_GPUTexture *white, *white_cube, *composed;
     uint32_t compose_w, compose_h, vertex_offset;
@@ -149,6 +158,12 @@ static void ng_fail(const char *where)
 }
 static SDL_GPUCommandBuffer *ng_cmd(void)
 {
+#if defined(__ANDROID__)
+    /* RE-SoT: Android's hidden surface must not keep encoding frames and
+     * burning CPU/GPU. Its separate SDL event loop wakes this condition. */
+    extern void resot_android_wait_foreground(void);
+    resot_android_wait_foreground();
+#endif
     if (!s_ng.cmd) s_ng.cmd = SDL_AcquireGPUCommandBuffer(s_ng.device);
     if (!s_ng.cmd) ng_fail("acquire command buffer");
     return s_ng.cmd;
@@ -279,6 +294,33 @@ static SDL_GPUShader *ng_shader(const unsigned char *dxil, size_t dxil_size,
 #define NG_SHADER(entry, vertex, samplers, uniforms) ng_shader(ng_##entry##_dxil, sizeof ng_##entry##_dxil, \
     ng_##entry##_spirv, sizeof ng_##entry##_spirv, #entry, vertex, samplers, uniforms)
 
+/* RE-SoT: specialize only the generic Vulkan path; existing simple shaders
+ * remain cheaper. Full-key equality prevents hash collisions changing math.
+ * Constants, texture scales/borders and alpha reference remain uniforms. */
+static uint32_t ng_specialized_ps(const HwPsConst *pc)
+{
+    uint32_t key[RESOT_PS_SPEC_WORDS], i, *code;
+    size_t bytes;
+    const unsigned char *source;
+    static int enabled=-1;
+    if(enabled<0) { const char *e=getenv("RESOT_NATIVE_SPECIALIZE"); enabled=!(e && *e=='0'); }
+    if(!enabled || s_ng.active!=100) return 0;
+    resot_ps_spec_key(key,pc);
+    for(i=0;i<s_ng.spec_ps_count;i++)
+        if(!memcmp(key,s_ng.spec_ps[i].key,sizeof key)) return s_ng.spec_ps[i].shader?i+1:0;
+    if(i==256) return 0;
+    memcpy(s_ng.spec_ps[i].key,key,sizeof key); s_ng.spec_ps_count++;
+    source=ng_ps_specialized_source(key[32]&255,&bytes);
+    code=resot_ps_specialize(source,bytes,key);
+    if(code) {
+        s_ng.spec_ps[i].shader=ng_shader(NULL,0,(const unsigned char *)code,
+            bytes,"ps_main",0,8,1);
+        free(code);
+    }
+    if(!s_ng.spec_ps[i].shader) fprintf(stderr,"[HW native] specialized fragment %u unavailable: %s\n",i,SDL_GetError());
+    return s_ng.spec_ps[i].shader?i+1:0;
+}
+
 static void ng_shutdown(void)
 {
     uint32_t i,u,v,l;
@@ -319,6 +361,8 @@ static void ng_shutdown(void)
         if (s_ng.panel_ps) SDL_ReleaseGPUShader(s_ng.device,s_ng.panel_ps);
         if (s_ng.uber_vs) SDL_ReleaseGPUShader(s_ng.device,s_ng.uber_vs);
         if (s_ng.small_vs) SDL_ReleaseGPUShader(s_ng.device,s_ng.small_vs); /* RE-SoT */
+        for(i=0;i<s_ng.spec_ps_count;i++) /* RE-SoT: pipelines released first. */
+            if(s_ng.spec_ps[i].shader) SDL_ReleaseGPUShader(s_ng.device,s_ng.spec_ps[i].shader);
         if (s_ng.indices) SDL_ReleaseGPUBuffer(s_ng.device,s_ng.indices);
         if (s_ng.window) SDL_ReleaseWindowFromGPUDevice(s_ng.device, s_ng.window);
         SDL_DestroyGPUDevice(s_ng.device);
@@ -707,6 +751,7 @@ static SDL_GPUGraphicsPipeline *ng_pipeline(const NgPipelineKey *key)
     if (key->small_vsh) ci.vertex_shader = s_ng.small_vs; /* RE-SoT: selector already proved absent high-temp reads. */
     ci.fragment_shader = key->shader == 7 || key->shader == 8 ? s_ng.simple_alpha_ps : key->shader == 5 || key->shader == 6 ? s_ng.simple_ps : key->shader == 0 || key->shader == 4 ? s_ng.ps : key->shader == 1 ? s_ng.blit_ps :
                          key->shader == 2 ? s_ng.solid_ps : s_ng.panel_ps;
+    if(key->specialized_ps) ci.fragment_shader=s_ng.spec_ps[key->specialized_ps-1].shader; /* RE-SoT */
     if (!key->shader || key->shader >= 4) { /* RE-SoT: guest shader input layout, including simple variants. */
         vb.pitch = key->vertex_stride ? key->vertex_stride : sizeof(HwVertex);
         vb.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
@@ -982,6 +1027,8 @@ static void ng_draw(const HwVertex *vertices, uint32_t count)
     ng_constants(s,&draw.vc,&draw.pc,draw.textures);
     ng_draw_state(s,depth,&draw);
     { int simple = ng_simple_combiner(); draw.key.shader = simple ? (simple == 2 ? 8 : 6) : 0; } /* RE-SoT: same fragment specialization on fallback vertices. */
+    if(draw.key.shader==0) draw.key.specialized_ps=ng_specialized_ps(&draw.pc); /* RE-SoT */
+    s_ng.spec_ps_draws+=draw.key.specialized_ps!=0; /* RE-SoT */
     s_ng.guest_draws++; if (draw.key.shader >= 5) s_ng.simple_draws++;
     draw.offset = s_ng.queued_bytes; draw.count = count;
     memcpy(s_ng.queued_vertices+s_ng.queued_bytes,vertices,bytes);
@@ -1154,6 +1201,8 @@ static int ng_draw_program_batch(void)
     }
 #endif
     draw->key.shader = simple ? (simple == 2 ? 7 : 5) : 4; /* RE-SoT: exact opaque fragment specialization. */
+    if(draw->key.shader==4) draw->key.specialized_ps=ng_specialized_ps(&draw->pc); /* RE-SoT */
+    s_ng.spec_ps_draws+=draw->key.specialized_ps!=0; /* RE-SoT */
     s_ng.guest_draws++; if (draw->key.shader >= 5) s_ng.simple_draws++;
     draw->vc.fogp[0] = s_gpu.fog_param[0]; draw->vc.fogp[1] = s_gpu.fog_param[1];
     draw->vc.fogp[2] = (float)s_gpu.fog_mode; draw->vc.fogp[3] = s_gpu.fog_enable ? 1.0f : 0.0f;
@@ -1322,6 +1371,40 @@ static void ng_compose(void)
 #endif
     if (client.right < 16 || client.bottom < 16) return;
     bw = client.right; bh = client.bottom;
+#if defined(__ANDROID__)
+    /* RE-SoT: without host overlays and letterboxing, preserve the frame at
+     * its existing internal resolution, then upscale once in ng_present.
+     * The old path upscaled into a full-display intermediate, stored it,
+     * and sampled all those pixels again. An exact ordered copy retains
+     * deferred-present lifetime without lowering the game's resolution. */
+    if (s_ng.front) {
+        const uint32_t *unused_pixels;
+        uint32_t ow,oh,orct[4],oserial;
+        uint32_t fw=ng_px(s_ng.front->w,s_ng.front->sc), fh=ng_py(s_ng.front->h,s_ng.front->sc);
+        int64_t aspect_error=(int64_t)fw*bh-(int64_t)fh*bw;
+        if (fw<=bw && fh<=bh && llabs(aspect_error)<=(int64_t)bw &&
+            !xbox_FramebufferOverlayGet(&unused_pixels,&ow,&oh,orct,&oserial) &&
+            !xbox_FramebufferDebugPanelGet(&unused_pixels,&ow,&oh)) {
+            SDL_GPUTextureLocation from={0},to={0};
+            SDL_GPUCopyPass *copy;
+            if (!s_ng.composed || s_ng.compose_w!=fw || s_ng.compose_h!=fh) {
+                if(s_ng.composed) SDL_ReleaseGPUTexture(s_ng.device,s_ng.composed);
+                s_ng.composed=ng_image(fw,fh,0,1,SDL_GPU_TEXTUREUSAGE_COLOR_TARGET|SDL_GPU_TEXTUREUSAGE_SAMPLER,
+                                        SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+                s_ng.compose_w=fw; s_ng.compose_h=fh;
+                fprintf(stderr,"[POWER] exact frame snapshot %ux%u, display %ux%u\n",fw,fh,bw,bh); /* RE-SoT: observe use, not assumed power savings. */
+            }
+            from.texture=s_ng.front->color; to.texture=s_ng.composed;
+            copy=SDL_BeginGPUCopyPass(ng_cmd());
+            if(!copy) ng_fail("frame snapshot");
+            SDL_CopyGPUTextureToTexture(copy,&from,&to,fw,fh,1,true);
+            SDL_EndGPUCopyPass(copy);
+            s_ng.movie_log=0; s_ng.movie_composes=0;
+            s_hw.pending_present=1;
+            return;
+        }
+    }
+#endif
     if (!s_ng.composed || bw != s_ng.compose_w || bh != s_ng.compose_h) {
         if (s_ng.composed) SDL_ReleaseGPUTexture(s_ng.device, s_ng.composed);
         s_ng.composed = ng_image(bw,bh,0,1,SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
@@ -1470,6 +1553,8 @@ static void ng_flip(void)
             (unsigned long long)s_ng.simple_draws,(unsigned long long)s_ng.guest_draws); /* RE-SoT: verify coverage, not assumed speedup. */
         fprintf(stderr,"[HW native] small-register programs: %llu/%llu guest draws\n",
             (unsigned long long)s_ng.small_vsh_draws,(unsigned long long)s_ng.guest_draws); /* RE-SoT: distinguish eligibility from speedup. */
+        fprintf(stderr,"[HW native] specialized combiners: %llu/%llu guest draws, %u cached variants\n",
+            (unsigned long long)s_ng.spec_ps_draws,(unsigned long long)s_ng.guest_draws,s_ng.spec_ps_count); /* RE-SoT */
         /* RE-SoT: expose the existing F6 timings on Android as well, where
          * there is no diagnostics panel. Avoid inferring CPU/GPU bottlenecks
          * from FPS alone. Values are the latest half-second sample. */

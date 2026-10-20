@@ -70,7 +70,7 @@ static int test_texture_cycle(SDL_GPUDevice *device)
 {
     SDL_GPUTextureCreateInfo info = {0};
     SDL_GPUTransferBufferCreateInfo ti = {SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,64,0};
-    SDL_GPUTexture *texture;
+    SDL_GPUTexture *texture,*snapshot; /* RE-SoT: exact deferred frame snapshot. */
     SDL_GPUTransferBuffer *upload, *download;
     SDL_GPUCommandBuffer *cmd;
     SDL_GPUFence *fence;
@@ -80,8 +80,9 @@ static int test_texture_cycle(SDL_GPUDevice *device)
     info.usage=SDL_GPU_TEXTUREUSAGE_SAMPLER; info.width=info.height=4;
     info.layer_count_or_depth=info.num_levels=1; info.sample_count=SDL_GPU_SAMPLECOUNT_1;
     texture=SDL_CreateGPUTexture(device,&info); REQUIRE(texture);
+    snapshot=SDL_CreateGPUTexture(device,&info); REQUIRE(snapshot);
     upload=SDL_CreateGPUTransferBuffer(device,&ti); REQUIRE(upload);
-    ti.usage=SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD; ti.size=192;
+    ti.usage=SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD; ti.size=384;
     download=SDL_CreateGPUTransferBuffer(device,&ti); REQUIRE(download);
     cmd=SDL_AcquireGPUCommandBuffer(device); REQUIRE(cmd);
     for (run=0;run<3;run++) {
@@ -95,16 +96,22 @@ static int test_texture_cycle(SDL_GPUDevice *device)
         copy=SDL_BeginGPUCopyPass(cmd); REQUIRE(copy);
         SDL_UploadToGPUTexture(copy,&src,&region,true);
         SDL_DownloadFromGPUTexture(copy,&region,&dst);
+        { SDL_GPUTextureLocation from={texture,0,0,0,0,0},to={snapshot,0,0,0,0,0};
+          SDL_CopyGPUTextureToTexture(copy,&from,&to,4,4,1,true);
+          region.texture=snapshot; dst.offset+=192;
+          SDL_DownloadFromGPUTexture(copy,&region,&dst); } /* RE-SoT: subsequent cycles must retain this frame. */
         SDL_EndGPUCopyPass(copy);
     }
     fence=SDL_SubmitGPUCommandBufferAndAcquireFence(cmd); REQUIRE(fence);
     REQUIRE(SDL_WaitForGPUFences(device,true,&fence,1));
     pixels=SDL_MapGPUTransferBuffer(device,download,false); REQUIRE(pixels);
     for (run=0;run<3;run++) for (i=0;i<16;i++) REQUIRE(pixels[run*16+i]==0xFF000000u+(Uint32)(run*100+i));
+    for (run=0;run<3;run++) for (i=0;i<16;i++) REQUIRE(pixels[48+run*16+i]==pixels[run*16+i]); /* RE-SoT */
     SDL_UnmapGPUTransferBuffer(device,download); SDL_ReleaseGPUFence(device,fence);
     SDL_ReleaseGPUTexture(device,texture);
+    SDL_ReleaseGPUTexture(device,snapshot); /* RE-SoT */
     SDL_ReleaseGPUTransferBuffer(device,upload); SDL_ReleaseGPUTransferBuffer(device,download);
-    puts("texture cycling preserves earlier image readbacks");
+    puts("texture cycling and exact frame snapshots preserve earlier image readbacks");
     return 0;
 }
 /* RE-SoT: real GPU readback of the production HLSL border helper: white
@@ -235,7 +242,8 @@ int main(int argc, char **argv)
     depth = SDL_CreateGPUTexture(device,&image); REQUIRE(depth);
     transfer = SDL_CreateGPUTransferBuffer(device,&transfer_info); REQUIRE(transfer);
     REQUIRE(!test_texture_border(device,vs,target,transfer,dx)); /* RE-SoT: actual shader on both GPUs. */
-    REQUIRE(!test_simple_combiner(device,target,transfer,dx)); /* RE-SoT: specialization matches full interpreter. */
+    REQUIRE(!test_simple_combiner(device,target,transfer,dx,0)); /* RE-SoT: specialization matches full interpreter. */
+    if(!dx) REQUIRE(!test_simple_combiner(device,target,transfer,dx,1)); /* RE-SoT: Vulkan constant-state programs. */
     for (frame = 0; frame < 4; frame++) {
         SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(device);
         SDL_GPUColorTargetInfo ct = {0};
