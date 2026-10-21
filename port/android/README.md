@@ -30,7 +30,7 @@ remain under validation; see [VALIDATION.md](../../docs/VALIDATION.md).
 
 Version 0.1.2 (Android versionCode 3) bundles
 [the supplied Android defaults](default-options.ini): Vulkan, unlimited FPS,
-VSync/glow/logs off, 480p (100%), post-processing Off and look sensitivity 200%.
+VSync/glow/logs off, 480p (100%), post-processing Low and look sensitivity 200%.
 The launcher or direct game startup creates a missing INI from the packaged
 asset; an existing INI is retained. The effect-quality and logging repairs are
 included; no further gameplay tests were run after the user's confirmation.
@@ -231,8 +231,7 @@ The selected dimensions and aspect are logged at startup. An explicit
 this automatic choice follows the Android device's drawable at game startup.
 Windows now exposes the same internal resolution choices in the main menu
 and F7; F11 alone changes fullscreen/window mode.
-Android defaults to `PostProcessingQuality=0` in `[Graphics]`; Windows uses
-`PostProcessingQuality=1`. Both default to `TextureGlowEffect=0`. Existing
+Both hosts default to `PostProcessingQuality=1` (Low) in `[Graphics]`. Both default to `TextureGlowEffect=0`. Existing
 saved values take precedence; `PostProcessing` is an obsolete key.
 Retail's option-label refresh now reads its text-object metadata on Android;
 previously that metadata probe was implemented only on Windows, so values
@@ -390,3 +389,21 @@ Restart the game after changing this value. `ConsoleLogs=0` disables it.
 The overlay reads `logs/xbox-demo-err.txt` and `logs/xbox-demo-out.txt`, or
 the retail equivalents, inside the same app files folder. Errors are red,
 warnings yellow; recent rows scroll and fade. Normal file logging is retained.
+
+The in-game reSOT Options post-processing selector offers Low/Mid/High.
+Off remains available through `[Graphics] PostProcessingQuality=0` in the INI
+and, on Windows, through F7. An existing Off setting is shown as Custom in
+the in-game menu and is preserved until the quality selector is changed.
+
+Vulkan uses dedicated translated vertex programs and optimized complex fragment
+programs for demo and retail. The host compiler (glslang/SPIRV-Tools) is built
+from pinned sources with `tools/setup-shader-compiler.ps1`, also called by the
+platform dependency setup script. Players need no separate shader compiler.
+Optimized modules are stored in `shadercache/`; Vulkan's driver pipeline cache
+is separate. Compilation uses background workers by default on both hosts,
+with reference pipelines available during compilation. First-use draw skips
+can still occur until a pipeline is ready. `RESOT_NATIVE_TRANSLATE=0` and
+`RESOT_NATIVE_SPECIALIZE=0` are developer comparison switches;
+`RESOT_ASYNC_PIPELINES=0` forces synchronous compilation. See
+[the shader study](../../docs/VULKAN-PERFORMANCE.md) and
+[validation](../../docs/VALIDATION.md) for scope and observed results.

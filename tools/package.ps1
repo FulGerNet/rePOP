@@ -23,6 +23,13 @@ foreach ($file in @('SDL3.dll','LICENSE-SDL3.txt','SDL3-RESOT.txt')) {
     if (-not (Test-Path -LiteralPath $nativeFile)) { throw "Missing $file; run tools/setup-native-gpu.ps1." }
     Copy-Item -LiteralPath $nativeFile -Destination $destination -Force
 }
+# The statically linked shader compiler/optimizer carries upstream notices.
+foreach ($notice in @(@('glslang/LICENSE.txt','LICENSE-glslang.txt'),
+                       @('spirv-tools/LICENSE','LICENSE-SPIRV-Tools.txt'),
+                       @('spirv-headers/LICENSE','LICENSE-SPIRV-Headers.txt'))) {
+    Copy-Item -LiteralPath (Join-Path $root "build/deps/$($notice[0])") `
+        -Destination (Join-Path $destination $notice[1]) -Force
+}
 # extract-xiso is built into the executable (launcher ISO installation); its
 # licence asks binary redistributions to carry its notice.
 Copy-Item -LiteralPath (Join-Path $root 'port/third_party/extract-xiso/LICENSE.TXT') `

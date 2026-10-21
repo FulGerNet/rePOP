@@ -625,7 +625,7 @@ void resot_native_label(int page, int item, char *out, unsigned size)
         case 0: snprintf(out,size,"FPS limit: %s",s_cap_names[s_fps==30?0:s_fps==60?1:s_fps==120?2:3]); break;
         case 1: snprintf(out,size,"VSync: %s",s_vsync?"On":"Off"); break;
         case 2: snprintf(out,size,"Texture glow effect: %s",s_texture_glow?"On":"Off"); break;
-        case 4: snprintf(out,size,"Post processing: %s",s_quality_names[s_post_quality]); break;
+        case 4: snprintf(out,size,"Post processing: %s",s_post_quality?s_quality_names[s_post_quality]:"Custom"); break;
         default: snprintf(out,size,"Resolution: %s",s_native_sizes[s_resolution]); break;
         }
     } else if (page==RESOT_NATIVE_CONTROLS && item==0) {
@@ -662,7 +662,7 @@ void resot_native_activate(int page, int item)
         case 1: s_vsync=!s_vsync; xbox_SetVSync(s_vsync); break;
         case 2: s_texture_glow=!s_texture_glow; xbox_SetPostProcessing(s_texture_glow); break;
         case 3: s_resolution=(s_resolution+1)%6; resize=1; break;
-        case 4: s_post_quality=(s_post_quality+1)%4; xbox_SetPostProcessingQuality(s_post_quality); break;
+        case 4: s_post_quality=s_post_quality>=3?1:s_post_quality+1; xbox_SetPostProcessingQuality(s_post_quality); break;
         }
         save_config();
     } else if (page==RESOT_NATIVE_CONTROLS && item==0) {

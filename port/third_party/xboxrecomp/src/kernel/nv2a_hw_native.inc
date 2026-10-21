@@ -23,6 +23,8 @@ static void (SDLCALL *s_ng_cache_path)(const char *);
 static bool (SDLCALL *s_ng_cache_save)(SDL_GPUDevice *);
 
 #include "resot_native_vsh.h" /* RE-SoT: exact small-register program admission. */
+#include "shader_compiler.h" /* RE-SoT: shared Windows/Android native compiler. */
+#include "resot_native_translate.h" /* RE-SoT: immutable vertex translation. */
 #include "resot_native_specialize.h" /* RE-SoT: constant Vulkan combiner programs. */
 /* RE-SoT: the specialization key reads only these immutable program words. */
 _Static_assert(sizeof(HwPsConst)==168*4 && offsetof(HwPsConst,ctl)==96*4 &&
@@ -41,11 +43,30 @@ typedef struct {
     Texture guest;
     uint32_t hash, checked, used;
 } NgTexture;
+/* RE-SoT: stable, collision-checked program entries. Workers only read the
+ * immutable source/key; shader publication is protected by each entry's lock.
+ * No arbitrary 256-program limit returns later levels to generic shaders. */
+typedef struct NgTranslatedVertex {
+    struct NgTranslatedVertex *next;
+    uint32_t count, words[NV2A_VSH_SLOTS*4];
+    char *source;
+    SDL_Mutex *lock;
+    SDL_GPUShader *shader;
+    int attempted;
+} NgTranslatedVertex;
+typedef struct NgTranslatedFragment {
+    struct NgTranslatedFragment *next;
+    uint32_t key[RESOT_PS_SPEC_WORDS];
+    SDL_Mutex *lock;
+    SDL_GPUShader *shader;
+    int attempted;
+} NgTranslatedFragment;
 typedef struct {
     uint32_t shader, mask, blend, src, dst, op, depth, write, cmp, cull, ccw;
     uint32_t vertex_stride; /* RE-SoT: compact native program inputs, zero for HwVertex. */
     uint32_t small_vsh; /* RE-SoT: no reads of temporary registers R4..R11. */
-    uint32_t specialized_ps; /* RE-SoT: immutable fragment variant, zero is generic. */
+    NgTranslatedFragment *specialized_ps; /* RE-SoT: stable program identity. */
+    NgTranslatedVertex *translated_vs; /* RE-SoT: direct Vulkan vertex program. */
     SDL_GPUTextureFormat format;
 } NgPipelineKey;
 _Static_assert(sizeof(HwVertex) == 128, "Native vertex ring alignment requires 128-byte HwVertex"); /* RE-SoT: compact pitches divide this alignment. */
@@ -94,7 +115,10 @@ static struct {
     uint64_t small_vsh_draws; /* RE-SoT: measure actual program admission. */
     SDL_GPUShader *small_vs; /* RE-SoT: fewer live temporary vectors on mobile GPUs. */
     /* RE-SoT: bounded variants; retain failed entries to avoid retrying every draw. */
-    struct { uint32_t key[RESOT_PS_SPEC_WORDS]; SDL_GPUShader *shader; } spec_ps[256];
+    NgTranslatedFragment *spec_ps[256];
+    NgTranslatedVertex *translated_vs[256];
+    uint64_t translated_vsh_draws; /* RE-SoT: admitted direct-program coverage. */
+    uint64_t reference_draws; /* RE-SoT: reference draws while translation pipelines compile. */
     uint32_t spec_ps_count;
     uint64_t spec_ps_draws; /* RE-SoT: measure specialization coverage. */
     SDL_GPUBuffer *vertices;
@@ -334,28 +358,90 @@ static SDL_GPUShader *ng_shader(const unsigned char *dxil, size_t dxil_size,
 /* RE-SoT: specialize only the generic Vulkan path; existing simple shaders
  * remain cheaper. Full-key equality prevents hash collisions changing math.
  * Constants, texture scales/borders and alpha reference remain uniforms. */
-static uint32_t ng_specialized_ps(const HwPsConst *pc)
+static uint32_t ng_program_bucket(const uint32_t *words,uint32_t count)
 {
-    uint32_t key[RESOT_PS_SPEC_WORDS], i, *code;
-    size_t bytes;
-    const unsigned char *source;
+    uint32_t hash=2166136261u;
+    for(uint32_t i=0;i<count;i++) hash=(hash^words[i])*16777619u;
+    return hash&255;
+}
+static NgTranslatedFragment *ng_specialized_ps(const HwPsConst *pc)
+{
+    uint32_t key[RESOT_PS_SPEC_WORDS],bucket;
+    NgTranslatedFragment *entry;
     static int enabled=-1;
     if(enabled<0) { const char *e=getenv("RESOT_NATIVE_SPECIALIZE"); enabled=!(e && *e=='0'); }
-    if(!enabled || s_ng.active!=100) return 0;
-    resot_ps_spec_key(key,pc);
-    for(i=0;i<s_ng.spec_ps_count;i++)
-        if(!memcmp(key,s_ng.spec_ps[i].key,sizeof key)) return s_ng.spec_ps[i].shader?i+1:0;
-    if(i==256) return 0;
-    memcpy(s_ng.spec_ps[i].key,key,sizeof key); s_ng.spec_ps_count++;
-    source=ng_ps_specialized_source(key[32]&255,&bytes);
-    code=resot_ps_specialize(source,bytes,key);
-    if(code) {
-        s_ng.spec_ps[i].shader=ng_shader(NULL,0,(const unsigned char *)code,
-            bytes,"ps_main",0,8,1);
-        free(code);
+    if(!enabled || s_ng.active!=100) return NULL;
+    resot_ps_spec_key(key,pc); bucket=ng_program_bucket(key,RESOT_PS_SPEC_WORDS);
+    for(entry=s_ng.spec_ps[bucket];entry;entry=entry->next)
+        if(!memcmp(key,entry->key,sizeof key)) return entry;
+    entry=(NgTranslatedFragment*)calloc(1,sizeof *entry);
+    if(!entry) return NULL;
+    entry->lock=SDL_CreateMutex();
+    if(!entry->lock) { free(entry); return NULL; }
+    memcpy(entry->key,key,sizeof key);
+    entry->next=s_ng.spec_ps[bucket]; s_ng.spec_ps[bucket]=entry; s_ng.spec_ps_count++;
+    return entry;
+}
+/* RE-SoT: only immutable packed words enter the cache: uniforms, game target
+ * addresses and the live viewport never enter a translated program's key. */
+static NgTranslatedVertex *ng_translated_vs(const uint32_t *words,uint32_t count)
+{
+    uint32_t bucket;
+    NgTranslatedVertex *entry;
+    static int enabled=-1;
+    if(enabled<0) { const char *e=getenv("RESOT_NATIVE_TRANSLATE"); enabled=!(e && *e=='0'); }
+    if(!enabled || s_ng.active!=100) return NULL;
+    bucket=ng_program_bucket(words,count*4);
+    for(entry=s_ng.translated_vs[bucket];entry;entry=entry->next)
+        if(entry->count==count && !memcmp(entry->words,words,count*16)) return entry;
+    entry=(NgTranslatedVertex*)calloc(1,sizeof *entry);
+    if(!entry) return NULL;
+    entry->lock=SDL_CreateMutex();
+    entry->source=resot_translate_vertex(ng_translated_vertex_head,words,count);
+    if(!entry->lock || !entry->source) {
+        if(entry->lock) SDL_DestroyMutex(entry->lock);
+        free(entry->source); free(entry); return NULL;
     }
-    if(!s_ng.spec_ps[i].shader) fprintf(stderr,"[HW native] specialized fragment %u unavailable: %s\n",i,SDL_GetError());
-    return s_ng.spec_ps[i].shader?i+1:0;
+    entry->count=count; memcpy(entry->words,words,count*16);
+    entry->next=s_ng.translated_vs[bucket]; s_ng.translated_vs[bucket]=entry;
+    return entry;
+}
+/* RE-SoT: called on the existing pipeline workers, not on every draw.
+ * Compilation failure keeps a reference shader; the entry is not retried. */
+static SDL_GPUShader *ng_vertex_compile(NgTranslatedVertex *entry)
+{
+    SDL_LockMutex(entry->lock);
+    if(!entry->attempted) {
+        size_t bytes=0; uint32_t *code=resot_compile_vertex(entry->source,&bytes);
+        if(code) { entry->shader=ng_shader(NULL,0,(const unsigned char*)code,bytes,"main",1,0,2); free(code); }
+        if(entry->shader) fprintf(stderr,"[HW native] translated vertex: %u instructions, %zu SPIR-V bytes\n",entry->count,bytes);
+        if(!entry->shader) fprintf(stderr,"[HW native] vertex translation failed; using reference interpreter\n");
+        entry->attempted=1;
+    }
+    SDL_GPUShader *shader=entry->shader;
+    SDL_UnlockMutex(entry->lock); return shader;
+}
+static SDL_GPUShader *ng_fragment_compile(NgTranslatedFragment *entry)
+{
+    SDL_LockMutex(entry->lock);
+    if(!entry->attempted) {
+        size_t bytes,optimized_bytes=0;
+        const unsigned char *source=ng_ps_specialized_source(entry->key[32]&255,&bytes);
+        uint32_t *code=resot_ps_specialize(source,bytes,entry->key);
+        if(code) {
+            uint32_t *optimized=resot_optimize_fragment(code,bytes,&optimized_bytes);
+            if(optimized) {
+                entry->shader=ng_shader(NULL,0,(const unsigned char*)optimized,optimized_bytes,"ps_main",0,8,1);
+                free(optimized);
+            }
+            if(!entry->shader) entry->shader=ng_shader(NULL,0,(const unsigned char*)code,bytes,"ps_main",0,8,1);
+            free(code);
+        }
+        if(!entry->shader) fprintf(stderr,"[HW native] fragment translation failed; using reference combiner\n");
+        entry->attempted=1;
+    }
+    SDL_GPUShader *shader=entry->shader;
+    SDL_UnlockMutex(entry->lock); return shader;
 }
 
 static void ng_shutdown(void)
@@ -400,8 +486,21 @@ static void ng_shutdown(void)
         if (s_ng.panel_ps) SDL_ReleaseGPUShader(s_ng.device,s_ng.panel_ps);
         if (s_ng.uber_vs) SDL_ReleaseGPUShader(s_ng.device,s_ng.uber_vs);
         if (s_ng.small_vs) SDL_ReleaseGPUShader(s_ng.device,s_ng.small_vs); /* RE-SoT */
-        for(i=0;i<s_ng.spec_ps_count;i++) /* RE-SoT: pipelines released first. */
-            if(s_ng.spec_ps[i].shader) SDL_ReleaseGPUShader(s_ng.device,s_ng.spec_ps[i].shader);
+        /* RE-SoT: workers stopped and pipelines released before program entries. */
+        for(i=0;i<256;i++) {
+            NgTranslatedVertex *vertex;
+            NgTranslatedFragment *fragment;
+            while((vertex=s_ng.translated_vs[i])!=NULL) {
+                s_ng.translated_vs[i]=vertex->next;
+                if(vertex->shader) SDL_ReleaseGPUShader(s_ng.device,vertex->shader);
+                SDL_DestroyMutex(vertex->lock); free(vertex->source); free(vertex);
+            }
+            while((fragment=s_ng.spec_ps[i])!=NULL) {
+                s_ng.spec_ps[i]=fragment->next;
+                if(fragment->shader) SDL_ReleaseGPUShader(s_ng.device,fragment->shader);
+                SDL_DestroyMutex(fragment->lock); free(fragment);
+            }
+        }
         if (s_ng.indices) SDL_ReleaseGPUBuffer(s_ng.device,s_ng.indices);
         if (s_ng.window) SDL_ReleaseWindowFromGPUDevice(s_ng.device, s_ng.window);
         SDL_DestroyGPUDevice(s_ng.device);
@@ -415,6 +514,9 @@ static void ng_shutdown(void)
 }
 static int ng_init(const char *backend)
 {
+    /* RE-SoT: Android's CWD is the writable app files directory; Windows'
+     * is the executable directory. Source equality versions cache entries. */
+    resot_shader_cache_init("shadercache");
 #if defined(_WIN32)
     char dll_path[MAX_PATH];
     HMODULE module;
@@ -799,7 +901,15 @@ static SDL_GPUGraphicsPipeline *ng_pipeline_build(const NgPipelineKey *key, int 
     if (key->small_vsh) ci.vertex_shader = s_ng.small_vs; /* RE-SoT: selector already proved absent high-temp reads. */
     ci.fragment_shader = key->shader == 7 || key->shader == 8 ? s_ng.simple_alpha_ps : key->shader == 5 || key->shader == 6 ? s_ng.simple_ps : key->shader == 0 || key->shader == 4 ? s_ng.ps : key->shader == 1 ? s_ng.blit_ps :
                          key->shader == 2 ? s_ng.solid_ps : s_ng.panel_ps;
-    if(key->specialized_ps) ci.fragment_shader=s_ng.spec_ps[key->specialized_ps-1].shader; /* RE-SoT */
+    /* RE-SoT: compile immutable programs once; reference shaders survive failures. */
+    if(key->translated_vs) {
+        SDL_GPUShader *translated=ng_vertex_compile(key->translated_vs);
+        if(translated) ci.vertex_shader=translated;
+    }
+    if(key->specialized_ps) {
+        SDL_GPUShader *translated=ng_fragment_compile(key->specialized_ps);
+        if(translated) ci.fragment_shader=translated;
+    }
     if (!key->shader || key->shader >= 4) { /* RE-SoT: guest shader input layout, including simple variants. */
         vb.pitch = key->vertex_stride ? key->vertex_stride : sizeof(HwVertex);
         vb.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
@@ -883,9 +993,9 @@ static int SDLCALL ng_compiler(void *unused)
     return 0;
 }
 
-/* RESOT_ASYNC_PIPELINES=0 compiles every pipeline on the executor (exact
- * frames, with the stalls); =1 forces background compilation. Default: on
- * Android, where the stalls were measured, off elsewhere. */
+/* RE-SoT: RESOT_ASYNC_PIPELINES=0 compiles on the executor; =1 forces
+ * workers. Default on for Vulkan on both hosts: dedicated program compilation
+ * must not stall the executor. D3D12 retains its existing default. */
 static void ng_compiler_start(void)
 {
     const char *e = getenv("RESOT_ASYNC_PIPELINES");
@@ -893,7 +1003,7 @@ static void ng_compiler_start(void)
 #if defined(__ANDROID__)
     s_ngc.async = !(e && *e == '0');
 #else
-    s_ngc.async = e && *e && *e != '0';
+    s_ngc.async = e && *e ? *e != '0' : s_ng.active == 100;
 #endif
     if (!s_ngc.async && !s_ng_cache_save) return;
     s_ngc.lock = SDL_CreateMutex();
@@ -952,8 +1062,15 @@ static SDL_GPUGraphicsPipeline *ng_pipeline(const NgPipelineKey *key, int may_de
         if (may_defer && s_ngc.async) {
             SDL_SetAtomicInt(&p->state, NG_PSO_PENDING);
             SDL_LockMutex(s_ngc.lock);
-            if (s_ngc.tail) s_ngc.tail->job_next = p; else s_ngc.head = p;
-            s_ngc.tail = p;
+            /* RE-SoT: prioritize reference pipelines so a cold translation
+             * cannot leave geometry absent throughout shader optimization. */
+            if (!key->translated_vs && !key->specialized_ps) {
+                p->job_next=s_ngc.head; s_ngc.head=p;
+                if(!s_ngc.tail) s_ngc.tail=p;
+            } else {
+                if (s_ngc.tail) s_ngc.tail->job_next = p; else s_ngc.head = p;
+                s_ngc.tail = p;
+            }
             SDL_SignalCondition(s_ngc.cond);
             SDL_UnlockMutex(s_ngc.lock);
         } else {
@@ -963,7 +1080,7 @@ static SDL_GPUGraphicsPipeline *ng_pipeline(const NgPipelineKey *key, int may_de
     }
     state = SDL_GetAtomicInt(&p->state);
     if (state == NG_PSO_PENDING) {
-        if (may_defer) { SDL_AddAtomicInt(&s_ngc.skipped, 1); return NULL; }
+        if (may_defer) return NULL; /* RE-SoT: caller counts only genuinely skipped draws. */
         /* A blit wanting a key a guest draw queued: wait for it. */
         while (SDL_GetAtomicInt(&p->state) == NG_PSO_PENDING) SDL_Delay(1);
         state = SDL_GetAtomicInt(&p->state);
@@ -1073,8 +1190,17 @@ static void ng_flush_draws(void)
         SDL_GPUGraphicsPipeline *pipeline = ng_pipeline(&draw->key,1);
         SDL_GPUBufferBinding vb = {s_ng.vertices,s_ng.vertex_offset};
         uint32_t sampler_count = draw->key.shader >= 5 ? 1 : 8; /* RE-SoT */
-        int new_samplers;
-        if (!pipeline) continue; /* RE-SoT: still compiling (s_ngc); later frames draw it. */
+        int new_samplers,reference_pipeline=0;
+        /* RE-SoT: preserve output with the reference program until a direct
+         * program's PSO is ready. Both use the original immutable snapshots. */
+        if(!pipeline && (draw->key.translated_vs || draw->key.specialized_ps)) {
+            NgPipelineKey reference=draw->key;
+            reference.translated_vs=NULL; reference.specialized_ps=NULL;
+            pipeline=ng_pipeline(&reference,1);
+            reference_pipeline=pipeline!=NULL;
+        }
+        if (!pipeline) { SDL_AddAtomicInt(&s_ngc.skipped,1); continue; }
+        s_ng.reference_draws+=reference_pipeline;
         /* RE-SoT: SDL 3.4.18's D3D12 descriptor writer checks only the
          * current index, not index+table size, against its 2048-sampler heap.
          * One-slot host blits followed by eight-slot guest draws can cross
@@ -1153,7 +1279,11 @@ static void ng_flush_draws(void)
                 SDL_PushGPUVertexUniformData(s_ng.cmd,1,s_ng.cpool[draw->cslot],sizeof s_ng.cpool[0]);
                 s_ng.last_cslot = (int)draw->cslot;
             }
-            if (s_ng.last_pslot != (int)draw->pslot) {
+            /* RE-SoT: ng_pipeline acquired the worker's ready publication;
+             * shader is immutable after that point. Successful translations
+             * consume constants only, so omit the interpreter program UBO. */
+            if ((reference_pipeline || !draw->key.translated_vs || !draw->key.translated_vs->shader) &&
+                s_ng.last_pslot != (int)draw->pslot) {
                 SDL_PushGPUVertexUniformData(s_ng.cmd,2,s_ng.ppool[draw->pslot],draw->pcount*16);
                 s_ng.last_pslot = (int)draw->pslot;
             }
@@ -1348,6 +1478,8 @@ static int ng_draw_program_batch(void)
     ng_draw_state(s,depth,draw);
     draw->key.vertex_stride = stride;
     simple = ng_simple_combiner();
+    draw->key.translated_vs=ng_translated_vs(words,pcount); /* RE-SoT: both targets. */
+    s_ng.translated_vsh_draws+=draw->key.translated_vs!=NULL;
 #if RESOT_RUNTIME_RETAIL
     {
         static uint32_t checked_generation;
@@ -1362,7 +1494,7 @@ static int ng_draw_program_batch(void)
         }
         /* RE-SoT: this variant retains four packed inputs and only the
          * outputs consumed by the one-stage fragment shaders: d0/fog/t0. */
-        draw->key.small_vsh = s_ng.small_vs && eligible && ninputs <= 4 && simple;
+        draw->key.small_vsh = !draw->key.translated_vs && s_ng.small_vs && eligible && ninputs <= 4 && simple;
         if (draw->key.small_vsh) { words = compact_words; pcount = compact_count; } /* RE-SoT */
         s_ng.small_vsh_draws += draw->key.small_vsh;
     }
@@ -1729,6 +1861,10 @@ static void ng_flip(void)
             (unsigned long long)s_ng.small_vsh_draws,(unsigned long long)s_ng.guest_draws); /* RE-SoT: distinguish eligibility from speedup. */
         fprintf(stderr,"[HW native] specialized combiners: %llu/%llu guest draws, %u cached variants\n",
             (unsigned long long)s_ng.spec_ps_draws,(unsigned long long)s_ng.guest_draws,s_ng.spec_ps_count); /* RE-SoT */
+        fprintf(stderr,"[HW native] direct vertex programs admitted %llu/%llu guest draws\n",
+            (unsigned long long)s_ng.translated_vsh_draws,(unsigned long long)s_ng.guest_draws); /* RE-SoT: admission is not compilation success. */
+        fprintf(stderr,"[HW native] reference pipeline draws while translating: %llu\n",
+            (unsigned long long)s_ng.reference_draws); /* RE-SoT: distinguish temporary fallbacks. */
         if (s_ngc.async) /* RE-SoT: what background compilation cost in skipped draws. */
             fprintf(stderr,"[HW native] background pipelines: %d compiled, %d guest draws skipped while compiling\n",
                     SDL_GetAtomicInt(&s_ngc.compiled),SDL_GetAtomicInt(&s_ngc.skipped));

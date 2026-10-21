@@ -99,6 +99,15 @@ tasks.register("resotAssets", Copy) {
     from(new File(root, "build/deps/libadrenotools/lib/linkernsbypass/LICENSE")) {
         into "licenses"; rename { "LICENSE-liblinkernsbypass.txt" }
     }
+    from(new File(root, "build/deps/glslang/LICENSE.txt")) {
+        into "licenses"; rename { "LICENSE-glslang.txt" }
+    }
+    from(new File(root, "build/deps/spirv-tools/LICENSE")) {
+        into "licenses"; rename { "LICENSE-SPIRV-Tools.txt" }
+    }
+    from(new File(root, "build/deps/spirv-headers/LICENSE")) {
+        into "licenses"; rename { "LICENSE-SPIRV-Headers.txt" }
+    }
     into generatedAssets
 }
 tasks.named("preBuild") { dependsOn "resotAssets" }

@@ -95,6 +95,16 @@ static int test_simple_combiner(SDL_GPUDevice *device, SDL_GPUTexture *target,
             source=ng_ps_specialized_source(key[32]&255,&bytes);
             code=resot_ps_specialize(source,bytes,key);
             REQUIRE(code);
+            if(specialized==2 && (iteration&1)) {
+                size_t optimized_bytes=0;
+                Uint64 started=SDL_GetTicksNS();
+                uint32_t *optimized=resot_optimize_fragment(code,bytes,&optimized_bytes);
+                REQUIRE(optimized && optimized_bytes>0);
+                if(!(run%8)) fprintf(stderr,"[Shader test] fragment %d: %zu -> %zu bytes in %.1f ms\n",run,bytes,optimized_bytes,(SDL_GetTicksNS()-started)/1e6);
+                free(code); code=optimized; bytes=optimized_bytes;
+                for(size_t at=5;at<bytes/4;at+=code[at]>>16)
+                    REQUIRE((code[at]&65535)!=50 && (code[at]&65535)!=52); /* RE-SoT: no remaining specialization decoding. */
+            }
             SDL_ReleaseGPUGraphicsPipeline(device,pipeline); SDL_ReleaseGPUShader(device,ps);
             si.code=iteration&1?(const unsigned char *)code:ng_ps_main_spirv;
             si.code_size=iteration&1?bytes:sizeof ng_ps_main_spirv;

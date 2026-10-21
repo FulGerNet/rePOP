@@ -53,3 +53,6 @@ if ($actualCommit -ne $adrenoCommit) {
 & git -C $adreno submodule update --init --recursive
 if ($LASTEXITCODE) { throw 'libadrenotools dependency checkout failed.' }
 Write-Output 'Android dependencies ready. Build with tools/build-android.ps1.'
+
+& (Join-Path $PSScriptRoot "setup-shader-compiler.ps1")
+if (-not $?) { throw "Shader compiler dependencies are missing." }

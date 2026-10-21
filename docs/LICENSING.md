@@ -1,6 +1,6 @@
 # Licensing and provenance
 
-**reSOT's own files** (`port/windows`, `port/game`, `source/*/target.h`,
+**reSOT's own files** (`port/windows`, `port/android`, `port/game`, `port/render`, `source/*/target.h`,
 `source/*/target_hooks.c`, `tools/`, `docs/`, the build files) are under the
 MIT licence in the repository root.
 
@@ -59,6 +59,24 @@ The altered SDL Android loader entry-point bridge is applied by
 `tools/patch-sdl-android-driver.py` in addition to the query patch described
 above. No third-party custom GPU driver package is distributed in the APK;
 users import those separately, under the package's own terms.
+
+**Native shader compiler and optimizer (Windows/Android Vulkan).**
+`port/render` is reSOT code under MIT. It links unchanged upstream
+[glslang 16.0.0](https://github.com/KhronosGroup/glslang/tree/16.0.0)
+(commit `a57276bf558f5cf94d3a9854ebdf5a2236849a5a`),
+[SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools)
+(`7f2d9ee926f98fc77a3ed1e1e0f113b8c9c49458`) and
+[SPIRV-Headers](https://github.com/KhronosGroup/SPIRV-Headers)
+(`01e0577914a75a2569c846778c2f93aa8e6feddd`). The latter revisions are
+those in glslang's `known_good.json`. glslang's mixed upstream notices are
+preserved in its complete `LICENSE.txt`; SPIRV-Tools uses Apache-2.0 and
+SPIRV-Headers preserves its own full multi-license `LICENSE` file. Setup
+fetches source into ignored `build/deps`; static libraries are built locally.
+Windows packaging includes `LICENSE-glslang.txt`, `LICENSE-SPIRV-Tools.txt`
+and `LICENSE-SPIRV-Headers.txt`; Android includes them in `assets/licenses`.
+The Black Android and Halo CE repositories were read as comparison references;
+none of their code was copied. Generated shader modules remain local cache
+files, not committed game assets.
 
 **DirectXShaderCompiler v1.9.2609**
 (https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.9.2609)

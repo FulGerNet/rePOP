@@ -9,7 +9,7 @@ cmake_minimum_required(VERSION 3.20)
 # Portable releases include the C runtime; users do not need Visual Studio
 # or a separately installed Visual C++ redistributable to start the game.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-project(reSOT C RC)
+project(reSOT C CXX RC)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -55,6 +55,7 @@ if(MSVC)
     set(resot_c_flags_release "${CMAKE_C_FLAGS_RELEASE}")
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /Zi")
 endif()
+add_subdirectory(port/render)
 add_subdirectory(${XBOXRECOMP_DIR} ${CMAKE_BINARY_DIR}/xboxrecomp)
 if(MSVC)
     set(CMAKE_C_FLAGS_RELEASE "${resot_c_flags_release}")

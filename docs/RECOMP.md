@@ -62,6 +62,10 @@ in bulk; other formats retain the scalar sampler. The native encoder hashes
 complete pipeline keys and reuses changed 2D images through SDL cycling,
 after flushing earlier readers. SDL preserves those readers' backing image.
 The forming sand-tank ring uses the same retail HUD translation in all APIs.
+Its small-piece column/width check is normalized to the original 16:9 trace
+around x=320 (`nv2a_hud_layout.h`), so the projected column remains recognized
+on wider Android displays. The user confirms the 2712x1220 correction
+(2026-10-21).
 
 Both targets' native draws select `ps_simple`/`ps_simple_alpha` through the
 exact whitelist in `nv2a_native_simple.h`. These implement one-stage

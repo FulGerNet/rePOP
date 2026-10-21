@@ -32,16 +32,31 @@ not a person.*
 
 | Target | Source executable | State |
 | --- | --- | --- |
-| `xbox-demo` | E3 2003 demo, `default.xbe` built 2003-07-18 | Runs movies, menus, pause and the scripted level sections at about 58-60 FPS with VSync; played by a person to the third level without a freeze. Compact F5 and F6 options added. User confirms corrected audio and 120+ FPS (2026-10-18); intermittent visual defects remain under validation; no console comparison |
-| `xbox-retail` | NTSC retail, title `0x5553001D`, `default.xbe` built 2003-10-20 | Bring-up: first playable level reached by the user and a scripted run. The invalid-refresh timestep that caused extreme slow motion is corrected: gameplay measured 9.003 real seconds / 9.008 simulation seconds with the fix. User confirms corrected audio, 120+ FPS and the save-crash fix (2026-10-18); full-level accuracy and broader audio/visual validation remain incomplete |
+| `xbox-demo` | E3 2003 demo, `default.xbe` built 2003-07-18 | Runs movies, menus, pause and the scripted level sections at about 58-60 FPS with VSync; played by a person to the third level without a freeze. Compact F5 and F6 options added. User confirms corrected audio and 120+ FPS (2026-10-18); intermittent visual defects remain under validation; no console comparison. Dedicated Vulkan shaders exercised on PC and Android (2026-10-21), with validation limits below |
+| `xbox-retail` | NTSC retail, title `0x5553001D`, `default.xbe` built 2003-10-20 | Bring-up: first playable level reached by the user and a scripted run. The invalid-refresh timestep that caused extreme slow motion is corrected: gameplay measured 9.003 real seconds / 9.008 simulation seconds with the fix. User confirms corrected audio, 120+ FPS and the save-crash fix (2026-10-18); full-level accuracy and broader audio/visual validation remain incomplete. Dedicated Vulkan shaders exercised on PC and Android (2026-10-21) |
 
 The existing post-processing quality selector now budgets auxiliary effect
 buffers and projected shadows as well as recognized blur/bloom chains, on
 both hosts and targets. The user confirms that it works (2026-10-20).
+The in-game selector offers Low/Mid/High; Off remains accessible via the INI
+and Windows F7. Both hosts now default to Low (2026-10-21); compilation
+and runtime validation of this menu/default change are recorded below.
 The [effect study](docs/POST-PROCESSING.md) records the remaining water,
 motion-blur and other effect-identification gaps. Windows native renderers
 also synchronize SDL window borders when F11 leaves fullscreen; that separate
 correction still awaits confirmation. See [VALIDATION.md](docs/VALIDATION.md).
+
+Retail's forming sand-tank ring now follows the rest of the HUD on ultrawide
+Android displays; the user confirms its corrected alignment (2026-10-21).
+The shared correction also builds on Windows. See [VALIDATION.md](docs/VALIDATION.md).
+
+Vulkan now translates supported vertex programs to dedicated SPIR-V and
+optimizes complex fragment programs before pipeline creation, on Windows and
+Android for both targets. Compiled programs are cached on disk; reference
+pipelines can draw while dedicated pipelines compile. GPU comparisons pass,
+and initial PC/device scenes were inspected (2026-10-21). This does not establish
+a controlled FPS improvement or sustained 60 FPS: demo device scenes still
+include about 49–50 FPS windows. See [the shader study](docs/VULKAN-PERFORMANCE.md).
 
 The log viewers have a source-selection repair: Windows follows the logger's
 actual file path, and Android reads the `logs/` subfolder. Output from these

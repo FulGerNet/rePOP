@@ -26,6 +26,8 @@ resot-options.ini
 # (but xboxrecomp's synthetic conformance image, built by its mkxbe.py)
 !/port/third_party/xboxrecomp/tools/conformance/test.xbe
 # Caches and IDE files.
+# Host shader caches can contain translated programs from the user's XBE.
+shadercache/
 __pycache__/
 *.pyc
 .pytest_cache/

@@ -46,3 +46,6 @@ Published additions: port/third_party/sdl-gpu-query/ and tools/patch-sdl-gpu-que
 Build: tools/setup-native-gpu.ps1. Licence: LICENSE-SDL3.txt.
 '@ | Set-Content -LiteralPath (Join-Path $bin 'SDL3-RESOT.txt') -Encoding utf8
 Write-Output 'Native D3D12/Vulkan SDKs and retail query ABI ready. Rebuild with tools/recomp.ps1 -BuildOnly.'
+
+& (Join-Path $PSScriptRoot "setup-shader-compiler.ps1")
+if (-not $?) { throw "Shader compiler dependencies are missing." }

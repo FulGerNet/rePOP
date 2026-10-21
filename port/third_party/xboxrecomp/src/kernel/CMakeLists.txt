@@ -55,12 +55,17 @@ if(WIN32)
         COMMAND "${Python3_EXECUTABLE}" "${RESOT_SOURCE_ROOT}/tools/build-native-shaders.py"
                 --dxc "${RESOT_DXC}" --output "${native_shaders}"
         DEPENDS "${RESOT_SOURCE_ROOT}/tools/build-native-shaders.py"
+            "${RESOT_SOURCE_ROOT}/tools/native-vertex-source.py"
                 "${RESOT_SOURCE_ROOT}/tools/check-hlsl.py"
                 "${CMAKE_CURRENT_SOURCE_DIR}/nv2a_hw_d3d11.inc"
         VERBATIM)
     target_sources(xbox_kernel PRIVATE "${native_shaders}/nv2a_native_shaders.h")
     target_include_directories(xbox_kernel PRIVATE "${RESOT_SDL_ROOT}/include" "${native_shaders}")
-    target_link_libraries(xbox_kernel PUBLIC "${RESOT_SDL_ROOT}/lib/x64/SDL3.lib")
+    # RE-SoT: dedicated native shaders share the host compiler/optimizer.
+    if(NOT TARGET resot_shader_compiler)
+        add_subdirectory("${RESOT_SOURCE_ROOT}/port/render" "${CMAKE_BINARY_DIR}/shader-compiler")
+    endif()
+    target_link_libraries(xbox_kernel PUBLIC "${RESOT_SDL_ROOT}/lib/x64/SDL3.lib" resot_shader_compiler)
     # Optional native backend: D3D11 must still boot when SDL3.dll is absent.
     target_link_libraries(xbox_kernel PUBLIC delayimp)
     target_link_options(xbox_kernel INTERFACE "/DELAYLOAD:SDL3.dll")

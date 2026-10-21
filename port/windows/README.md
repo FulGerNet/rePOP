@@ -294,3 +294,21 @@ error. Existing INI settings are retained.
 The F7-only `Console logs` switch is saved as `[Diagnostics] ConsoleLogs=1`.
 Error messages are red; warnings are yellow. The original file logs remain
 in `logs/<target>-err.txt` and `logs/<target>-out.txt`.
+
+The in-game reSOT Options post-processing selector offers Low/Mid/High.
+Off remains available through `[Graphics] PostProcessingQuality=0` in the INI
+and, on Windows, through F7. An existing Off setting is shown as Custom in
+the in-game menu and is preserved until the quality selector is changed.
+
+Vulkan uses dedicated translated vertex programs and optimized complex fragment
+programs for demo and retail. The host compiler (glslang/SPIRV-Tools) is built
+from pinned sources with `tools/setup-shader-compiler.ps1`, also called by the
+platform dependency setup script. Players need no separate shader compiler.
+Optimized modules are stored in `shadercache/`; Vulkan's driver pipeline cache
+is separate. Compilation uses background workers by default on both hosts,
+with reference pipelines available during compilation. First-use draw skips
+can still occur until a pipeline is ready. `RESOT_NATIVE_TRANSLATE=0` and
+`RESOT_NATIVE_SPECIALIZE=0` are developer comparison switches;
+`RESOT_ASYNC_PIPELINES=0` forces synchronous compilation. See
+[the shader study](../../docs/VULKAN-PERFORMANCE.md) and
+[validation](../../docs/VALIDATION.md) for scope and observed results.

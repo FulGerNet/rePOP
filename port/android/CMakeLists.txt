@@ -51,11 +51,14 @@ set_target_properties(adrenotools PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(linkernsbypass PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ── host shaders: the same HLSL as Windows, SPIR-V for Vulkan ──
+add_subdirectory("${RESOT_ROOT}/port/render" shader-compiler)
+
 set(native_shaders "${CMAKE_BINARY_DIR}/native-shaders")
 add_custom_command(OUTPUT "${native_shaders}/nv2a_native_shaders.h"
     COMMAND "${RESOT_PYTHON}" "${RESOT_ROOT}/tools/build-native-shaders.py"
             --dxc "${RESOT_DXC}" --output "${native_shaders}"
     DEPENDS "${RESOT_ROOT}/tools/build-native-shaders.py"
+            "${RESOT_ROOT}/tools/native-vertex-source.py"
             "${RESOT_ROOT}/tools/check-hlsl.py"
             "${RT}/kernel/nv2a_hw_d3d11.inc"
     VERBATIM)
@@ -118,7 +121,7 @@ function(resot_android_game id lib runtime_define)
         "${RESOT_ROOT}/port/third_party/xboxrecomp/include/xbox"
         "${native_shaders}")
     target_compile_options(${lib} PRIVATE ${RESOT_GUEST_FLAGS} -O2 -w)
-    target_link_libraries(${lib} PRIVATE SDL3::SDL3-shared adrenotools android log m)
+    target_link_libraries(${lib} PRIVATE SDL3::SDL3-shared adrenotools android log m resot_shader_compiler)
     add_dependencies(${lib} main_hook file_redirect_hook gsl_alloc_hook hook_impl)
     # Unresolved symbols are build errors, not a crash when the game starts.
     target_link_options(${lib} PRIVATE "-Wl,--no-undefined")

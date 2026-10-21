@@ -160,7 +160,11 @@ def main():
     small = small.replace("VO vs_uber(UI i)", "VO vs_uber_small(UI i)", 1)
     small_src = output / "nv2a-native-small.hlsl"
     small_src.write_text(small, encoding="ascii")
-    header = ["/* RE-SoT: generated host shaders; tools/build-native-shaders.py. */\n"]
+    vertex_spec = spec_from_file_location("native_vertex_source", ROOT / "tools/native-vertex-source.py")
+    vertex_module = module_from_spec(vertex_spec)
+    vertex_spec.loader.exec_module(vertex_module)
+    header = ["/* RE-SoT: generated host shaders; tools/build-native-shaders.py. */\n",
+              vertex_module.header(check, text)]
     entries = check.ENTRIES + [("vs_uber", "vs_4_0"), ("vs_uber_small", "vs_4_0"), ("ps_simple", "ps_4_0"), ("ps_simple_alpha", "ps_4_0")]
     if args.test_border:
         entries += [("ps_border_probe", "ps_4_0"), ("vs_combiner_probe", "vs_4_0"), ("ps_combiner_compare", "ps_4_0"), ("ps_vertex_probe", "ps_4_0")]

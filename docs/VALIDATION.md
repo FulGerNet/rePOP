@@ -1,5 +1,129 @@
 # Validation log
 
+## 2026-10-21: retail forming-tank ring follows the HUD on ultrawide displays
+
+The user's 2712x1220 Android Vulkan screenshot showed the empty forming-tank
+ring still near x=699 (about x=165 in 640x480 host coordinates), while the
+filled tanks were anchored at the left edge. The prior retail exception used
+an absolute right<=160 cutoff measured at 16:9; the projected 4:3 column moves
+right as the drawable becomes wider, so the ring missed that exception.
+
+`nv2a_hud_layout.h` now compares the small-piece column and width in the
+original 16:9 reference frame, scaled about x=320 by widen*0.75. Existing
+depth/flatness/projected-frame/height guards and the shared HUD edge shift
+are retained. This retail-only classification is shared by D3D11 and native
+D3D12/Vulkan on Windows and Android; demo policy is unchanged. No guest
+addresses, seeds or generated sources changed.
+
+Validation:
+- `python tools/check-hlsl.py`: all ten shader entries pass.
+- Build `hud_layout_smoke`, then `ctest --test-dir build/tests/native-gpu
+  -C Release -R retail_forming_tank_layout --output-on-failure`: 1/1 passes.
+  Covers the supplied phone coordinates, 16:9/20:9/21:9/2712x1220, consistent
+  edge anchoring and rejection of central, oversized and lower geometry.
+- Both `tools/recomp.ps1 -Target xbox-demo|xbox-retail -BuildOnly` builds and
+  `tools/build-android.ps1` succeed (`logs/hud-ring-*-build.txt`). MSBuild
+  initially required rerunning outside the sandbox after access denied.
+- `adb install -r bin/reSOT-android.apk`, retail GameActivity launch, screenshot
+  and log pulls. `logs/hud-ring-after-android.png` shows `1201_CorridorExit`
+  with the empty ring directly below the filled tanks at the left edge.
+  User confirms: "perfetto ora si vede bene". No extra game testing followed
+  that confirmation. Windows rendering was compiled, not visually retested;
+  the numerical regression covers the existing 16:9 behavior.
+
+## 2026-10-21: dedicated Vulkan shader translation on both hosts and targets
+
+Studied the supplied Black Android and Halo CE source trees as read-only
+references; no code copied. [VULKAN-PERFORMANCE.md](VULKAN-PERFORMANCE.md)
+records the inspected files, architectural comparison and implementation.
+
+Windows and Android Vulkan now share straight-line vertex-program translation
+and pre-driver optimization of complex fragment programs. Stable, full-key
+caches replace the complex-fragment 256-entry ceiling. A versioned disk cache
+compares complete inputs and validates cached SPIR-V. Both targets submit their
+own programs; no cross-target addresses or generated game C changed. D3D11 and
+D3D12 retain their existing shader paths. Background compilation now defaults
+on for Windows Vulkan as on Android. Reference pipeline jobs are prioritized
+and can draw the original snapshots while dedicated pipelines compile; if
+neither pipeline is ready, draws can still be skipped on first use. Failed
+translations retain reference shaders. Cold startup is not proven hitch-free.
+
+Commands and results:
+
+- `python tools/check-hlsl.py`: all ten reference entries pass.
+- `python tools/run-build-tool.py cmake --build build/tests/native-gpu --config Release --parallel 4`
+  and `ctest --test-dir build/tests/native-gpu -C Release --output-on-failure`:
+  **9/9 pass** (`logs/shader-translate-tests.txt`). Includes 112 direct/reference
+  vertex comparisons, 64 separately rendered optimized/reference combiner
+  comparisons and the existing simple-combiner, upload and support tests.
+  Vertex readbacks compare exact 8-bit framebuffer values; fragment tests allow
+  at most 2/255 per channel, including alpha-discard coverage. Optimized modules
+  have no remaining OpSpecConstant/OpSpecConstantOp. A representative one-stage
+  fragment module shrinks from 121,376 bytes to 6,068 bytes; another is 6,468.
+  This is code-size evidence, not a GPU-time measurement. The full cold suite
+  took 269.41 seconds while build work was also active. Initial Vulkan tests
+  exceeded a shorter timeout; the final cold-test budget is 600 seconds.
+- Additional relative constant/palette reads (including clamped out-of-range
+  indices), ARL, negated nonidentity swizzles and partial writes were added to
+  the 112-case matrix. Rebuilt `native_vsh_compare`; `ctest --test-dir
+  build/tests/native-gpu -C Release -R vertex_program --output-on-failure`:
+  **2/2 pass**, D3D12 0.50 s and Vulkan 6.07 s
+  (`logs/shader-translate-corner-tests.txt`).
+- `tools/recomp.ps1 -Target xbox-demo -BuildOnly`, retail equivalent and
+  `tools/build-android.ps1`: both final Windows executables and the release APK
+  build. Final logs: `logs/shader-translate-{demo,retail,android}-final-build.txt`.
+  APK `bin/reSOT-android.apk`, about 27.3 MB, includes the compiler/optimizer
+  and their complete upstream notices. Build tools required execution outside
+  the sandbox; original restricted attempts failed in compiler/native services.
+- Windows Vulkan: demo 50 s, scripted `22000:start:600,28000:a:600`;
+  retail 30 s, `2000:a:200,6000:a:200`, via `tools/run.ps1 -Windowed -Seconds ...
+  -Set @{RESOT_RENDERER='vulkan'; RECOMP_PAD_SCRIPT=...}`. Both menus rendered
+  and frame dumps were inspected. Each logged seven successful vertex programs,
+  no translator failures. Demo run used synchronous compilation before the final
+  Windows default changed; retail final run confirms background compilation and
+  6,361 reference-pipeline draws while translating. Retail steady menu windows
+  were about 157–168 FPS; demo about 186–195. These are not controlled benchmarks.
+  Evidence: `logs/shader-translate-*-windows.txt` and `*-frame*`.
+- Android device `24069PC21G` (SM8635): `adb install -r bin/reSOT-android.apk`,
+  rooted `am start -n com.fulger.resot/.GameActivity --es target demo|retail
+  --es game /sdcard/Android/data/com.fulger.resot/files/xbox-demo|xbox-retail`,
+  screenshot/log pulls, then force-stop the test app. Both logs report post-
+  processing Low and VSync off. Demo menu and `01_GP01_E3_Long` opening scene
+  were inspected; retail screenshot shows `1301_Lobby` and the Prince. Recorded
+  **18 demo / 36 retail** successful translated vertex programs, no translator
+  parse/translation failure messages. Reference-pipeline counters confirm
+  temporary fallback draws on-device. Device logs/screenshots:
+  `logs/shader-translate-{demo,retail}-android.{txt,png}`; demo scene image is
+  `logs/shader-translate-demo-select.png` (its name reflects the capture action,
+  not the scene it ultimately showed).
+
+Device demo title windows reached about 87–99 FPS; denser opening-scene windows
+still include 48.8–50.3 FPS at about 530–584 draws/frame. Retail scene windows
+include about 51.7–78.9 FPS. These are five-second runtime averages, not frame-
+time percentiles or matched before/after comparisons. Resolution, frame caps,
+scene/camera and old default differences prevent comparison with the previous
+60-FPS-limited reports. No causal FPS gain, sustained 60 FPS, full-game shader
+coverage or console-accurate visuals is claimed. Existing unsupported shader
+semantics, CPU fallbacks, quality-policy gaps and angle-dependent visual defects
+remain outside this translation change.
+
+## 2026-10-21: hide Off in the in-game post-processing selector
+
+Both hosts' in-game reSOT Options now cycle Low/Mid/High, skipping Off.
+Windows F7 retains Off/Low/Mid/High, and both INI readers still accept
+`[Graphics] PostProcessingQuality=0`. An existing Off value is displayed as
+Custom in the in-game menu and preserved until that selector is changed.
+Android's packaged template, initial value and missing/invalid-key fallback
+now use Low (1), matching Windows; existing INIs are not overwritten.
+
+Validation: `python tools/check-hlsl.py` passed;
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly` and the retail equivalent
+built both Windows executables (`logs/options-xbox-*-build.txt`).
+`tools/build-android.ps1` builds the release APK (`logs/options-android-build.txt`).
+Initial sandbox builds failed in MSBuild FileTracker (access denied) and
+Gradle native-library loading; builds were rerun outside the sandbox.
+No game launch, menu interaction or Android device test was performed.
+
 ## 2026-10-20: release 0.1.2 and supplied platform defaults
 
 The user supplied separate Windows/Android INIs and explicitly excluded ISO

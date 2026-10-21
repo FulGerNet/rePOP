@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "shader_compiler.h"
 #include "nv2a_native_shaders.h"
 #include "../../src/kernel/nv2a_hw_native_visibility.inc"
 
@@ -175,6 +176,7 @@ static int test_texture_border(SDL_GPUDevice *device, SDL_GPUShader *vs,
 #include "test_simple_combiner.inc" /* RE-SoT: native shader differential readbacks. */
 int main(int argc, char **argv)
 {
+    setvbuf(stdout,NULL,_IONBF,0); /* RE-SoT: expose long GPU phases in test logs. */
     const char *backend = argc > 1 ? argv[1] : "direct3d12";
     int dx = !strcmp(backend,"direct3d12"), frame;
     SDL_GPUDevice *device;
@@ -243,7 +245,7 @@ int main(int argc, char **argv)
     transfer = SDL_CreateGPUTransferBuffer(device,&transfer_info); REQUIRE(transfer);
     REQUIRE(!test_texture_border(device,vs,target,transfer,dx)); /* RE-SoT: actual shader on both GPUs. */
     REQUIRE(!test_simple_combiner(device,target,transfer,dx,0)); /* RE-SoT: specialization matches full interpreter. */
-    if(!dx) REQUIRE(!test_simple_combiner(device,target,transfer,dx,1)); /* RE-SoT: Vulkan constant-state programs. */
+    if(!dx) REQUIRE(!test_simple_combiner(device,target,transfer,dx,2)); /* RE-SoT: frozen/optimized reference comparisons. */ /* RE-SoT: Vulkan constant-state programs. */
     for (frame = 0; frame < 4; frame++) {
         SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(device);
         SDL_GPUColorTargetInfo ct = {0};

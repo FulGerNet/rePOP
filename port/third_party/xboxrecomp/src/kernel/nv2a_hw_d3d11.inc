@@ -393,8 +393,9 @@ static const char s_hw_hlsl_vsp_head[] =
 static const char s_hw_hlsl_vsp_tail[] =
 "  return vs_finish(R[12], o[3], o[4], vsh_fog(o[5].x), o[9], o[10], o[11], o[12]); }\n";
 
-/* RE-SoT: the native SDL GPU encoders have no shader compiler at run time
- * (Android least of all), so they cannot translate each program as above.
+/* RE-SoT: vs_uber is the native SDL GPU encoders' reference/fallback path.
+ * Vulkan translates programs with the shared compiler in port/render;
+ * D3D12, disabled translation and failed translations retain this interpreter.
  * vs_uber is compiled once, offline, and interprets the program instead:
  * nv2a_vsh_pack_gpu's words in VUP, the constants in VUC, the vertex's
  * inputs in eight slots. Every vertex of a draw runs the same instructions,
@@ -2277,6 +2278,7 @@ static const HwVsp *hw_vsp_get(uint32_t mask)
  * backdrop stops short of the sides (2026-10-15). The HUD rule below was
  * traced on both: retail's health bar is x=107.531..250.892,
  * y=36.531..68.531 at 16:9 (2026-10-18). */
+#include "nv2a_hud_layout.h" /* RE-SoT: aspect-aware forming-tank recognition. */
 static void hw_classify_screen(float left, float right, float top, float bottom)
 {
     static int projected_ui = -1;
@@ -2307,10 +2309,10 @@ static void hw_classify_screen(float left, float right, float top, float bottom)
 #if RESOT_RUNTIME_RETAIL
             /* RE-SoT: the forming sand-tank outline in the user's retail
              * garden capture is near x=126, y=199 (640x480 coordinates).
-             * It falls below the original HUD band. Include small pieces
-             * in that left column, without shifting central menu panels. */
-            || (right <= 160.0f && bottom <= 240.0f
-                && right - left <= 32.0f && bottom - top <= 32.0f)
+             * It falls below the original HUD band. Compare the left column
+             * in the traced 16:9 frame, so ultrawide phone screens move the
+             * outline with its tank too, without shifting central panels. */
+            || nv_hw_retail_forming_tank(s_hw.widen,left,right,top,bottom)
 #endif
             ))
         s_hw.batch_hud = right < 320.0f ? -1 : left > 320.0f ? 1 : 0;
