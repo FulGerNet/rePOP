@@ -62,6 +62,14 @@ The log viewers have a source-selection repair: Windows follows the logger's
 actual file path, and Android reads the `logs/` subfolder. Output from these
 repairs still awaits user confirmation.
 
+Android touch controls now use gold-rimmed blue medallions and a mobile action
+arc inspired by the supplied Warrior Within references (2026-10-21).
+The user approves the appearance on device; pause/back/rewind have since been
+moved beside the central overlay toggle (pause/back) and to the upper right
+(rewind) to clear the HUD and FPS panel. That adjustment
+awaits device confirmation; see
+[VALIDATION.md](docs/VALIDATION.md).
+
 **Both targets remain under gameplay validation.** The user reports
 angle-dependent object flickering in the demo's first level and a crash at
 the garden lever, and a retail crash at the second ladder of its first level
@@ -152,7 +160,7 @@ In short, on Windows:
 
 ## Development status
 
-Version 0.1.2 bundles the user's platform-specific INI defaults: unlimited
+Version 0.2.0 bundles the user's platform-specific INI defaults: unlimited
 FPS, VSync/glow/logs off and 200% look sensitivity on both hosts; Windows
 uses D3D11, 720p and post-processing Low, Android uses Vulkan, 480p and
 post-processing Off. Missing INIs are created from the bundled templates;

@@ -28,7 +28,7 @@ remain under validation; see [VALIDATION.md](../../docs/VALIDATION.md).
 
 ## What is in the APK
 
-Version 0.1.2 (Android versionCode 3) bundles
+Version 0.2.0 (Android versionCode 4) bundles
 [the supplied Android defaults](default-options.ini): Vulkan, unlimited FPS,
 VSync/glow/logs off, 480p (100%), post-processing Low and look sensitivity 200%.
 The launcher or direct game startup creates a missing INI from the packaged
@@ -131,19 +131,31 @@ Without one, an overlay is drawn over the game (`TouchControls.java`):
 
 | Touch | Xbox | Prince of Persia |
 | --- | --- | --- |
-| left side: a stick where the thumb lands | left stick | move |
+| bottom left: gold-ringed blue stick, follows the thumb | left stick | move |
 | right side: drag anywhere free | right stick | camera |
-| big button | A | jump |
+| upper right of the action arc: jumping figure | A | jump |
 | | B | cancel / drop |
-| | X | sword |
+| bottom of the action arc: sword | X | sword |
 | | Y | dagger |
 | hourglass | L trigger | rewind (the Sands) |
-| | R trigger | special action |
+| shield, inside the action arc | R trigger | special action |
 | | black / white | alternate view / camera look |
 | | right stick click | reset camera |
 | | START / BACK, d-pad | pause, back, menus |
 | top centre (eye) | | tap: show/hide the overlay; hold: move the controls, then SAVE (RESET restores) |
 | top left FPS | | the FPS / current WOW / active Renderer panel (F5 on Windows) |
+
+The touch artwork uses original Canvas medallions: engraved gold rims,
+blue centres and blue pressed highlights, inspired by the supplied Warrior
+Within mobile references with Sands of Time colours. The default layout puts
+movement at bottom left, pause/back beside the central overlay toggle, rewind at upper right and the main actions in an arc
+at bottom right. All Xbox mappings remain available. The gold layout uses
+separate saved position keys so older blue-layout coordinates do not override
+the new defaults; hold the eye to move controls and SAVE to retain them.
+The upper-left corner is reserved for the FPS toggle and the game HUD;
+pause, back and rewind use new position keys to apply this clearance on upgrade.
+Windows keeps keyboard/controller input because it has no mobile touch overlay.
+Device appearance and multi-touch gameplay still require validation.
 
 The overlay hides itself when a controller is connected. The game's rumble
 drives the controller, or the phone's vibrator. The Android back key is B.

@@ -1,5 +1,49 @@
 # Validation log
 
+## 2026-10-21: clear the Android upper-left HUD and FPS panel
+
+The user approves the gold/blue artwork on device. Their 2712x1220 retail
+screenshot shows pause and rewind overlapping the FPS panel and back
+covering the sand tanks. Move pause and back to (414,36) and (546,36), anchored about the central
+overlay toggle, as requested by the user. Rewind moves to (775,40), anchored
+to the right edge. Editor SAVE/RESET move to centre +/-150 to avoid overlap.
+Only FPS remains in the upper-left corner. These three controls use new
+saved-position keys so the correction takes effect even after a previous
+SAVE; other custom button positions are retained. Windows has no touch
+overlay and requires no matching layout change.
+
+Validation: `python tools/check-hlsl.py` passes all ten shader entries;
+`tools/build-android.ps1` succeeds (release Java compilation and lint included).
+Both `tools/recomp.ps1 -Target xbox-demo -BuildOnly` and
+`tools/recomp.ps1 -Target xbox-retail -BuildOnly` succeed. Windows EXE
+FileVersion is 0.2.0 for both targets; Android versionName is 0.2.0 and
+versionCode is 4. Logs: `logs/release-020-windows-demo.txt`,
+`logs/release-020-windows-retail.txt`, `logs/release-020-android.txt`.
+MSBuild required an unsandboxed retry after FileTracker reported access
+denied. `git diff --check` passes. These are build checks, not new gameplay
+validation.
+The revised placement has not yet been inspected on device.
+
+## 2026-10-21: Android gold and blue touch controls
+
+`TouchControls.java` now draws original vector medallions with engraved gold
+rims, blue centres and brighter blue pressed states. The supplied Warrior
+Within mobile images guide the default placement: movement at bottom left,
+rewind at upper left, and jump / shield / sword / dagger / drop along the
+right-hand action arc. All existing SDL button and trigger mappings remain.
+Separate gold-layout position keys select the new defaults on upgrade while
+leaving the previous saved layout intact; SAVE stores edge-relative positions
+and RESET uses the same edge anchoring as initial placement.
+
+Validation: `python tools/check-hlsl.py` passes all ten entries.
+`tools/build-android.ps1` builds the release APK with both native targets;
+Java compilation and release lint pass. Gradle required running outside the
+sandbox because its native-platform.dll could not initialize inside it.
+`git diff --check` passes. No device installation, visual inspection on a
+phone, or simultaneous movement / camera / action gameplay test was run.
+Windows has no touch overlay and retains keyboard and controller controls;
+no shared runtime or generated game source changed.
+
 ## 2026-10-21: retail forming-tank ring follows the HUD on ultrawide displays
 
 The user's 2712x1220 Android Vulkan screenshot showed the empty forming-tank

@@ -6,6 +6,8 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
+import android.graphics.RadialGradient;
+import android.graphics.Shader;
 import android.hardware.input.InputManager;
 import android.media.AudioAttributes;
 import android.os.Build;
@@ -23,9 +25,9 @@ import android.view.View;
  * of Time. Laid out on a 960 x 540 plane scaled to the display (the approach
  * of halo-ce-universal's touch overlay):
  *
- *   left side    a movement stick that appears where the thumb lands
+ *   left side    a gold movement stick that follows the thumb
  *   right side   dragging anywhere free turns the camera (the right stick)
- *   A jump, B cancel / drop, X sword, Y dagger (the right thumb's diamond)
+ *   A jump, B cancel / drop, X sword, Y dagger (an arc along the right edge)
  *   L trigger rewind (the Sands), R trigger special action
  *   black alternate view, white camera look, R stick click reset camera
  *   START pause, BACK back, a d-pad for the menus
@@ -58,21 +60,21 @@ public final class TouchControls extends View implements InputManager.InputDevic
         }
     }
     private final Control[] controls = {
-        new Control("Jump", "jump", SOUTH, -1, 862, 448, 42),
-        new Control("Cancel", "cancel", EAST, -1, 924, 372, 34),
-        new Control("Sword", "sword", WEST, -1, 796, 376, 38),
-        new Control("Dagger", "dagger", NORTH, -1, 862, 300, 34),
-        new Control("Rewind", "rewind", -1, 4, 772, 226, 34),
-        new Control("Special", "special", -1, 5, 908, 220, 34),
-        new Control("Alt view", "altview", LEFT_SHOULDER, -1, 48, 150, 26),
-        new Control("Look", "look", RIGHT_SHOULDER, -1, 48, 216, 26),
-        new Control("Reset camera", "recenter", RIGHT_STICK, -1, 702, 478, 26),
-        new Control("Pause", "pause", START, -1, 560, 36, 24),
-        new Control("Back", "back", BACK, -1, 400, 36, 24),
-        new Control("Up", "up", DPAD_UP, -1, 330, 420, 21),
-        new Control("Down", "down", DPAD_DOWN, -1, 330, 500, 21),
-        new Control("Left", "left", DPAD_LEFT, -1, 290, 460, 21),
-        new Control("Right", "right", DPAD_RIGHT, -1, 370, 460, 21),
+        new Control("Jump", "jump", SOUTH, -1, 900, 316, 38),
+        new Control("Cancel", "cancel", EAST, -1, 910, 482, 29),
+        new Control("Sword", "sword", WEST, -1, 790, 472, 43),
+        new Control("Dagger", "dagger", NORTH, -1, 912, 402, 33),
+        new Control("Rewind", "rewind", -1, 4, 775, 40, 35),
+        new Control("Special", "special", -1, 5, 830, 375, 36),
+        new Control("Alt view", "altview", LEFT_SHOULDER, -1, 852, 36, 23),
+        new Control("Look", "look", RIGHT_SHOULDER, -1, 914, 36, 23),
+        new Control("Reset camera", "recenter", RIGHT_STICK, -1, 700, 486, 23),
+        new Control("Pause", "pause", START, -1, 414, 36, 23),
+        new Control("Back", "back", BACK, -1, 546, 36, 23),
+        new Control("Up", "up", DPAD_UP, -1, 262, 420, 18),
+        new Control("Down", "down", DPAD_DOWN, -1, 262, 496, 18),
+        new Control("Left", "left", DPAD_LEFT, -1, 224, 458, 18),
+        new Control("Right", "right", DPAD_RIGHT, -1, 300, 458, 18),
     };
     private static final int TOGGLE = -2, FPS = -3, SAVE = -4, RESET = -5, MOVE = -6, CAMERA = -7, NONE = -100;
     private static final float STICK_R = 70, CAMERA_R = 80;
@@ -104,8 +106,8 @@ public final class TouchControls extends View implements InputManager.InputDevic
         }
         inputManager = (InputManager) context.getSystemService(Context.INPUT_SERVICE);
         for (int i = 0; i < controls.length; i++) {
-            controls[i].x = preferences.getFloat("x" + i, controls[i].x0);
-            controls[i].y = preferences.getFloat("y" + i, controls[i].y0);
+            controls[i].x = preferences.getFloat(positionPrefix(controls[i]) + "x" + i, controls[i].x0);
+            controls[i].y = preferences.getFloat(positionPrefix(controls[i]) + "y" + i, controls[i].y0);
         }
         visible = preferences.getBoolean("visible", !gamepadConnected());
         setFocusable(false);
@@ -178,7 +180,8 @@ public final class TouchControls extends View implements InputManager.InputDevic
         float nw = w / scale, nh = h / scale;
         for (Control c : controls) {
             // Keep each control at its place relative to the nearer edges.
-            if (c.x > 480) c.x += nw - logicalW;
+            if (centred(c)) c.x += (nw - logicalW) / 2;
+            else if (c.x > 480) c.x += nw - logicalW;
             if (c.y > 270) c.y += nh - logicalH;
         }
         logicalW = nw; logicalH = nh;
@@ -224,8 +227,8 @@ public final class TouchControls extends View implements InputManager.InputDevic
     private int hit(float x, float y) {
         if (inside(x, y, logicalW / 2, toolbarY(), 30)) return TOGGLE;
         if (editing) {
-            if (inside(x, y, logicalW / 2 + 90, toolbarY(), 30)) return SAVE;
-            if (inside(x, y, logicalW / 2 - 90, toolbarY(), 30)) return RESET;
+            if (inside(x, y, logicalW / 2 + 150, toolbarY(), 30)) return SAVE;
+            if (inside(x, y, logicalW / 2 - 150, toolbarY(), 30)) return RESET;
         } else if (inside(x, y, 36, toolbarY(), 26)) return FPS;
         if (!visible && !editing) return NONE;
         for (int i = 0; i < controls.length; i++)
@@ -244,7 +247,7 @@ public final class TouchControls extends View implements InputManager.InputDevic
             if (c == TOGGLE) { toggleDown = SystemClock.uptimeMillis(); owners.put(id, TOGGLE); postDelayed(longToggle, 600); }
             else if (c == FPS) { nativeToggleFps(); owners.put(id, FPS); }
             else if (c == SAVE) { save(); editing = false; owners.put(id, SAVE); reset(); }
-            else if (c == RESET) { for (Control k : controls) { k.x = k.x0 * logicalW / 960; k.y = k.y0 * logicalH / 540; } owners.put(id, RESET); }
+            else if (c == RESET) { for (Control k : controls) { k.x = k.x0 + (centred(k) ? (logicalW - 960) / 2 : k.x0 > 480 ? logicalW - 960 : 0); k.y = k.y0 + (k.y0 > 270 ? logicalH - 540 : 0); } owners.put(id, RESET); }
             else if (editing && c >= 0 && dragPointer < 0) {
                 dragPointer = id; dragControl = c; dragOffX = x - controls[c].x; dragOffY = y - controls[c].y;
             } else if (c == MOVE && movePointer < 0) { movePointer = id; moveX = x; moveY = y; moveDX = moveDY = 0; owners.put(id, MOVE); }
@@ -301,10 +304,19 @@ public final class TouchControls extends View implements InputManager.InputDevic
         public void run() { editing = true; visible = true; owners.clear(); reset(); }
     };
 
+    // Only the three relocated controls get new keys: apply the HUD clearance
+    // on upgrade without discarding the player's other custom positions.
+    private static boolean centred(Control c) { return c.bit == START || c.bit == BACK; }
+
+    private static String positionPrefix(Control c) {
+        return centred(c) ? "centre-v2-" : c.trigger == 4 ? "hud-clear-" : "gold-";
+    }
+
     private void save() {
         SharedPreferences.Editor edit = preferences.edit();
         for (int i = 0; i < controls.length; i++)
-            edit.putFloat("x" + i, controls[i].x).putFloat("y" + i, controls[i].y);
+            edit.putFloat(positionPrefix(controls[i]) + "x" + i, controls[i].x - (centred(controls[i]) ? (logicalW - 960) / 2 : controls[i].x > 480 ? logicalW - 960 : 0))
+                .putFloat(positionPrefix(controls[i]) + "y" + i, controls[i].y - (controls[i].y > 270 ? logicalH - 540 : 0));
         edit.putBoolean("visible", true).apply();
     }
 
@@ -316,17 +328,59 @@ public final class TouchControls extends View implements InputManager.InputDevic
 
     private void disc(Canvas canvas, float x, float y, float r, boolean on) {
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(on ? 0xA03C78D2 : 0x55081428);
+        paint.setShader(new RadialGradient(x - r * .25f, y - r * .3f, r * 1.35f,
+            new int[] {on ? 0xEE439BC4 : 0xBB456877, on ? 0xE5195485 : 0xAA102D46, 0xCC081925},
+            null, Shader.TileMode.CLAMP));
         canvas.drawCircle(x, y, r, paint);
+        paint.setShader(null);
         paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(2);
-        paint.setColor(on ? 0xFFAAD7FF : 0xC050A0FF);
-        canvas.drawCircle(x, y, r, paint);
+        paint.setStrokeWidth(3);
+        paint.setColor(on ? 0xFFFFE9A6 : 0xDCC69A48);
+        canvas.drawCircle(x, y, r - 1.5f, paint);
+        paint.setStrokeWidth(1);
+        paint.setColor(0xCFFFDC88);
+        canvas.drawCircle(x, y, r - 5, paint);
+        paint.setColor(0x806C4A20);
+        canvas.drawCircle(x, y, r - 8, paint);
+        // Small engraved diamonds around the golden rim.
+        for (int i = 0; i < 8; i++) {
+            double a = i * Math.PI / 4;
+            float dx = (float)Math.cos(a), dy = (float)Math.sin(a);
+            float cx = x + dx * (r - 6.5f), cy = y + dy * (r - 6.5f);
+            paint.setColor(on ? 0xFFFFF1BC : 0xDCE7BF68);
+            line(canvas, cx + dx * 2, cy + dy * 2, cx - dy * 1.5f, cy + dx * 1.5f,
+                cx - dx * 2, cy - dy * 2, cx + dy * 1.5f, cy - dx * 1.5f, cx + dx * 2, cy + dy * 2);
+        }
+    }
+
+    private void stick(Canvas canvas, float x, float y, float dx, float dy) {
+        disc(canvas, x, y, STICK_R, false);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(1);
+        paint.setColor(0x80EBC779);
+        canvas.drawCircle(x, y, STICK_R * .72f, paint);
+        for (int i = 0; i < 4; i++) {
+            canvas.save(); canvas.rotate(i * 90, x, y);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0xDCE7BF68);
+            path.reset(); path.moveTo(x, y - STICK_R + 10);
+            path.lineTo(x - 7, y - STICK_R + 23); path.lineTo(x + 7, y - STICK_R + 23);
+            path.close(); canvas.drawPath(path, paint); canvas.restore();
+        }
+        float len = (float)Math.hypot(dx, dy), f = len > STICK_R ? STICK_R / len : 1;
+        float cx = x + dx * f, cy = y + dy * f;
+        paint.setStyle(Paint.Style.FILL);
+        paint.setShader(new RadialGradient(cx - 8, cy - 9, 36,
+            new int[] {0xFFCEFAFF, 0xEE299FDB, 0xDD113F99}, null, Shader.TileMode.CLAMP));
+        canvas.drawCircle(cx, cy, 28, paint);
+        paint.setShader(null);
+        paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(3); paint.setColor(0xFFFFD98A);
+        canvas.drawCircle(cx, cy, 29, paint);
     }
 
     private void label(Canvas canvas, String text, float x, float y, float size) {
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(0xFFE6F0FF);
+        paint.setColor(0xFFFFE4A4);
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setTextSize(size);
         canvas.drawText(text, x, y + size * 0.36f, paint);
@@ -343,16 +397,20 @@ public final class TouchControls extends View implements InputManager.InputDevic
         c.save(); c.translate(x, y); c.scale(r / 22f, r / 22f);
         paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(2f);
         paint.setStrokeCap(Paint.Cap.ROUND); paint.setStrokeJoin(Paint.Join.ROUND);
-        paint.setColor(on ? 0xFFFFFFFF : 0xFFD6E8FF);
+        paint.setColor(on ? 0xFFFFFFFF : 0xFFFFD98A);
         switch (g) {
-        case "jump": line(c, -9, 12, 0, -2, 9, 12); line(c, 0, -2, 0, -14); line(c, -6, -8, 0, -14, 6, -8); break;
+        case "jump":
+            c.drawCircle(2, -11, 3, paint);
+            line(c, -10, -8, -4, -2, 3, -5, 8, 2, 13, -3);
+            line(c, 1, -3, -3, 5, -10, 12); line(c, -3, 5, 5, 7, 8, 13); break;
         case "cancel": line(c, -9, -9, 9, 9); line(c, 9, -9, -9, 9); break;
         case "sword": line(c, -11, 11, 9, -9); line(c, 9, -9, 12, -12); line(c, -11, 4, -4, 11); line(c, -12, 12, -9, 9); break;
         case "dagger": line(c, -6, 8, 6, -8, 9, -12, 5, -9); line(c, -9, 3, -3, 9); line(c, -8, 10, -10, 12); break;
         case "rewind":   // an hourglass: the Dagger of Time's sands
             paint.setColor(on ? 0xFFFFE6A0 : 0xFFFFD27A);
             line(c, -8, -12, 8, -12, -8, 12, 8, 12, -8, -12); line(c, -4, 9, 4, 9); break;
-        case "special": c.drawArc(new RectF(-11, -11, 11, 11), 200, 250, false, paint); line(c, 8, 4, 11, 8, 13, 2); break;
+        case "special": // Shield: the right-trigger action / wall run / guard.
+            line(c, 0, -13, 11, -8, 9, 4, 0, 13, -9, 4, -11, -8, 0, -13); break;
         case "altview": line(c, -11, -6, 11, -6, 11, 8, -11, 8, -11, -6); c.drawCircle(0, 1, 4, paint); line(c, -5, -6, -3, -10, 3, -10, 5, -6); break;
         case "look": line(c, -13, 0, -6, -6, 6, -6, 13, 0, 6, 6, -6, 6, -13, 0); c.drawCircle(0, 0, 3.5f, paint); break;
         case "recenter": c.drawArc(new RectF(-10, -10, 10, 10), 40, 290, false, paint); line(c, 10, -8, 8, -1, 2, -4); break;
@@ -376,10 +434,10 @@ public final class TouchControls extends View implements InputManager.InputDevic
         disc(canvas, logicalW / 2, toolbarY(), 26, editing);
         glyph(canvas, "eye", logicalW / 2, toolbarY(), 20, visible || editing);
         if (editing) {
-            disc(canvas, logicalW / 2 + 90, toolbarY(), 28, false);
-            label(canvas, "SAVE", logicalW / 2 + 90, toolbarY(), 13);
-            disc(canvas, logicalW / 2 - 90, toolbarY(), 28, false);
-            label(canvas, "RESET", logicalW / 2 - 90, toolbarY(), 12);
+            disc(canvas, logicalW / 2 + 150, toolbarY(), 28, false);
+            label(canvas, "SAVE", logicalW / 2 + 150, toolbarY(), 13);
+            disc(canvas, logicalW / 2 - 150, toolbarY(), 28, false);
+            label(canvas, "RESET", logicalW / 2 - 150, toolbarY(), 12);
             label(canvas, "DRAG THE CONTROLS, THEN SAVE", logicalW / 2, toolbarY() + 56, 15);
         } else if (!nativeFpsVisible()) { // Keep hit() active at this location while the button is hidden.
             disc(canvas, 36, toolbarY(), 22, false);
@@ -394,16 +452,13 @@ public final class TouchControls extends View implements InputManager.InputDevic
                 if (editing) label(canvas, k.name.toUpperCase(java.util.Locale.ROOT), k.x, k.y + k.r + 12, 10);
             }
             if (movePointer >= 0) {
-                disc(canvas, moveX, moveY, STICK_R, false);
-                float len = (float) Math.hypot(moveDX, moveDY), f = len > STICK_R ? STICK_R / len : 1;
-                disc(canvas, moveX + moveDX * f, moveY + moveDY * f, 28, true);
+                stick(canvas, moveX, moveY, moveDX, moveDY);
             } else if (!editing) {
-                paint.setStyle(Paint.Style.FILL); paint.setColor(0x30A0C8FF);
-                canvas.drawCircle(140, logicalH - 120, STICK_R, paint);
-                label(canvas, "MOVE", 140, logicalH - 120, 12);
+                stick(canvas, 124, logicalH - 114, 0, 0);
             }
+
             if (cameraPointer >= 0) {
-                paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(2); paint.setColor(0x6050A0FF);
+                paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(2); paint.setColor(0x6066C9FF);
                 canvas.drawCircle(camX, camY, CAMERA_R, paint);
             }
         }

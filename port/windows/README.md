@@ -1,6 +1,6 @@
 # reSOT on Windows
 
-Version 0.1.2 bundles [the supplied Windows defaults](default-options.ini):
+Version 0.2.0 bundles [the supplied Windows defaults](default-options.ini):
 D3D11, unlimited FPS, VSync/glow/logs off, 720p (150%), post-processing Low
 and look sensitivity 200%. A missing INI is created before the launcher;
 existing preferences are retained. The release ZIP contains no separate INI;
