@@ -1,0 +1,1832 @@
+[
+ {
+  "start": "0x0001223E",
+  "observed": false,
+  "note": "pointer stored at 0x005798DC (.rdata)"
+ },
+ {
+  "start": "0x0001226C",
+  "observed": false,
+  "note": "pointer stored at 0x004B0DFC (XONLINE)"
+ },
+ {
+  "start": "0x0001274E",
+  "observed": false,
+  "note": "pointer stored at 0x00579564 (.rdata)"
+ },
+ {
+  "start": "0x00012CAF",
+  "observed": false,
+  "note": "pointer stored at 0x0057B5D4 (.rdata)"
+ },
+ {
+  "start": "0x00013228",
+  "observed": false,
+  "note": "pointer stored at 0x0057A154 (.rdata)"
+ },
+ {
+  "start": "0x000137BB",
+  "observed": false,
+  "note": "pointer stored at 0x0057A050 (.rdata)"
+ },
+ {
+  "start": "0x00013A77",
+  "observed": false,
+  "note": "pointer stored at 0x005782FC (.rdata)"
+ },
+ {
+  "start": "0x00013A7C",
+  "observed": false,
+  "note": "pointer stored at 0x005793B4 (.rdata)"
+ },
+ {
+  "start": "0x000141B5",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000141AF (code)"
+ },
+ {
+  "start": "0x000142BD",
+  "observed": false,
+  "note": "pointer stored at 0x00579840 (.rdata)"
+ },
+ {
+  "start": "0x00014585",
+  "observed": false,
+  "note": "pointer stored at 0x004B4E24 (XONLINE)"
+ },
+ {
+  "start": "0x0001523A",
+  "observed": false,
+  "note": "pointer stored at 0x004AF68C (XONLINE)"
+ },
+ {
+  "start": "0x000152A7",
+  "observed": false,
+  "note": "pointer stored at 0x00579E8C (.rdata)"
+ },
+ {
+  "start": "0x000153FD",
+  "observed": false,
+  "note": "pointer stored at 0x00579EF4 (.rdata)"
+ },
+ {
+  "start": "0x000155FF",
+  "observed": false,
+  "note": "pointer stored at 0x0057BA5C (.rdata)"
+ },
+ {
+  "start": "0x0001573A",
+  "observed": false,
+  "note": "pointer stored at 0x00593E64 (.data)"
+ },
+ {
+  "start": "0x000158B5",
+  "observed": false,
+  "note": "pointer stored at 0x00578014 (.rdata)"
+ },
+ {
+  "start": "0x000158B8",
+  "observed": false,
+  "note": "pointer stored at 0x004CC930 (XNET)"
+ },
+ {
+  "start": "0x00015A5E",
+  "observed": false,
+  "note": "pointer stored at 0x0057A118 (.rdata)"
+ },
+ {
+  "start": "0x00015B87",
+  "observed": false,
+  "note": "pointer stored at 0x004AD45C (XONLINE)"
+ },
+ {
+  "start": "0x00015B8C",
+  "observed": false,
+  "note": "pointer stored at 0x0057B634 (.rdata)"
+ },
+ {
+  "start": "0x00015E84",
+  "observed": false,
+  "note": "pointer stored at 0x004ACBC4 (XONLINE)"
+ },
+ {
+  "start": "0x000160BB",
+  "observed": false,
+  "note": "pointer stored at 0x004C1074 (XONLINE)"
+ },
+ {
+  "start": "0x000160BE",
+  "observed": false,
+  "note": "pointer stored at 0x004B01A8 (XONLINE)"
+ },
+ {
+  "start": "0x000168BA",
+  "observed": false,
+  "note": "pointer stored at 0x0057964C (.rdata)"
+ },
+ {
+  "start": "0x000168BB",
+  "observed": false,
+  "note": "pointer stored at 0x004B910C (XONLINE)"
+ },
+ {
+  "start": "0x00016ABB",
+  "observed": false,
+  "note": "pointer stored at 0x0057B4F4 (.rdata)"
+ },
+ {
+  "start": "0x00017CB3",
+  "observed": false,
+  "note": "pointer stored at 0x004BC32C (XONLINE)"
+ },
+ {
+  "start": "0x00017CB7",
+  "observed": false,
+  "note": "pointer stored at 0x004CDF40 (XNET)"
+ },
+ {
+  "start": "0x00018319",
+  "observed": false,
+  "note": "pointer stored at 0x00579184 (.rdata)"
+ },
+ {
+  "start": "0x0001873F",
+  "observed": false,
+  "note": "pointer stored at 0x00593C44 (.data)"
+ },
+ {
+  "start": "0x00018CDE",
+  "observed": false,
+  "note": "pointer stored at 0x005780F8 (.rdata)"
+ },
+ {
+  "start": "0x00018E16",
+  "observed": false,
+  "note": "pointer stored at 0x00578054 (.rdata)"
+ },
+ {
+  "start": "0x000190B3",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000190AD (code)"
+ },
+ {
+  "start": "0x0001915C",
+  "observed": false,
+  "note": "pointer stored at 0x0057841C (.rdata)"
+ },
+ {
+  "start": "0x000193A6",
+  "observed": false,
+  "note": "pointer stored at 0x0057B760 (.rdata)"
+ },
+ {
+  "start": "0x00019CBC",
+  "observed": false,
+  "note": "pointer stored at 0x005783FC (.rdata)"
+ },
+ {
+  "start": "0x0001B26F",
+  "observed": false,
+  "note": "pointer stored at 0x0057B534 (.rdata)"
+ },
+ {
+  "start": "0x0001B805",
+  "observed": false,
+  "note": "pointer stored at 0x004B0DA8 (XONLINE)"
+ },
+ {
+  "start": "0x0001B807",
+  "observed": false,
+  "note": "pointer stored at 0x004BA1B8 (XONLINE)"
+ },
+ {
+  "start": "0x0001C0B9",
+  "observed": false,
+  "note": "pointer stored at 0x004A467C (XONLINE)"
+ },
+ {
+  "start": "0x0001C1AA",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00536D47 (code)"
+ },
+ {
+  "start": "0x0001C409",
+  "observed": false,
+  "note": "pointer stored at 0x0057B1C8 (.rdata)"
+ },
+ {
+  "start": "0x0001C73E",
+  "observed": false,
+  "note": "pointer stored at 0x00579430 (.rdata)"
+ },
+ {
+  "start": "0x0001D4B8",
+  "observed": false,
+  "note": "pointer stored at 0x004A3EC4 (XONLINE)"
+ },
+ {
+  "start": "0x0001E38C",
+  "observed": false,
+  "note": "pointer stored at 0x00593A98 (.data)"
+ },
+ {
+  "start": "0x0001E38E",
+  "observed": false,
+  "note": "pointer stored at 0x004CD618 (XNET)"
+ },
+ {
+  "start": "0x0001E883",
+  "observed": false,
+  "note": "pointer stored at 0x004D0144 (XNET)"
+ },
+ {
+  "start": "0x000208E9",
+  "observed": false,
+  "note": "pointer stored at 0x0057B8BC (.rdata)"
+ },
+ {
+  "start": "0x00020A6B",
+  "observed": false,
+  "note": "pointer stored at 0x005796BC (.rdata)"
+ },
+ {
+  "start": "0x0002131E",
+  "observed": false,
+  "note": "pointer stored at 0x0057B6B8 (.rdata)"
+ },
+ {
+  "start": "0x000214EC",
+  "observed": false,
+  "note": "pointer stored at 0x004CA500 (XNET)"
+ },
+ {
+  "start": "0x00021643",
+  "observed": false,
+  "note": "pointer stored at 0x0057B320 (.rdata)"
+ },
+ {
+  "start": "0x00021BF4",
+  "observed": false,
+  "note": "pointer stored at 0x004BF338 (XONLINE)"
+ },
+ {
+  "start": "0x00021F88",
+  "observed": false,
+  "note": "pointer stored at 0x00577E90 (.rdata)"
+ },
+ {
+  "start": "0x00022018",
+  "observed": false,
+  "note": "pointer stored at 0x0057B2F4 (.rdata)"
+ },
+ {
+  "start": "0x00022469",
+  "observed": false,
+  "note": "pointer stored at 0x00578110 (.rdata)"
+ },
+ {
+  "start": "0x0002246E",
+  "observed": false,
+  "note": "pointer stored at 0x0057B0E8 (.rdata)"
+ },
+ {
+  "start": "0x000225D5",
+  "observed": false,
+  "note": "pointer stored at 0x0057A24C (.rdata)"
+ },
+ {
+  "start": "0x0002726C",
+  "observed": false,
+  "note": "pointer stored at 0x0057B244 (.rdata)"
+ },
+ {
+  "start": "0x000274CB",
+  "observed": false,
+  "note": "pointer stored at 0x0057A084 (.rdata)"
+ },
+ {
+  "start": "0x0002A54E",
+  "observed": false,
+  "note": "pointer stored at 0x00577FA0 (.rdata)"
+ },
+ {
+  "start": "0x0002A60D",
+  "observed": false,
+  "note": "pointer stored at 0x0057AFC8 (.rdata)"
+ },
+ {
+  "start": "0x0002AC84",
+  "observed": false,
+  "note": "pointer stored at 0x004B133C (XONLINE)"
+ },
+ {
+  "start": "0x0002ACEB",
+  "observed": false,
+  "note": "pointer stored at 0x0057B004 (.rdata)"
+ },
+ {
+  "start": "0x0002C48B",
+  "observed": false,
+  "note": "pointer stored at 0x004C0A20 (XONLINE)"
+ },
+ {
+  "start": "0x0002C55B",
+  "observed": false,
+  "note": "pointer stored at 0x0057B24C (.rdata)"
+ },
+ {
+  "start": "0x0002F10B",
+  "observed": false,
+  "note": "pointer stored at 0x0058A560 (.rdata)"
+ },
+ {
+  "start": "0x0002FD7A",
+  "observed": false,
+  "note": "pointer stored at 0x00579FE4 (.rdata)"
+ },
+ {
+  "start": "0x000300B9",
+  "observed": false,
+  "note": "pointer stored at 0x004A415C (XONLINE)"
+ },
+ {
+  "start": "0x0003037D",
+  "observed": false,
+  "note": "pointer stored at 0x0057A6BC (.rdata)"
+ },
+ {
+  "start": "0x0003038C",
+  "observed": false,
+  "note": "pointer stored at 0x004BDBE0 (XONLINE)"
+ },
+ {
+  "start": "0x0003045F",
+  "observed": false,
+  "note": "pointer stored at 0x0057912C (.rdata)"
+ },
+ {
+  "start": "0x00030507",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00527114 (code)"
+ },
+ {
+  "start": "0x00030508",
+  "observed": false,
+  "note": "pointer stored at 0x004B0668 (XONLINE)"
+ },
+ {
+  "start": "0x000308EF",
+  "observed": false,
+  "note": "pointer stored at 0x0057875C (.rdata)"
+ },
+ {
+  "start": "0x0003369E",
+  "observed": false,
+  "note": "pointer stored at 0x0057A598 (.rdata)"
+ },
+ {
+  "start": "0x000352B8",
+  "observed": false,
+  "note": "pointer stored at 0x0057A104 (.rdata)"
+ },
+ {
+  "start": "0x000361B9",
+  "observed": false,
+  "note": "pointer stored at 0x0057B488 (.rdata)"
+ },
+ {
+  "start": "0x00036FDA",
+  "observed": false,
+  "note": "pointer stored at 0x00593BEC (.data)"
+ },
+ {
+  "start": "0x000374BE",
+  "observed": false,
+  "note": "pointer stored at 0x004BE318 (XONLINE)"
+ },
+ {
+  "start": "0x0003759F",
+  "observed": false,
+  "note": "pointer stored at 0x00578EF0 (.rdata)"
+ },
+ {
+  "start": "0x00038732",
+  "observed": false,
+  "note": "pointer stored at 0x005786BC (.rdata)"
+ },
+ {
+  "start": "0x0003891F",
+  "observed": false,
+  "note": "pointer stored at 0x0057A494 (.rdata)"
+ },
+ {
+  "start": "0x0003A0DF",
+  "observed": false,
+  "note": "pointer stored at 0x00578EA0 (.rdata)"
+ },
+ {
+  "start": "0x0003A55D",
+  "observed": false,
+  "note": "pointer stored at 0x00578F0C (.rdata)"
+ },
+ {
+  "start": "0x0003AC5B",
+  "observed": false,
+  "note": "pointer stored at 0x00579148 (.rdata)"
+ },
+ {
+  "start": "0x0003ACBA",
+  "observed": false,
+  "note": "pointer stored at 0x00578080 (.rdata)"
+ },
+ {
+  "start": "0x0004040E",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00535979 (code)"
+ },
+ {
+  "start": "0x000417AC",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0049A0F0 (code)"
+ },
+ {
+  "start": "0x00041E44",
+  "observed": false,
+  "note": "pointer stored at 0x00581008 (.rdata)"
+ },
+ {
+  "start": "0x00041E48",
+  "observed": false,
+  "note": "pointer stored at 0x0058100C (.rdata)"
+ },
+ {
+  "start": "0x00041E4C",
+  "observed": false,
+  "note": "pointer stored at 0x00581010 (.rdata)"
+ },
+ {
+  "start": "0x00043240",
+  "observed": false,
+  "note": "pointer stored at 0x00581664 (.rdata)"
+ },
+ {
+  "start": "0x0004426A",
+  "observed": false,
+  "note": "pointer stored at 0x0057AF28 (.rdata)"
+ },
+ {
+  "start": "0x00045365",
+  "observed": false,
+  "note": "pointer stored at 0x00578F64 (.rdata)"
+ },
+ {
+  "start": "0x000453D0",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00045720 (code)"
+ },
+ {
+  "start": "0x0004655D",
+  "observed": false,
+  "note": "pointer stored at 0x0057AC7C (.rdata)"
+ },
+ {
+  "start": "0x0004669F",
+  "observed": false,
+  "note": "pointer stored at 0x00578524 (.rdata)"
+ },
+ {
+  "start": "0x00049784",
+  "observed": false,
+  "note": "pointer stored at 0x004CAC18 (XNET)"
+ },
+ {
+  "start": "0x0004BB9B",
+  "observed": false,
+  "note": "pointer stored at 0x0057AF10 (.rdata)"
+ },
+ {
+  "start": "0x0004BBEB",
+  "observed": false,
+  "note": "pointer stored at 0x0057B480 (.rdata)"
+ },
+ {
+  "start": "0x0004DDC9",
+  "observed": false,
+  "note": "pointer stored at 0x0057A86C (.rdata)"
+ },
+ {
+  "start": "0x0005000E",
+  "observed": false,
+  "note": "pointer stored at 0x0054DE88 (.rdata)"
+ },
+ {
+  "start": "0x00050C40",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0096BF8E (code)"
+ },
+ {
+  "start": "0x0005174E",
+  "observed": false,
+  "note": "pointer stored at 0x00578F00 (.rdata)"
+ },
+ {
+  "start": "0x00058046",
+  "observed": false,
+  "note": "pointer stored at 0x00578624 (.rdata)"
+ },
+ {
+  "start": "0x00058D8A",
+  "observed": false,
+  "note": "pointer stored at 0x0057A488 (.rdata)"
+ },
+ {
+  "start": "0x00065310",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0006AE8C (code)"
+ },
+ {
+  "start": "0x00065C10",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0006AE13 (code)"
+ },
+ {
+  "start": "0x0006687D",
+  "observed": false,
+  "note": "pointer stored at 0x00578598 (.rdata)"
+ },
+ {
+  "start": "0x000689EB",
+  "observed": false,
+  "note": "pointer stored at 0x0057A524 (.rdata)"
+ },
+ {
+  "start": "0x0006C1ED",
+  "observed": false,
+  "note": "pointer stored at 0x00578F20 (.rdata)"
+ },
+ {
+  "start": "0x000703B0",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00047C9B (code)"
+ },
+ {
+  "start": "0x0007A76A",
+  "observed": false,
+  "note": "pointer stored at 0x0057B57C (.rdata)"
+ },
+ {
+  "start": "0x000800FD",
+  "observed": false,
+  "note": "pointer stored at 0x0058CDE4 (.data)"
+ },
+ {
+  "start": "0x000800FE",
+  "observed": false,
+  "note": "pointer stored at 0x0058CDE8 (.data)"
+ },
+ {
+  "start": "0x000800FF",
+  "observed": false,
+  "note": "pointer stored at 0x0058CDEC (.data)"
+ },
+ {
+  "start": "0x0008143F",
+  "observed": false,
+  "note": "pointer stored at 0x00578814 (.rdata)"
+ },
+ {
+  "start": "0x0008158B",
+  "observed": false,
+  "note": "pointer stored at 0x0057A5E0 (.rdata)"
+ },
+ {
+  "start": "0x00081E74",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0049AD1E (code)"
+ },
+ {
+  "start": "0x000827AA",
+  "observed": false,
+  "note": "pointer stored at 0x0057A4AC (.rdata)"
+ },
+ {
+  "start": "0x0008527E",
+  "observed": false,
+  "note": "pointer stored at 0x00578644 (.rdata)"
+ },
+ {
+  "start": "0x0008B5E0",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000478B8 (code)"
+ },
+ {
+  "start": "0x0008B620",
+  "observed": false,
+  "note": "listed verified callback: stored by 0x000478CC at 0x005BF2B0; independent entry after INT3 padding 0x0008B61C..0x0008B61F"
+ },
+ {
+  "start": "0x0008CA00",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0004794E (code)"
+ },
+ {
+  "start": "0x0008CE88",
+  "observed": false,
+  "note": "pointer stored at 0x004C8FD8 (XNET)"
+ },
+ {
+  "start": "0x00092C75",
+  "observed": false,
+  "note": "pointer stored at 0x0057AB9C (.rdata)"
+ },
+ {
+  "start": "0x0009475C",
+  "observed": false,
+  "note": "pointer stored at 0x0057B190 (.rdata)"
+ },
+ {
+  "start": "0x0009788F",
+  "observed": false,
+  "note": "pointer stored at 0x00578800 (.rdata)"
+ },
+ {
+  "start": "0x00097CC0",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00048F52 (code)"
+ },
+ {
+  "start": "0x000A27C0",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0006A18E (code)"
+ },
+ {
+  "start": "0x000A3483",
+  "observed": false,
+  "note": "pointer stored at 0x004CCD2C (XNET)"
+ },
+ {
+  "start": "0x000A348B",
+  "observed": false,
+  "note": "pointer stored at 0x004CC6E4 (XNET)"
+ },
+ {
+  "start": "0x000A7434",
+  "observed": false,
+  "note": "pointer stored at 0x00578828 (.rdata)"
+ },
+ {
+  "start": "0x000AEC88",
+  "observed": false,
+  "note": "pointer stored at 0x004CB188 (XNET)"
+ },
+ {
+  "start": "0x000B226E",
+  "observed": false,
+  "note": "pointer stored at 0x0057B13C (.rdata)"
+ },
+ {
+  "start": "0x000B5AFB",
+  "observed": false,
+  "note": "pointer stored at 0x0057B25C (.rdata)"
+ },
+ {
+  "start": "0x000B617F",
+  "observed": false,
+  "note": "pointer stored at 0x0057AB70 (.rdata)"
+ },
+ {
+  "start": "0x000B716E",
+  "observed": false,
+  "note": "pointer stored at 0x00578660 (.rdata)"
+ },
+ {
+  "start": "0x000B772D",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000B7727 (code)"
+ },
+ {
+  "start": "0x000B8C6A",
+  "observed": false,
+  "note": "pointer stored at 0x0057A82C (.rdata)"
+ },
+ {
+  "start": "0x000BBF1F",
+  "observed": false,
+  "note": "pointer stored at 0x0057AA38 (.rdata)"
+ },
+ {
+  "start": "0x000CEF44",
+  "observed": false,
+  "note": "pointer stored at 0x0057A7E0 (.rdata)"
+ },
+ {
+  "start": "0x000CF687",
+  "observed": false,
+  "note": "pointer stored at 0x005785A8 (.rdata)"
+ },
+ {
+  "start": "0x000D1D00",
+  "observed": false,
+  "note": "pointer stored at 0x005860D8 (.rdata)"
+ },
+ {
+  "start": "0x000D3050",
+  "observed": false,
+  "note": "pointer stored at 0x00586174 (.rdata)"
+ },
+ {
+  "start": "0x000D3470",
+  "observed": false,
+  "note": "pointer stored at 0x00586184 (.rdata)"
+ },
+ {
+  "start": "0x000D4694",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000D468E (code)"
+ },
+ {
+  "start": "0x000D4AA5",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000D4A9F (code)"
+ },
+ {
+  "start": "0x000E247C",
+  "observed": false,
+  "note": "pointer stored at 0x0057A914 (.rdata)"
+ },
+ {
+  "start": "0x000E4AB0",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000E4CEC (code)"
+ },
+ {
+  "start": "0x0014BDA5",
+  "observed": false,
+  "note": "pointer stored at 0x005787A8 (.rdata)"
+ },
+ {
+  "start": "0x00151883",
+  "observed": false,
+  "note": "pointer stored at 0x004C0B70 (XONLINE)"
+ },
+ {
+  "start": "0x00151886",
+  "observed": false,
+  "note": "pointer stored at 0x004BF024 (XONLINE)"
+ },
+ {
+  "start": "0x0015FFFD",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x004AF69B (code)"
+ },
+ {
+  "start": "0x00160023",
+  "observed": false,
+  "note": "pointer stored at 0x0056AB68 (.rdata)"
+ },
+ {
+  "start": "0x00186683",
+  "observed": false,
+  "note": "pointer stored at 0x004B577C (XONLINE)"
+ },
+ {
+  "start": "0x001E9D7F",
+  "observed": false,
+  "note": "pointer stored at 0x00593DD0 (.data)"
+ },
+ {
+  "start": "0x0021C0BA",
+  "observed": false,
+  "note": "pointer stored at 0x004CE568 (XNET)"
+ },
+ {
+  "start": "0x0021C0BE",
+  "observed": false,
+  "note": "pointer stored at 0x004CD42C (XNET)"
+ },
+ {
+  "start": "0x0022560C",
+  "observed": false,
+  "note": "pointer stored at 0x00578D14 (.rdata)"
+ },
+ {
+  "start": "0x0024C2C9",
+  "observed": false,
+  "note": "pointer stored at 0x004AE6CC (XONLINE)"
+ },
+ {
+  "start": "0x002736B8",
+  "observed": false,
+  "note": "pointer stored at 0x004C4D60 (XNET)"
+ },
+ {
+  "start": "0x00286F9A",
+  "observed": false,
+  "note": "pointer stored at 0x0057A9C4 (.rdata)"
+ },
+ {
+  "start": "0x002A0A5F",
+  "observed": false,
+  "note": "pointer stored at 0x00593ACC (.data)"
+ },
+ {
+  "start": "0x002CF87F",
+  "observed": false,
+  "note": "pointer stored at 0x00578964 (.rdata)"
+ },
+ {
+  "start": "0x00362065",
+  "observed": false,
+  "note": "pointer stored at 0x0057E274 (.rdata)"
+ },
+ {
+  "start": "0x00374E8E",
+  "observed": false,
+  "note": "pointer stored at 0x00578BE4 (.rdata)"
+ },
+ {
+  "start": "0x003B0039",
+  "observed": false,
+  "note": "pointer stored at 0x005652AC (.rdata)"
+ },
+ {
+  "start": "0x003B003A",
+  "observed": false,
+  "note": "pointer stored at 0x0054CCDC (.rdata)"
+ },
+ {
+  "start": "0x003D003C",
+  "observed": false,
+  "note": "pointer stored at 0x0054CCE4 (.rdata)"
+ },
+ {
+  "start": "0x003D003D",
+  "observed": false,
+  "note": "pointer stored at 0x0054CCE8 (.rdata)"
+ },
+ {
+  "start": "0x00440044",
+  "observed": false,
+  "note": "pointer stored at 0x0054CD04 (.rdata)"
+ },
+ {
+  "start": "0x0044454C",
+  "observed": false,
+  "note": "pointer stored at 0x00576A24 (.rdata)"
+ },
+ {
+  "start": "0x00476E4A",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00476E44 (code)"
+ },
+ {
+  "start": "0x0048A07B",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0045B292 (code)"
+ },
+ {
+  "start": "0x0048A0A3",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0045B832 (code)"
+ },
+ {
+  "start": "0x0048A76B",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0045F2B2 (code)"
+ },
+ {
+  "start": "0x0048A78B",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0045F322 (code)"
+ },
+ {
+  "start": "0x0048A7AB",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0045F468 (code)"
+ },
+ {
+  "start": "0x0048A7CB",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0045F4E2 (code)"
+ },
+ {
+  "start": "0x0048A8A1",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0045FD55 (code)"
+ },
+ {
+  "start": "0x0048AA4E",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x004621E2 (code)"
+ },
+ {
+  "start": "0x0048AAD1",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x004632D5 (code)"
+ },
+ {
+  "start": "0x0048AAF1",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00463375 (code)"
+ },
+ {
+  "start": "0x0048AD11",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00466DC5 (code)"
+ },
+ {
+  "start": "0x0048AD31",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00466F15 (code)"
+ },
+ {
+  "start": "0x0048AE01",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00467B45 (code)"
+ },
+ {
+  "start": "0x0048AE41",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00467C85 (code)"
+ },
+ {
+  "start": "0x0048AF5B",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00468AE2 (code)"
+ },
+ {
+  "start": "0x0048AF7B",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00468B72 (code)"
+ },
+ {
+  "start": "0x0048AFA6",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00469042 (code)"
+ },
+ {
+  "start": "0x0048AFC6",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00469282 (code)"
+ },
+ {
+  "start": "0x0048AFDB",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x004693B2 (code)"
+ },
+ {
+  "start": "0x0048B04B",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00469AD2 (code)"
+ },
+ {
+  "start": "0x0048B076",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00469C68 (code)"
+ },
+ {
+  "start": "0x0048B08B",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00469DD2 (code)"
+ },
+ {
+  "start": "0x0048B0AB",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00469E68 (code)"
+ },
+ {
+  "start": "0x0048B0F7",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00469F88 (code)"
+ },
+ {
+  "start": "0x0048B134",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0046A102 (code)"
+ },
+ {
+  "start": "0x0048B18D",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0046A248 (code)"
+ },
+ {
+  "start": "0x0048B1CC",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0046A478 (code)"
+ },
+ {
+  "start": "0x0048B213",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0046A942 (code)"
+ },
+ {
+  "start": "0x0048B271",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0046B1C5 (code)"
+ },
+ {
+  "start": "0x0048B78E",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x004726F2 (code)"
+ },
+ {
+  "start": "0x0048B87E",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00473D12 (code)"
+ },
+ {
+  "start": "0x0048B9EC",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00476962 (code)"
+ },
+ {
+  "start": "0x0048BBA9",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00502783 (code)"
+ },
+ {
+  "start": "0x0048BBBD",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0050284F (code)"
+ },
+ {
+  "start": "0x0048BC34",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00502B20 (code)"
+ },
+ {
+  "start": "0x0048BC84",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00502C3B (code)"
+ },
+ {
+  "start": "0x0048BDD6",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00504A41 (code)"
+ },
+ {
+  "start": "0x0048BE79",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00505CED (code)"
+ },
+ {
+  "start": "0x0048BED5",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00506274 (code)"
+ },
+ {
+  "start": "0x0048BF7F",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00506F6B (code)"
+ },
+ {
+  "start": "0x0048BFBB",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00507120 (code)"
+ },
+ {
+  "start": "0x0048C124",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x005112DE (code)"
+ },
+ {
+  "start": "0x0048C138",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0051190E (code)"
+ },
+ {
+  "start": "0x0048C276",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0002A482 (code)"
+ },
+ {
+  "start": "0x0048C346",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000B8A62 (code)"
+ },
+ {
+  "start": "0x0048C3E1",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0002FFB5 (code)"
+ },
+ {
+  "start": "0x0048C401",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0002F135 (code)"
+ },
+ {
+  "start": "0x0048C421",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0002F085 (code)"
+ },
+ {
+  "start": "0x0048C481",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0002BF15 (code)"
+ },
+ {
+  "start": "0x0048C4C1",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000187A5 (code)"
+ },
+ {
+  "start": "0x0048C611",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000302C5 (code)"
+ },
+ {
+  "start": "0x0048C7A1",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0002C4D5 (code)"
+ },
+ {
+  "start": "0x0048C7C1",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0002C3D5 (code)"
+ },
+ {
+  "start": "0x0048C961",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00030175 (code)"
+ },
+ {
+  "start": "0x0048CB61",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000D84E8 (code)"
+ },
+ {
+  "start": "0x0048CBE6",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000B5262 (code)"
+ },
+ {
+  "start": "0x0048CC01",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x00030235 (code)"
+ },
+ {
+  "start": "0x0048CC1A",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0002F2C5 (code)"
+ },
+ {
+  "start": "0x0048CC3A",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0002EDA2 (code)"
+ },
+ {
+  "start": "0x0048CD4B",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000BD0C8 (code)"
+ },
+ {
+  "start": "0x0048CD76",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000BCE22 (code)"
+ },
+ {
+  "start": "0x0048D031",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000292B2 (code)"
+ },
+ {
+  "start": "0x0048D0BB",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0001D5A2 (code)"
+ },
+ {
+  "start": "0x0048D781",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000BAAD8 (code)"
+ },
+ {
+  "start": "0x0048D916",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000B9F72 (code)"
+ },
+ {
+  "start": "0x0048DA56",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000B5B02 (code)"
+ },
+ {
+  "start": "0x0048DAB5",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000E00C8 (code)"
+ },
+ {
+  "start": "0x0048DB05",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x000E0452 (code)"
+ },
+ {
+  "start": "0x0048F30F",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0048EEED (code)"
+ },
+ {
+  "start": "0x0048F43E",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0047D7D9 (code)"
+ },
+ {
+  "start": "0x004981F5",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x0049823D (code)"
+ },
+ {
+  "start": "0x00498234",
+  "observed": false,
+  "note": "pointer stored at 0x00498024 (D3D)"
+ },
+ {
+  "start": "0x004A9FCD",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x004AA025 (code)"
+ },
+ {
+  "start": "0x004AB391",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x004ADA57 (code)"
+ },
+ {
+  "start": "0x004B3B25",
+  "observed": false,
+  "note": "pointer stored at 0x0095ADA0 (XON_RD)"
+ },
+ {
+  "start": "0x004C4193",
+  "observed": false,
+  "note": "pointer stored at 0x004C3D50 (XONLINE)"
+ },
+ {
+  "start": "0x004CEBBC",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x004CF5EC (code)"
+ },
+ {
+  "start": "0x004D93B0",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x004D9C6A (code)"
+ },
+ {
+  "start": "0x004DB7A0",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x004DC7AA (code)"
+ },
+ {
+  "start": "0x004DBA80",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x004DC7CF (code)"
+ },
+ {
+  "start": "0x004DE4D8",
+  "observed": false,
+  "note": "pointer stored at 0x004DCE7C (BINK)"
+ },
+ {
+  "start": "0x004E38C0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B26C (BINKDATA)"
+ },
+ {
+  "start": "0x004E3910",
+  "observed": false,
+  "note": "pointer stored at 0x0096B270 (BINKDATA)"
+ },
+ {
+  "start": "0x004E39A0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B27C (BINKDATA)"
+ },
+ {
+  "start": "0x004E3A00",
+  "observed": false,
+  "note": "pointer stored at 0x0096B280 (BINKDATA)"
+ },
+ {
+  "start": "0x004E3AA0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B28C (BINKDATA)"
+ },
+ {
+  "start": "0x004E3B10",
+  "observed": false,
+  "note": "pointer stored at 0x0096B290 (BINKDATA)"
+ },
+ {
+  "start": "0x004E3BE0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B264 (BINKDATA)"
+ },
+ {
+  "start": "0x004E3CB0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B268 (BINKDATA)"
+ },
+ {
+  "start": "0x004E3DB0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B274 (BINKDATA)"
+ },
+ {
+  "start": "0x004E3E80",
+  "observed": false,
+  "note": "pointer stored at 0x0096B278 (BINKDATA)"
+ },
+ {
+  "start": "0x004E3FA0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B284 (BINKDATA)"
+ },
+ {
+  "start": "0x004E4090",
+  "observed": false,
+  "note": "pointer stored at 0x0096B288 (BINKDATA)"
+ },
+ {
+  "start": "0x004E4380",
+  "observed": true,
+  "note": "observed at runtime in logs/coldbranch-smoke-err.txt; BINKDATA callback slot 0x0096B258; independent saved-register prologue after return and padding"
+ },
+ {
+  "start": "0x004E4510",
+  "observed": true,
+  "note": "observed at runtime in logs/coldbranch-smoke-err.txt; BINKDATA callback slot 0x0096B1E8; independent MMX entry after ret 0x38 and padding"
+ },
+ {
+  "start": "0x004E4A40",
+  "observed": false,
+  "note": "pointer stored at 0x0096B32C (BINKDATA)"
+ },
+ {
+  "start": "0x004E4AB0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B330 (BINKDATA)"
+ },
+ {
+  "start": "0x004E4B70",
+  "observed": false,
+  "note": "pointer stored at 0x0096B33C (BINKDATA)"
+ },
+ {
+  "start": "0x004E4BE0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B340 (BINKDATA)"
+ },
+ {
+  "start": "0x004E4CB0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B34C (BINKDATA)"
+ },
+ {
+  "start": "0x004E4D40",
+  "observed": false,
+  "note": "pointer stored at 0x0096B350 (BINKDATA)"
+ },
+ {
+  "start": "0x004E4E40",
+  "observed": false,
+  "note": "pointer stored at 0x0096B324 (BINKDATA)"
+ },
+ {
+  "start": "0x004E4F30",
+  "observed": false,
+  "note": "pointer stored at 0x0096B328 (BINKDATA)"
+ },
+ {
+  "start": "0x004E5080",
+  "observed": false,
+  "note": "pointer stored at 0x0096B334 (BINKDATA)"
+ },
+ {
+  "start": "0x004E5170",
+  "observed": false,
+  "note": "pointer stored at 0x0096B338 (BINKDATA)"
+ },
+ {
+  "start": "0x004E52B0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B344 (BINKDATA)"
+ },
+ {
+  "start": "0x004E53B0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B348 (BINKDATA)"
+ },
+ {
+  "start": "0x004E5520",
+  "observed": false,
+  "note": "pointer stored at 0x0096B31C (BINKDATA)"
+ },
+ {
+  "start": "0x004E5590",
+  "observed": false,
+  "note": "pointer stored at 0x0096B320 (BINKDATA)"
+ },
+ {
+  "start": "0x004E5650",
+  "observed": false,
+  "note": "pointer stored at 0x0096B314 (BINKDATA)"
+ },
+ {
+  "start": "0x004E5730",
+  "observed": false,
+  "note": "pointer stored at 0x0096B318 (BINKDATA)"
+ },
+ {
+  "start": "0x004E5EE0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B3FC (BINKDATA)"
+ },
+ {
+  "start": "0x004E5F40",
+  "observed": false,
+  "note": "pointer stored at 0x0096B400 (BINKDATA)"
+ },
+ {
+  "start": "0x004E5FE0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B3EC (BINKDATA)"
+ },
+ {
+  "start": "0x004E6030",
+  "observed": false,
+  "note": "pointer stored at 0x0096B3F0 (BINKDATA)"
+ },
+ {
+  "start": "0x004E60C0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B40C (BINKDATA)"
+ },
+ {
+  "start": "0x004E6210",
+  "observed": false,
+  "note": "pointer stored at 0x0096B3F4 (BINKDATA)"
+ },
+ {
+  "start": "0x004E62F0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B3F8 (BINKDATA)"
+ },
+ {
+  "start": "0x004E6420",
+  "observed": false,
+  "note": "pointer stored at 0x0096B3E4 (BINKDATA)"
+ },
+ {
+  "start": "0x004E6500",
+  "observed": false,
+  "note": "pointer stored at 0x0096B3E8 (BINKDATA)"
+ },
+ {
+  "start": "0x004E6630",
+  "observed": false,
+  "note": "pointer stored at 0x0096B404 (BINKDATA)"
+ },
+ {
+  "start": "0x004E6730",
+  "observed": false,
+  "note": "pointer stored at 0x0096B408 (BINKDATA)"
+ },
+ {
+  "start": "0x004E68A0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B3DC (BINKDATA)"
+ },
+ {
+  "start": "0x004E68F0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B3E0 (BINKDATA)"
+ },
+ {
+  "start": "0x004E6970",
+  "observed": false,
+  "note": "pointer stored at 0x0096B3D4 (BINKDATA)"
+ },
+ {
+  "start": "0x004E6A40",
+  "observed": false,
+  "note": "pointer stored at 0x0096B3D8 (BINKDATA)"
+ },
+ {
+  "start": "0x004E6BF0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B368 (BINKDATA)"
+ },
+ {
+  "start": "0x004E7120",
+  "observed": false,
+  "note": "pointer stored at 0x0096B4BC (BINKDATA)"
+ },
+ {
+  "start": "0x004E7190",
+  "observed": false,
+  "note": "pointer stored at 0x0096B4C0 (BINKDATA)"
+ },
+ {
+  "start": "0x004E7270",
+  "observed": false,
+  "note": "pointer stored at 0x0096B4AC (BINKDATA)"
+ },
+ {
+  "start": "0x004E72D8",
+  "observed": false,
+  "note": "pointer stored at 0x00594218 (.data)"
+ },
+ {
+  "start": "0x004E72E0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B4B0 (BINKDATA)"
+ },
+ {
+  "start": "0x004E73B0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B4CC (BINKDATA)"
+ },
+ {
+  "start": "0x004E7440",
+  "observed": false,
+  "note": "pointer stored at 0x0096B4D0 (BINKDATA)"
+ },
+ {
+  "start": "0x004E7550",
+  "observed": false,
+  "note": "pointer stored at 0x0096B4B4 (BINKDATA)"
+ },
+ {
+  "start": "0x004E7640",
+  "observed": false,
+  "note": "pointer stored at 0x0096B4B8 (BINKDATA)"
+ },
+ {
+  "start": "0x004E77A0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B4A4 (BINKDATA)"
+ },
+ {
+  "start": "0x004E7890",
+  "observed": false,
+  "note": "pointer stored at 0x0096B4A8 (BINKDATA)"
+ },
+ {
+  "start": "0x004E79F0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B4C4 (BINKDATA)"
+ },
+ {
+  "start": "0x004E7B00",
+  "observed": false,
+  "note": "pointer stored at 0x0096B4C8 (BINKDATA)"
+ },
+ {
+  "start": "0x004E7CA0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B49C (BINKDATA)"
+ },
+ {
+  "start": "0x004E7D00",
+  "observed": false,
+  "note": "pointer stored at 0x0096B4A0 (BINKDATA)"
+ },
+ {
+  "start": "0x004E7DC0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B494 (BINKDATA)"
+ },
+ {
+  "start": "0x004E7EB0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B498 (BINKDATA)"
+ },
+ {
+  "start": "0x004E85E0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B57C (BINKDATA)"
+ },
+ {
+  "start": "0x004E8730",
+  "observed": false,
+  "note": "pointer stored at 0x0096B56C (BINKDATA)"
+ },
+ {
+  "start": "0x004E87A0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B58C (BINKDATA)"
+ },
+ {
+  "start": "0x004E8830",
+  "observed": false,
+  "note": "pointer stored at 0x0096B590 (BINKDATA)"
+ },
+ {
+  "start": "0x004E8940",
+  "observed": false,
+  "note": "pointer stored at 0x0096B574 (BINKDATA)"
+ },
+ {
+  "start": "0x004E8A30",
+  "observed": false,
+  "note": "pointer stored at 0x0096B578 (BINKDATA)"
+ },
+ {
+  "start": "0x004E8BB0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B564 (BINKDATA)"
+ },
+ {
+  "start": "0x004E8CA0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B584 (BINKDATA)"
+ },
+ {
+  "start": "0x004E8DB0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B588 (BINKDATA)"
+ },
+ {
+  "start": "0x004E8F60",
+  "observed": false,
+  "note": "pointer stored at 0x0096B55C (BINKDATA)"
+ },
+ {
+  "start": "0x004E8FC0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B554 (BINKDATA)"
+ },
+ {
+  "start": "0x004E96A0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B64C (BINKDATA)"
+ },
+ {
+  "start": "0x004E9740",
+  "observed": false,
+  "note": "pointer stored at 0x0096B650 (BINKDATA)"
+ },
+ {
+  "start": "0x004E9850",
+  "observed": false,
+  "note": "pointer stored at 0x0096B62C (BINKDATA)"
+ },
+ {
+  "start": "0x004E98C0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B630 (BINKDATA)"
+ },
+ {
+  "start": "0x004E9990",
+  "observed": false,
+  "note": "pointer stored at 0x0096B63C (BINKDATA)"
+ },
+ {
+  "start": "0x004E99F0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B640 (BINKDATA)"
+ },
+ {
+  "start": "0x004E9AA0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B644 (BINKDATA)"
+ },
+ {
+  "start": "0x004E9B60",
+  "observed": false,
+  "note": "pointer stored at 0x0096B648 (BINKDATA)"
+ },
+ {
+  "start": "0x004E9C90",
+  "observed": false,
+  "note": "pointer stored at 0x0096B624 (BINKDATA)"
+ },
+ {
+  "start": "0x004E9D30",
+  "observed": false,
+  "note": "pointer stored at 0x0096B628 (BINKDATA)"
+ },
+ {
+  "start": "0x004E9E30",
+  "observed": false,
+  "note": "pointer stored at 0x0096B634 (BINKDATA)"
+ },
+ {
+  "start": "0x004E9EB0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B638 (BINKDATA)"
+ },
+ {
+  "start": "0x004E9F90",
+  "observed": false,
+  "note": "pointer stored at 0x0096B61C (BINKDATA)"
+ },
+ {
+  "start": "0x004E9FE0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B620 (BINKDATA)"
+ },
+ {
+  "start": "0x004EA270",
+  "observed": false,
+  "note": "pointer stored at 0x0096B5A8 (BINKDATA)"
+ },
+ {
+  "start": "0x004EA360",
+  "observed": false,
+  "note": "pointer stored at 0x0096B5D0 (BINKDATA)"
+ },
+ {
+  "start": "0x004EA400",
+  "observed": false,
+  "note": "pointer stored at 0x0096B5C0 (BINKDATA)"
+ },
+ {
+  "start": "0x004EA4C0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B5B8 (BINKDATA)"
+ },
+ {
+  "start": "0x004EA560",
+  "observed": false,
+  "note": "pointer stored at 0x0096B390 (BINKDATA)"
+ },
+ {
+  "start": "0x004EA6A0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B380 (BINKDATA)"
+ },
+ {
+  "start": "0x004EA900",
+  "observed": false,
+  "note": "pointer stored at 0x0096B388 (BINKDATA)"
+ },
+ {
+  "start": "0x004EAC00",
+  "observed": false,
+  "note": "pointer stored at 0x0096B378 (BINKDATA)"
+ },
+ {
+  "start": "0x004EAE00",
+  "observed": false,
+  "note": "pointer stored at 0x0096B210 (BINKDATA)"
+ },
+ {
+  "start": "0x004EAFC0",
+  "observed": false,
+  "note": "pointer stored at 0x0096B200 (BINKDATA)"
+ },
+ {
+  "start": "0x004EB560",
+  "observed": false,
+  "note": "pointer stored at 0x0096B1F8 (BINKDATA)"
+ },
+ {
+  "start": "0x005070FB",
+  "observed": false,
+  "note": "pointer stored as immediate at 0x005070F5 (code)"
+ },
+ {
+  "start": "0x00542664",
+  "observed": false,
+  "note": "listed verified XPP MU initialization callback at registration slot 0x005424DC; independent EBP prologue"
+ },
+ {
+  "start": "0x00542EA2",
+  "observed": false,
+  "note": "pointer stored at 0x00542594 (XPP)"
+ },
+ {
+  "start": "0x00543768",
+  "observed": false,
+  "note": "pointer stored at 0x005424E4 (XPP)"
+ },
+ {
+  "start": "0x00544123",
+  "observed": false,
+  "note": "pointer stored at 0x00542474 (XPP)"
+ },
+ {
+  "start": "0x00544175",
+  "observed": false,
+  "note": "pointer stored at 0x005424BC (XPP)"
+ },
+ {
+  "start": "0x00544558",
+  "observed": false,
+  "note": "pointer stored at 0x00542554 (XPP)"
+ },
+ {
+  "start": "0x00544B77",
+  "observed": false,
+  "note": "pointer stored at 0x00542550 (XPP)"
+ },
+ {
+  "start": "0x00548083",
+  "observed": false,
+  "note": "pointer stored at 0x00542598 (XPP)"
+ },
+ {
+  "start": "0x0095A8E0",
+  "observed": false,
+  "note": "pointer stored at 0x0058D868 (.data)"
+ }
+]

@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.20)
+project(xaudio2_test C)
+set(CMAKE_C_STANDARD 11)
+add_executable(xaudio2_test test_main.c)
+enable_testing()
+add_test(NAME xaudio2_test COMMAND xaudio2_test)
