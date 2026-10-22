@@ -13,7 +13,7 @@ a target, backend, scene or individual effect.
 | Rendering work | Off | Low | Mid | High |
 | --- | --- | --- | --- | --- |
 | Recognized screen-space blur/bloom chains and their fullscreen composites | Omitted | 50% auxiliary width/height | 75% auxiliary width/height | Original auxiliary resolution |
-| Recognized projected character shadows | Caster and dependent receiver draws omitted | 128×128 maps | 192×192 maps | 256×256 maps |
+| Recognized projected character shadows | 64x64 maps; caster and receiver draws retained | 128×128 maps | 192×192 maps | 256×256 maps |
 | Other auxiliary targets, from 40×30 through 512×512 | 25% width/height; material draws retained | 50% | 75% | Original resolution |
 | Tiny pyramid levels, including retail 20×15 and 10×7 | Recognized chain draws omitted | Original resolution | Original resolution | Original resolution |
 | Full-width display/history buffers, HUD and base scene geometry | Preserved | Preserved | Preserved | Preserved |
@@ -84,3 +84,15 @@ reference; no code or target addresses were copied from it.
 Builds and the exact limits of execution checks are in
 [VALIDATION.md](VALIDATION.md). The user requested that further testing stop
 after confirming the option works.
+
+
+## 2026-10-22 follow-up: shadows independent of screen-effect Off
+
+The previous omission policy is superseded: character shadow caster/receiver
+draws are retained at Off, with the existing 25% auxiliary resolution budget.
+Known receivers use bounded projective sampling to avoid smearing the edge of
+the shadow map onto walls. RGB565 texture samples have implicit alpha one,
+including host BGRA targets whose alpha stayed at the black clear value.
+Both hosts and targets build; no new runtime tests were performed at the user's
+explicit request. Retail shadow visibility at High and demo wall artifacts still
+need user verification. Earlier validation entries describe the old policy.

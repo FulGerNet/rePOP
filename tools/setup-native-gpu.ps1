@@ -41,6 +41,9 @@ Copy-Item -LiteralPath (Join-Path $cache 'SDL3-3.4.18/LICENSE.txt') `
     -Destination (Join-Path $bin 'LICENSE-SDL3.txt') -Force
 @'
 SDL3 3.4.18, altered by reSOT: native D3D12/Vulkan occlusion queries, ABI 1.
+Vulkan additionally preserves compatible graphics descriptor bindings across passes and PSO changes.
+Vulkan also caches immutable material descriptor sets within each command buffer.
+Vulkan uses full graphics descriptor binds; selective binds withdrawn after Android regression.
 Upstream source archive SHA-256: 9CD42377704398796071B8597CD7E21DA254A43BAD98C4199739647ADC13FA6F
 Published additions: port/third_party/sdl-gpu-query/ and tools/patch-sdl-gpu-query.py
 Build: tools/setup-native-gpu.ps1. Licence: LICENSE-SDL3.txt.

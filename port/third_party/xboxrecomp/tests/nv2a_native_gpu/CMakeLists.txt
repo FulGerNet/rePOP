@@ -1,11 +1,26 @@
 # RE-SoT: real GPU draws and readbacks through both native command encoders.
 cmake_minimum_required(VERSION 3.20)
-project(resot_native_gpu_smoke C)
+project(resot_native_gpu_smoke C CXX) # RE-SoT: real shader-cache concurrency test uses C++ threads.
 enable_testing()
+add_executable(geometry_cache_regression "../../../../../tools/tests/test-geometry-cache.c") # RE-SoT: exact reuse/lifetime admission.
+add_test(NAME exact_geometry_cache COMMAND geometry_cache_regression)
+# RE-SoT: partial Vulkan set binds must select exactly their dynamic offsets.
+add_executable(descriptor_bind_regression "../../../../../tools/tests/test-descriptor-bind.c")
+add_test(NAME selective_descriptor_bind COMMAND descriptor_bind_regression)
+# RE-SoT: compare bounded packet batching with the scalar decoder.
+add_executable(pb_payload_regression "../../../../../tools/tests/test-pb-payload.c" "../../src/kernel/nv2a_vsh_interp.c")
+target_include_directories(pb_payload_regression PRIVATE "../../src/kernel")
+add_test(NAME bounded_pushbuffer_payload COMMAND pb_payload_regression)
 get_filename_component(RESOT_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
 set(SDL_ROOT "${RESOT_ROOT}/build/deps/SDL3-3.4.18" CACHE PATH "SDL GPU SDK")
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_subdirectory("${RESOT_ROOT}/port/render" shader-compiler)
+# RE-SoT: exercise atomic cache replacement and rejection with real SPIR-V.
+add_executable(shader_cache_regression "${RESOT_ROOT}/tools/tests/test-shader-cache.cpp")
+target_compile_features(shader_cache_regression PRIVATE cxx_std_17)
+target_link_libraries(shader_cache_regression PRIVATE resot_shader_compiler)
+add_test(NAME translated_shader_cache COMMAND shader_cache_regression)
+set_tests_properties(translated_shader_cache PROPERTIES TIMEOUT 90)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/shaders/nv2a_native_shaders.h"
     COMMAND "${Python3_EXECUTABLE}" "${RESOT_ROOT}/tools/build-native-shaders.py"
             --dxc "${RESOT_ROOT}/build/deps/dxc/bin/x64/dxc.exe"

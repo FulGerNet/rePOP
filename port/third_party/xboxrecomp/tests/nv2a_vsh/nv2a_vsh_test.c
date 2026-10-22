@@ -86,6 +86,53 @@ int main(void)
         nv2a_vsh_set_start_slot(NV2A_VSH_SLOTS);
         if (nv2a_vsh_input_mask() || nv2a_vsh_run((const float (*)[4])in,&o)) return 6;
     }
-    puts("epilogue, sparse inputs and program-cache invalidation passed");
+    /* RE-SoT: repeated uniform uploads do not dirty snapshots. Preserve all
+     * float bits and advance the upload cursor across unchanged components. */
+    {
+        uint32_t bits[8]={0,0x80000000u,0x7FC12345u,0x3F800000u,
+                          0x40000000u,0,0,0};
+        float value[4]; uint32_t gen;
+        memcpy(value,bits,sizeof value);
+        nv2a_vsh_set_constant(100,value);
+        gen=nv2a_vsh_constant_generation();
+        nv2a_vsh_set_constant(100,value);
+        nv2a_vsh_set_constant_load(100);
+        for (int j=0;j<4;j++) nv2a_vsh_constant_word(bits[j]);
+        if (nv2a_vsh_constant_generation()!=gen) return 7;
+        for (int j=4;j<8;j++) nv2a_vsh_constant_word(bits[j]);
+        if (memcmp(nv2a_vsh_constant(101),bits+4,16)) return 8;
+        gen=nv2a_vsh_constant_generation();
+        nv2a_vsh_constant_component(100,0,0x80000000u);
+        if (nv2a_vsh_constant_generation()==gen) return 9;
+        gen=nv2a_vsh_constant_generation();
+        nv2a_vsh_constant_component(100,2,0x7FC12345u);
+        if (nv2a_vsh_constant_generation()!=gen) return 10;
+        nv2a_vsh_constant_component(100,2,0x7FC12346u);
+        if (nv2a_vsh_constant_generation()==gen) return 11;
+    }
+    /* RE-SoT: contiguous uploads match scalar cursors, raw float bits and
+     * invalid-slot wrap. Finish a partially bulk-uploaded program scalarly. */
+    {
+        uint32_t stream[8]={0,0,0,0,0,(1u<<21)|XYZW,2u<<26,(15u<<12)|(1u<<11)|1u};
+        uint32_t bits[8]={0,0x80000000u,0x7FC12345u,0x3F800000u,1,2,3,4};
+        uint32_t gen;
+        nv2a_vsh_set_load_slot(0xFFFFFFFFu);
+        nv2a_vsh_program_words(stream,6);
+        nv2a_vsh_program_word(stream[6]); nv2a_vsh_program_word(stream[7]);
+        nv2a_vsh_set_start_slot(0);
+        if (!nv2a_vsh_run((const float (*)[4])in,&o) || memcmp(o.pos,in[0],16)) return 12;
+        nv2a_vsh_set_constant_load(120);
+        nv2a_vsh_constant_word(bits[0]);
+        nv2a_vsh_constant_words(bits+1,7);
+        if (memcmp(nv2a_vsh_constant(120),bits,16) || memcmp(nv2a_vsh_constant(121),bits+4,16)) return 13;
+        gen=nv2a_vsh_constant_generation();
+        nv2a_vsh_set_constant_load(120); nv2a_vsh_constant_words(bits,8);
+        if (gen!=nv2a_vsh_constant_generation()) return 14;
+        nv2a_vsh_set_constant_load(0xFFFFFFFFu); nv2a_vsh_constant_words(bits,8);
+        if (memcmp(nv2a_vsh_constant(0),bits+4,16)) return 15;
+        nv2a_vsh_set_constant_load(191); nv2a_vsh_constant_words(bits,8);
+        if (memcmp(nv2a_vsh_constant(191),bits,16)) return 16;
+    }
+    puts("epilogue, sparse inputs, cache invalidation and scalar/bulk upload boundaries passed");
     return 0;
 }

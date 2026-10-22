@@ -47,6 +47,9 @@ static uint32_t s_tot_calls;
 /* Executing is opt-in separately from surveying: a survey is read-only, while
  * the executor writes to guest memory. */
 extern void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param);
+/* RE-SoT: decoder supplies only a bounded, contiguous packet prefix. */
+extern uint32_t nv2a_pb_exec_payload(uint32_t subch, uint32_t method,
+                                   const uint32_t *data, uint32_t count, int noninc);
 extern void nv2a_pb_exec_report(void);
 static int s_exec_enabled = -1;
 
@@ -54,6 +57,21 @@ static int s_exec_enabled = -1;
  * millions of compares a frame once a title draws. Only kept when the
  * survey itself was asked for. */
 static int s_survey = -1;
+
+/* RE-SoT: retain the scalar inventory/trace path. Batch only pure data and
+ * cap it at the same exclusive physical/end boundaries as the scalar walker. */
+static uint32_t pb_payload(uint32_t subch, uint32_t method, const uint8_t *mem,
+                           uint32_t va, uint32_t end, uint32_t count, int noninc)
+{
+    uint32_t limit = XBOX_CONTIG_BASE + 0x04000000u - 4;
+    if (s_survey < 0) s_survey = getenv("RECOMP_PB_SCAN") != NULL;
+    if (!s_exec_enabled || s_survey || subch ||
+        !((method >= 0x0B00 && method < 0x0C00) || method == 0x1800 || method == 0x1808 || method == 0x1818)) return 0;
+    if (va < XBOX_CONTIG_BASE || va >= limit || end <= va) return 0;
+    if (end > va && end < limit) limit = end;
+    if (count > (limit-va)/4) count = (limit-va)/4;
+    return nv2a_pb_exec_payload(subch,method,(const uint32_t *)(mem+va),count,noninc);
+}
 
 static void note(uint32_t subch, uint32_t method)
 {
@@ -238,7 +256,10 @@ static uint32_t pb_walk(uint32_t va, uint32_t end_va, int in_call,
             uint32_t method =  w & 0x1FFCu;
             int noninc = (w & 0xE0000000u) == 0x40000000u;
 
-            for (uint32_t i = 0; i < count && va < end_va
+            /* RE-SoT: bulk data never crosses END, RAM or a method boundary. */
+            uint32_t consumed = pb_payload(subch,method,mem,va,end_va,count,noninc);
+            va += consumed*4; words += consumed;
+            for (uint32_t i = consumed; i < count && va < end_va
                      && va < XBOX_CONTIG_BASE + 0x04000000u - 4; i++) {
                 uint32_t m = noninc ? method : method + i * 4;
                 note(subch, m);
@@ -334,7 +355,12 @@ static void pb_scan_to(uint32_t start_va, uint32_t put_va)
             int noninc = (w & 0xE0000000u) == 0x40000000u;
             uint32_t i;
 
-            for (i = 0; i < count && va != put_va
+            /* RE-SoT: PUT can be behind va across a ring jump. Only a PUT
+             * ahead of this payload truncates the original scalar loop. */
+            i = pb_payload(subch,method,mem,va,
+                           put_va < va ? XBOX_CONTIG_BASE+0x04000000u-4 : put_va,count,noninc);
+            va += i*4; words += i;
+            for (; i < count && va != put_va
                         && va < XBOX_CONTIG_BASE + 0x04000000u - 4; i++) {
                 uint32_t m = noninc ? method : method + i * 4;
                 note(subch, m);

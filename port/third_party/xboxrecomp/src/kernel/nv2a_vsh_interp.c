@@ -123,19 +123,52 @@ void nv2a_vsh_set_constant_load(uint32_t index)
 
 void nv2a_vsh_constant_word(uint32_t word)
 {
-    if (s_const_load < NV2A_VSH_CONSTANTS) {
-        memcpy(&s_const[s_const_load][s_const_word], &word, 4);
-        s_const_gen++;
-    }
+    /* RE-SoT: identical uploads must still advance the guest cursor, but
+     * need no new 3 KB draw snapshot/GPU uniform upload on either host. */
+    nv2a_vsh_constant_component(s_const_load,s_const_word,word);
     if (++s_const_word == 4) {
         s_const_word = 0;
         s_const_load++;
     }
 }
 
+/* RE-SoT: bulk uploads use bytewise equality/copy, preserving every bit and
+ * partial cursor. Invalid slots still advance and can wrap just as scalar
+ * uploads do. Generation is an invalidation token, never a word count. */
+static void vsh_upload_words(void *dest,uint32_t slots,uint32_t *slot,uint32_t *component,
+                             const uint32_t *words,uint32_t count,uint32_t *generation)
+{
+    while (count) {
+        uint64_t pos = (uint64_t)*slot*4 + *component;
+        uint64_t wrap = (1ull<<34)-pos;
+        uint32_t chunk = wrap < count ? (uint32_t)wrap : count;
+        if (pos < (uint64_t)slots*4) {
+            uint32_t valid = slots*4-(uint32_t)pos;
+            unsigned char *at = (unsigned char *)dest+(size_t)pos*4;
+            if (valid > chunk) valid = chunk;
+            if (memcmp(at,words,(size_t)valid*4)) {
+                memcpy(at,words,(size_t)valid*4); ++*generation;
+            }
+        }
+        pos += chunk; *slot = (uint32_t)(pos>>2); *component = (uint32_t)pos&3;
+        words += chunk; count -= chunk;
+    }
+}
+void nv2a_vsh_program_words(const uint32_t *words,uint32_t count)
+{
+    /* RE-SoT: same backing state as SET_TRANSFORM_PROGRAM scalar writes. */
+    vsh_upload_words(s_program,NV2A_VSH_SLOTS,&s_load_slot,&s_load_word,words,count,&s_prog_gen);
+}
+void nv2a_vsh_constant_words(const uint32_t *words,uint32_t count)
+{
+    /* RE-SoT: same backing state as SET_TRANSFORM_CONSTANT scalar writes. */
+    vsh_upload_words(s_const,NV2A_VSH_CONSTANTS,&s_const_load,&s_const_word,words,count,&s_const_gen);
+}
+
 void nv2a_vsh_set_constant(uint32_t index, const float v[4])
 {
-    if (index < NV2A_VSH_CONSTANTS) {
+    /* RE-SoT: compare raw bits: signed zero and NaN payloads are shader data. */
+    if (index < NV2A_VSH_CONSTANTS && memcmp(s_const[index],v,sizeof s_const[index])) {
         memcpy(s_const[index], v, sizeof s_const[index]);
         s_const_gen++;
     }
@@ -222,6 +255,11 @@ const float *nv2a_vsh_constant(uint32_t index)
 void nv2a_vsh_constant_component(uint32_t index, uint32_t comp, uint32_t word)
 {
     if (index < NV2A_VSH_CONSTANTS && comp < 4) {
+        /* RE-SoT: viewport words are frequently reissued unchanged. Keep
+         * generations stable without float equality or aliasing violations. */
+        uint32_t previous;
+        memcpy(&previous,&s_const[index][comp],4);
+        if (previous==word) return;
         memcpy(&s_const[index][comp], &word, 4);
         s_const_gen++;
     }

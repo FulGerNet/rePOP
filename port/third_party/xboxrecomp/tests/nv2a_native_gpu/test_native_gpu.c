@@ -245,7 +245,9 @@ int main(int argc, char **argv)
     transfer = SDL_CreateGPUTransferBuffer(device,&transfer_info); REQUIRE(transfer);
     REQUIRE(!test_texture_border(device,vs,target,transfer,dx)); /* RE-SoT: actual shader on both GPUs. */
     REQUIRE(!test_simple_combiner(device,target,transfer,dx,0)); /* RE-SoT: specialization matches full interpreter. */
-    if(!dx) REQUIRE(!test_simple_combiner(device,target,transfer,dx,2)); /* RE-SoT: frozen/optimized reference comparisons. */ /* RE-SoT: Vulkan constant-state programs. */
+    /* RE-SoT: targeted binding changes can run the real pass/texture/query
+     * checks without repeating the unrelated 64-program optimizer stress. */
+    if(!dx && !getenv("RESOT_GPU_BINDINGS_SMOKE")) REQUIRE(!test_simple_combiner(device,target,transfer,dx,2)); /* RE-SoT: frozen/optimized reference comparisons. */
     for (frame = 0; frame < 4; frame++) {
         SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(device);
         SDL_GPUColorTargetInfo ct = {0};
@@ -323,6 +325,10 @@ int main(int argc, char **argv)
     REQUIRE(ng_vis_poll(&visibility,report_complete,&reports));
     REQUIRE(reports.seen[12] == 1 && reports.pixels[12] == 0);
     REQUIRE(visibility.queries == 8 && visibility.reports == 6 && visibility.completed == 6);
+    /* RE-SoT: frame 3 retains frame 2's samples while reusing its native
+     * handles. The expected 5120 above proves old normalized samples survive.
+     * Eight logical queries require just two actual native resources. */
+    REQUIRE(visibility.allocated == 2 && visibility.reused == 6 && visibility.idle_count == 2);
     REQUIRE(!visibility.all && !visibility.pending && !visibility.first);
     /* A discarded counter without GET_REPORT still owns live GPU objects
      * until its submission finishes, then retires without publishing data. */
@@ -345,6 +351,7 @@ int main(int argc, char **argv)
         REQUIRE(SDL_WaitForGPUFences(device,true,&fence,1));
         REQUIRE(ng_vis_poll(&visibility,report_complete,&reports));
         REQUIRE(!visibility.all && visibility.completed == 6 && visibility.queries == 9);
+        REQUIRE(visibility.allocated == 2 && visibility.reused == 7 && visibility.idle_count == 2); /* RE-SoT */
         visibility.enabled = 0;
         REQUIRE(!ng_vis_prepare(&visibility,NULL,1));
     }

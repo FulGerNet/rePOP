@@ -640,8 +640,12 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
  * old limit of one frame the time held was never produced, the XAudio2
  * queue lost those frames for good and ran dry. Sixteen frames is the queue's
  * own maximum (XA2_QUEUE_MAX); a longer stall starts the clock again. */
-#if RESOT_RUNTIME_DEMO
+#if RESOT_RUNTIME_DEMO || (defined(__ANDROID__) && RESOT_RUNTIME_RETAIL)
 #define APU_CATCH_UP_US (16 * EP_FRAME_US)
+/* RE-SoT: Android retail previously discarded elapsed audio time whenever
+ * scheduler lateness exceeded one 5.33 ms monitor block. Permit bounded
+ * catch-up so repeated short load stalls do not accumulate voice/cutscene
+ * drift. Longer pauses still rebase; this does not alter guest pitch. */
 #else
 #define APU_CATCH_UP_US EP_FRAME_US
 #endif

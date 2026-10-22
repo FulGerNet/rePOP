@@ -1,4 +1,4 @@
-"""Exercise the production demo IRQ dispatcher with a masked, pending line.
+"""Exercise the shared production IRQ dispatcher with a masked, pending line.
 
 Build products stay in ignored build/apu-irq-tests. No game data is used.
 """
@@ -11,8 +11,9 @@ directory = root / 'build/apu-irq-tests'
 project = directory / 'project'
 project.mkdir(parents=True, exist_ok=True)
 source = (root / 'port/third_party/xboxrecomp/src/apu/apu_core.c').read_text()
-# The shared runtime keeps the demo's dispatcher under #if RESOT_RUNTIME_DEMO.
-begin = source.index('#if RESOT_RUNTIME_DEMO\n/* RE-SoT: xbox-demo. The ISR')
+# The two targets now share the dispatcher. Extract its function, rather
+# than depending on the superseded demo-only preprocessor/comment marker.
+begin = source.index('static void apu_deliver_irq(MCPXAPUState *d)')
 end = source.index('/* ============================================================', begin)
 dispatcher = source[begin:end]
 harness = r'''

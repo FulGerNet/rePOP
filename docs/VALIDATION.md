@@ -1,5 +1,665 @@
 # Validation log
 
+## 2026-10-22: v0.3.0 music restoration and menu input
+
+Compared the uncommitted source tree with `C:/Users/Admin/Desktop/rePOP-reSOT`
+(a source snapshot without `.git`) and the current Git HEAD. The previous
+snapshot's music callback is synchronous. Removed the local retail override
+of XBE callback 0x00096130 and its deferred counter queue in kernel_rtl.c;
+the original lifted callback now updates completed/pending bytes before
+0x00095BE0/0x00095E80 consume them. Preserved Android's bounded audio queue
+recovery and catch-up policy. Removed the temporary APU-MUSIC diagnostics.
+
+Windows retail comparison: `logs/music-before-030.txt` records wholly silent
+10-second menu intervals. The actual restored build explicitly recompiled
+kernel_rtl.c and recomp_manual.c (`logs/music-restored-030-build.txt`);
+`logs/music-restored-030.txt` then records 1829/1829 and 1864/1864 non-silent
+blocks in successive menu intervals. The 47.125-second capture is retained
+locally as `logs/music-restored-030.wav`. The user first confirmed effects
+without music in the old build, then confirmed music is audible in the
+properly rebuilt Windows retail menu. An intermediate incremental build
+had reused old objects because the copied source retained older timestamps;
+that run is not counted as a restored-build test. Menu music is confirmed;
+gameplay music and Android listening after this restoration remain unchecked.
+
+Menu fixes use existing hooks; no seeds, lifter output or game bytes changed:
+
+- Demo: XBE main-page builder return 0x0015E8EA resets the host's page,
+  choice and binding state before adding Load Map / reSOT Options again.
+  A 90-second Windows run with RESOT_MENU_TRACE/RESOT_POINTER_TRACE and
+  scripted/live pad inputs recorded both additions and both bindings twice
+  after menu reconstruction. This exercised reconstruction, not a complete
+  human-controlled gameplay/quit loop. Captures and trace remain in logs/.
+- Retail: suppress the pause Options Xbox Live add at return 0x001A33F6,
+  as already done at main-menu return 0x00234D3A. Static XBE inspection found
+  no pause binder reader of the skipped var+0xD4 choice. The existing
+  RESOT_XBOX_LIVE_MENU=1 override retains both entries. A retail pause menu
+  interaction after this change has not been visually checked.
+- Shared pointer bridge reads the live page stack and each enabled choice's
+  text position on the guest input thread; host events never touch guest
+  objects. Mouse hover selects a row; a released tap navigates and activates
+  through the original pad handler. Context changes cancel presses, physical
+  input takes priority, drags do not activate, and stale metadata is probed.
+  Windows left-click selects/right-click backs out. Android taps select,
+  rightward swipes or Android Back back out. Controller/keyboard remain usable.
+- Android clears held touch controls and suppresses its pad overlay in native
+  menus, Bink playback and camera viewports with top/bottom cinematic bars;
+  it restores the user's visibility preference afterward. Cinematic viewport
+  evidence is independent: demo call 0x000EF5A5 (top EDI, height EBP,
+  screen+0xA4) and retail call 0x000CFE86 (top EBP, caller height local +0x1C,
+  screen+0xA8). Bink taps enter the existing movie skip path. The Halo source
+  was a reference for context changes/clearing held controls; no code copied.
+
+Checks run:
+
+```powershell
+python tools/check-hlsl.py
+python tools/test-menu-pointer.py
+python tools/test-audio-resampler.py
+python tools/test-apu-irq.py
+python tools/run-build-tool.py cmake --build build/tests/native-gpu --config Release
+python tools/run-build-tool.py ctest --test-dir build/tests/native-gpu -C Release --output-on-failure -E 'native_direct3d12|native_vulkan|vertex_program'
+python tools/run-build-tool.py ctest --test-dir build/tests/native-gpu -C Release --output-on-failure -R 'native_vulkan|native_direct3d12'
+.\tools\recomp.ps1 -Target xbox-demo -BuildOnly
+.\tools\recomp.ps1 -Target xbox-retail -BuildOnly
+.\tools\build-android.ps1
+```
+
+Ten HLSL entries pass; both synthetic menu-layout tests, both resampler tests,
+the pending-IRQ/gate tests, ten GPU/support tests and the D3D12/Vulkan GPU
+readback tests pass. The IRQ runner's obsolete demo-only extraction marker
+was updated to extract the current shared dispatcher. Four separate whole
+APU/IRQL regression project builds were interrupted while rebuilding redundant
+shader-compiler dependencies; they are not claimed as completed checks.
+Both Windows executables and the release APK build with version 0.3.0
+(Android versionCode 5). Logs use the `logs/v030-*` prefix.
+
+Limitations: no connected device in `adb devices`, so this APK was not installed
+or touch-tested. End-to-end mouse activation on every original menu/dialog,
+Android cutscene/background transitions, retail pause layout, gameplay music,
+and full-game correctness remain under validation. These checks establish
+source behavior, compilation and the observations above, not full playability.
+
+
+## 2026-10-22: shadow / touch / Android audio and thermal follow-up
+
+User confirms the preceding geometry-cache build is much better on a rested
+phone. Preserve that cache. User requests shadow visibility in retail, transient
+demo wall-shadow stretching, clearer touch icons, delayed cutscene audio and
+less sustained heating; explicitly requests installation with NO game testing.
+User also confirms retail shadows were missing at High, so Off suppression is
+not a sufficient explanation.
+
+Code changes (not yet observed in gameplay):
+
+- Both render hosts/targets: RGB565 texture samples supply implicit alpha one,
+  including BGRA-backed render targets whose RGB-only silhouette writes retain
+  clear alpha zero. Existing retail trace logs/retail-hud-after-err.txt has
+  RGB565 256x256 casters, black clears, RGB-only writes, and alpha-tested
+  ZERO/ONE_MINUS_SRC_COLOR receivers. Host alpha zero can reject those receivers
+  even at High; this is a concrete code-path defect, not a verified on-device
+  explanation for every absent retail shadow.
+- Shadow caster/receiver provenance is retained but no longer omits character
+  shadows at post-processing Off. Existing auxiliary resolution budgets remain
+  (Off 64x64, Low 128x128, Mid 192x192, High 256x256 for the known 256x256 maps).
+  Proven receiver samples outside the projected footprint or with nonpositive/
+  near-zero projector W become neutral black. This targets edge stretching on
+  walls without applying clipping to ordinary materials. No guest geometry or
+  XBE constants changed. Demo wall artifacts and retail visibility await user
+  confirmation; no new arbitrary depth-test override or replacement shadow.
+- Android touch icons only: first-person eye and overhead-camera pictograms
+  exchanged, RT shield replaced by a runner/wall-action glyph, A shows a tucked
+  jumping figure with upward-motion marks below. Button bits, triggers, saved
+  positions and control keys remain the same. Idle rumble poll is 48 ms,
+  active rumble remains 16 ms. Appearance was not rendered/tested on device.
+- Android SDL audio: compare input queue duration with available output converted
+  to input-equivalent bytes, taking the maximum (not summing overlapping data).
+  Prime two blocks instead of four; at a twelve-block backlog or a submission
+  gap over 150 ms clear pending stale stream audio and accept the newest block.
+  This bounds stream backlog, not total hardware latency or every guest-sync
+  issue. Android retail APU permits sixteen monitor blocks of scheduler catch-up
+  instead of losing time after one; Windows retail remains unchanged. No claim
+  that every cutscene remains synchronized without testing the reported scene.
+- Android PowerManager thermal callbacks set temporary 90/60/45/30 FPS budgets
+  at Light/Moderate/Severe/Critical and above; a lower saved user cap wins.
+  Cooling waits 30 seconds before raising the budget, then restores the user's
+  configured limit. The INI is not overwritten. Display refresh follows the
+  effective cap; pacing sleeps without changing guest simulation clocks.
+  No per-frame JNI, temperature polling, thermal bypass or resolution downgrade.
+  Thermal callbacks are Android-specific; Windows keeps its existing FPS policy.
+
+Verification limited to compilation/installation per user instruction:
+
+- python tools/check-hlsl.py: all 10 entries compile.
+- tools/recomp.ps1 -Target xbox-demo -BuildOnly and -Target xbox-retail -BuildOnly:
+  both succeed (shared shader/raster code; no executables launched).
+- tools/build-android.ps1: release APK including both targets builds in 46 s.
+- adb pulls the actual installed prior APK to logs/shadow-audio-before/device.apk,
+  then adb install -r bin/reSOT-android.apk returns Success. Installed package
+  SHA-256 equals the local new APK. No app/activity launch, screenshots, GPU test,
+  audio playback test, thermal run or gameplay input was performed.
+
+Evidence: logs/shadow-audio-{shaders,android-build,demo-build,retail-build}.txt.
+Rollback: logs/shadow-audio-before/source, device.apk (actual prior package),
+installed.apk (prior local package), and both prior Windows executables.
+Keep unrelated pre-existing changes and the confirmed geometry/material caches.
+
+Primary API references: [SDL queued input](https://wiki.libsdl.org/SDL3/SDL_GetAudioStreamQueued),
+[available output](https://wiki.libsdl.org/SDL3/SDL_GetAudioStreamAvailable),
+[Android thermal callbacks](https://developer.android.com/reference/android/os/PowerManager.OnThermalStatusChangedListener).
+
+
+## 2026-10-22: Vulkan input-geometry reuse installed
+
+The user clarifies the previous 100 FPS baseline came from another build and
+mostly empty views. Do not treat the earlier 100-to-80 report as a controlled
+20% regression. Read the other local chat, "Ottimizza il rendering Vulkan",
+and compare logs/vulkan-selective-before.apk with the restored base: both
+SHA-256 3E8F39C27FB4CD701D5E5EE3DA887087096D41BF35849FB827066501495213F0.
+This recovers the confirmed material-cache baseline, not a promise of 100 FPS.
+
+Change: Vulkan's native GPU vertex path reuses input vertices and expanded
+indices already in the append rings, including across submissions and frames.
+The cache checks the complete guest index list, ordered input layouts/current
+attribute bits, and every byte of merged source spans. Hashes select slots
+only. Inline payloads, invalid/oversized source spans and cache-budget failures
+retain conversion/upload. At most 2048 lookup entries / 16 MiB source snapshots;
+individual snapshots are at most 256 KiB. Ring wrap flushes queued references,
+advances a generation, and cycles both buffers before any new writes; previous
+in-flight backing storage keeps SDL's existing retirement. Successful hits
+still issue their draws, constants, material state and visibility queries in
+guest order. All-hit runs omit the staging map and GPU copy pass. No geometric
+LOD/culling, quality, resolution, pacing or guest shader math was changed.
+Both targets use runtime input state, without shared-XBE address assumptions.
+
+Essential commands/results:
+
+- python tools/check-hlsl.py: all 10 entries pass (shaders unchanged).
+- cmake --build build/tests/native-gpu --config Release --target
+  geometry_cache_regression native_gpu_smoke, then ctest -C Release
+  --test-dir build/tests/native-gpu -R '^exact_geometry_cache$'
+  --output-on-failure: pass. Checks source changes anywhere in each span,
+  index/layout/current-value changes, overlapping span unions, generation
+  mismatch and snapshot ownership/bounds.
+- RESOT_GPU_BINDINGS_SMOKE=1 native_gpu_smoke.exe vulkan: pass. Short existing
+  GPU check covers texture/resource cycling, exact readbacks, light-map borders,
+  576 combiner comparisons, depth/scissor, precise visibility 4096/2048/1024/5120
+  and resize. It is not a complete integration test of the native draw queue.
+- tools/recomp.ps1 -Target xbox-demo -BuildOnly and -Target xbox-retail -BuildOnly:
+  both succeed. tools/build-android.ps1: both-target release APK succeeds, 35 s.
+- adb install -r bin/reSOT-android.apk: Success. Retail started through the
+  existing GameActivity with the installed retail data; gameplay image inspected.
+  logs/vulkan-geometry-retail-final.txt includes 1,010,259 geometry hits,
+  459,268 misses, 212,760 bypasses, 14,966,740 source bytes, ring generation 278,
+  and 7,301,495,440 cumulative upload bytes avoided. These counters prove reuse,
+  not an FPS percentage; views/draw counts change during user play.
+
+User says FPS are going well and suspects the long active phone session may
+affect performance. No thermal profile was acquired and the hypothesis is not
+confirmed. A same-scene live toggle was offered but not performed; stop further
+experiments and leave the active game alone per the short-test workflow.
+No sustained-60/100-FPS, demo-device gameplay or Windows-gameplay claim.
+
+Developer controls: RESOT_NATIVE_GEOMETRY_CACHE=0 disables reuse. Optional
+RESOT_NATIVE_GEOMETRY_CONTROL points to an ASCII 0/1 file sampled every five
+seconds. Android opts in only if geometry-cache-control exists at startup.
+The diagnostic file created for this session was removed with reuse still on;
+ordinary future starts do not poll for it. No user settings or saves changed.
+
+Rollback: logs/vulkan-geometry-before contains source snapshots, both original
+Windows executables and the original installed APK; the latter is also backed
+up in logs/vulkan-next-before. Existing unrelated local edits remain intact.
+Evidence: logs/vulkan-geometry-{android-build,demo-build,retail-build,tests-build,
+test,gpu,shaders,retail-on,retail-final}.txt and vulkan-geometry-retail.png.
+
+
+## 2026-10-22: compact vertex constants / reduced exports withdrawn
+
+Studied the local Black native/vulkan.cpp and vk_shader.cpp read-only, plus
+Khronos descriptor/buffer and tile-rendering guidance. No reference code copied.
+Tried dense static vertex constants with full relative-palette/reference
+fallback, deduplicated actual uploaded values, and d0/fog/t0-only vertex exports
+for the existing exact simple fragment path. Shared Windows/Android code,
+no guest addresses, generated game code, quality, settings or resolution changed.
+
+Commands/results before withdrawal:
+
+- python tools/check-hlsl.py: all 10 shader entries pass.
+- cmake --build build/tests/native-gpu --config Release --target native_vsh_compare;
+  ctest --test-dir build/tests/native-gpu -C Release -R '^vertex_program_vulkan$'
+  --output-on-failure: passes, 112 GPU comparisons in 6.2 seconds, including
+  compact static/high-index constants, relative palettes and both output ABIs.
+- tools/recomp.ps1 -Target xbox-demo -BuildOnly and -Target xbox-retail -BuildOnly:
+  both succeed. tools/build-android.ps1: release APK succeeds (35 seconds).
+- adb install -r bin/reSOT-android.apk: Success. Retail title inspected on device.
+  Constant-upload log: 76,736,832 actual / 465,497,088 full-layout opportunity bytes
+  (83.5% fewer bytes). This counter is not a measured FPS improvement.
+- Additional targeted checks also pass: native_vulkan (106.62 seconds) and
+  vertex_program_direct3d12 (0.52 seconds). Passing tests did not predict the
+  user-observed gameplay regression; the experiment remains withdrawn.
+
+User reports about 80 FPS at locations previously above/around 100 FPS. This
+is sufficient to reject the experiment; no controlled A/B or driver-level cause
+was established. No demo-device gameplay or Windows-gameplay claim is made.
+
+Rollback completed: restore exactly the four experiment source files from
+logs/vulkan-next-before/source, with SHA-256 equality checked for each. Restore
+both pre-experiment Windows executables and bin/reSOT-android.apk. adb install -r
+logs/vulkan-next-before/installed.apk returns Success; launcher reopened. No
+uninstall, save deletion, git reset or reversion of pre-existing local edits.
+Rejected sources/APK retained under logs/vulkan-next-rejected; previous installed
+APK, Windows EXEs and source snapshots remain under logs/vulkan-next-before.
+Evidence: logs/vulkan-next-{tests,tests-build,android-build,demo-build,retail-build,
+retail}.txt and vulkan-next-launcher.png (retail title despite the filename).
+
+
+## 2026-10-21: selective descriptor binding withdrawn
+
+User reports the same location fell from over 100 FPS to 88 FPS after
+selective descriptor binding. This is user-observed, not a controlled GPU
+profile; the internal driver cause is not established. Preserve regression
+log logs/vulkan-selective-regression.txt. adb install -r of the preceding
+logs/vulkan-selective-before.apk succeeds and retail is restarted. Material
+descriptor caching is preserved. The patch script removes selective binding
+from already patched SDL trees and restores the full four-set binding.
+No new performance gain is claimed; restored performance awaits user feedback.
+
+
+## 2026-10-21: confirmed material-cache gain, selective descriptor binds
+
+The user confirms a large performance gain with the material descriptor cache
+and asks for further work. Preserve that cache. The incoming retail log
+logs/vulkan-after-material.txt has 70.9-71.7 FPS windows at 378 draws/frame,
+about 34,000 vertices and 8.4-8.8 ms executor time. This is a different view
+from the 1613/1622-draw slow view and does not establish its sustained 60 FPS.
+Shader reference waits stay fixed at 48.2 ms cumulative in these windows.
+A six-second simpleperf sample records 55,270 CPU-cycle samples (one kernel
+sample lost): executor thread 43.87% of process cycles, scanner/callees 40.94%,
+method dispatcher self 1.46%. Evidence: vulkan-after-material-profile.txt.
+These CPU samples are not GPU execution time and were not a controlled A/B.
+
+The driver still bound all four graphics descriptor sets even if only one
+uniform offset or material set changed. Add resot_descriptor_bind_vulkan.inc
+and an idempotent patch stage in tools/patch-sdl-gpu-query.py. Snapshot set
+handles before descriptor builders/cache hits, then bind the minimal changed
+contiguous interval. Vertex dynamic offsets belong to set 1, fragment offsets
+to set 3; count/index only those included in the selected interval. If no
+descriptor/offset changes, omit the descriptor bind (vertex-buffer binding
+still occurs independently). A different full resource-layout object forces
+all four sets. Track the actual bound layout separately from selected PSO
+layout and reset it on command-buffer acquisition. Existing material keys,
+resource ownership, shader math, draw ordering and visibility remain intact.
+
+Essential verification:
+
+- Apply tools/patch-sdl-gpu-query.py twice successfully; shader checks pass ten.
+- tools/build-android.ps1: both-target release APK builds (16 s).
+- Build Windows SDL3.dll and copy it to bin for both native Vulkan targets.
+- Build descriptor_bind_regression and native_gpu_smoke. Run only
+  selective_descriptor_bind via ctest: pass (0.01 s). The production helper
+  is checked for initial full binding, no-op, vertex-only/fragment-only dynamic
+  offsets, sampler-only zero-offset binding, mixed interval, and layout change.
+- Run native_gpu_smoke vulkan once with RESOT_GPU_BINDINGS_SMOKE=1: ring and
+  texture cycling/readbacks, borders, 576 simple-combiner comparisons,
+  color/depth/scissor, precise queries 4096/2048/1024/5120 and resize pass.
+  No full optimizer stress or long gameplay benchmark was repeated.
+- adb install -r bin/reSOT-android.apk succeeds, retail starts; the confirmed
+  material-cache APK is retained at logs/vulkan-selective-before.apk.
+
+Logs: logs/vulkan-selective-{android-build,sdl-build,test-build,bind-test,
+gpu-smoke,shaders}.txt. This new selective-bind build is installed for the
+user's FPS/image assessment. The confirmed large gain concerns the preceding
+material cache, not this unmeasured follow-up. No quality, resolution, saves
+or controls were changed. Both Windows/Android and both targets share the
+driver change; D3D12 behavior is unchanged. The app is left running.
+
+
+## 2026-10-21: material descriptor cache after Black comparison
+
+Compared the supplied Black checkout's native/vulkan.cpp Set/BindSet and
+frame descriptor-pool management, read-only. Black caches image/sampler
+combinations per frame and binds per-draw constants through dynamic offsets.
+reSOT's preceding driver change only retained the current descriptor set:
+A/B/A material changes could still allocate/update A a second time.
+
+Implemented an independent bounded command-local material descriptor cache
+in port/third_party/sdl-gpu-query/resot_descriptor_cache_vulkan.inc, injected
+by tools/patch-sdl-gpu-query.py into the pinned SDL Vulkan driver. It has
+64 direct-mapped lookup slots, a full key (set layout, active view/sampler
+identities and count), and immutable cached VkDescriptorSets. Collisions
+become misses; storage resources and more than eight samplers use the
+upstream builder. Cache identities reset on command-buffer acquisition.
+Descriptor pools and resources keep SDL's existing fence-based ownership;
+no cached set is modified or freed while earlier draws might consume it.
+This is shared by Windows/Android Vulkan and both targets; D3D12 is unchanged.
+No Black code, shader SDK implementation, addresses or game assets were copied.
+
+Primary guidance: [Khronos descriptor management](https://github.com/KhronosGroup/Vulkan-Samples/blob/main/samples/performance/descriptor_management/README.adoc)
+recommends content-based descriptor reuse to reduce CPU allocations/updates.
+Its published speedup is its sample's result, not a reSOT prediction.
+Further differences still requiring separate work/evidence are Black's direct
+upload ring and frame submission lifetime versus reSOT's staging/frequent
+retail visibility submissions. Guest report ordering cannot simply be removed.
+
+The input log logs/vulkan-next-retail.txt records 27.7-27.8 FPS windows at
+1613 draws/frame and about 26.6-26.9 ms executor time, plus a later 23.1 FPS
+window at the same draw count with 33.92 ms executor time. These observations
+are from the preceding continuity build and are not a controlled comparison
+against 1622-draw earlier samples. Shader reference waits remain 21.5 ms
+cumulative in these windows. This does not establish sustained 60 FPS.
+
+Essential verification only, per the user's direct-install preference:
+
+- Apply tools/patch-sdl-gpu-query.py twice to the pinned source: passes.
+- python tools/check-hlsl.py: all ten entries pass.
+- tools/build-android.ps1: release APK with both targets builds (17 s).
+- python tools/run-build-tool.py cmake --build build/deps/sdl-query-build
+  --config Release --parallel: Windows SDL3.dll builds, copied to bin.
+- Rebuild native_gpu_smoke; run once with vulkan and
+  RESOT_GPU_BINDINGS_SMOKE=1. Vertex/texture cycling, exact readbacks,
+  border cases, 576 simple-combiner comparisons, depth/scissor, precise
+  visibility counts 4096/2048/1024/5120 and resize pass. Unrelated optimized
+  fragment compiler stress is omitted, as in the preceding targeted check.
+- adb install -r bin/reSOT-android.apk succeeds; retail is started. The
+  preceding installed APK is retained as logs/vulkan-material-before.apk.
+
+Logs: logs/vulkan-material-{android-build,sdl-build,test-build,gpu-smoke,
+shaders}.txt. The material-cache build is installed for the user's FPS/image
+assessment; its device speedup and 60 FPS remain unverified. The app is left
+running. Options, internal resolution, effect quality, samples and guest draw
+order are unchanged. Existing unrelated working-tree changes are preserved.
+
+
+## 2026-10-21: first direct-install descriptor continuity build
+
+The user requests direct build installation and will assess gameplay/FPS,
+with fewer automated experiments. The 60 FPS target requires the complete
+frame below 16.7 ms; the preceding heavy-view executor still measured about
+35 ms, so this remains an objective rather than an achieved result.
+
+Inspection of the pinned SDL Vulkan driver found unconditional descriptor
+invalidation on each PSO bind and clearing of descriptor/resource identities
+on each render-pass end. tools/patch-sdl-gpu-query.py now preserves this state
+within one command buffer. Identical cached resource-layout identity is the
+admission condition for retaining clean descriptor sets. Different layouts
+mark all sets dirty; existing resource/texture-view/UBO dirty flags remain
+authoritative. Command-buffer acquisition resets the new layout identity and
+the original binding state. Offset-only changes omit a zero-write descriptor
+update call. Vulkan graphics bindings survive pass boundaries and remain
+separate from compute bindings, per the
+[Khronos specification](https://docs.vulkan.org/spec/latest/chapters/descriptorsets.html).
+No quality, resolution, visibility samples or draw order are changed.
+
+Commands/results:
+
+- python tools/patch-sdl-gpu-query.py build/deps/sdl-source/SDL3-3.4.18:
+  applied, then applied again successfully to check idempotence.
+- python tools/check-hlsl.py: ten entries pass.
+- tools/build-android.ps1: release APK builds with both targets.
+- python tools/run-build-tool.py cmake --build build/deps/sdl-query-build
+  --config Release --parallel: Windows SDL3.dll builds and is copied to bin.
+  This library is shared by both Windows native Vulkan target executables.
+- Rebuild native_gpu_smoke, then run it once with vulkan and
+  RESOT_GPU_BINDINGS_SMOKE=1. The targeted real-GPU check passes vertex-ring
+  append/wrap, cycled textures, snapshot readbacks, borders, 576 simple-combiner
+  comparisons, four color/depth/scissor passes, precise query counts
+  4096/2048/1024/5120 and resize. Only the unrelated 64 optimized-fragment
+  compiler stress was omitted; the normal full test keeps it enabled.
+- adb install -r bin/reSOT-android.apk succeeds; retail is started. The prior
+  installed APK is retained at logs/vulkan-bindings-before.apk.
+
+Logs: logs/vulkan-bindings-{android-build,sdl-windows-build,test-build,
+gpu-smoke,shaders}.txt. Device FPS/image validation is now left to the user;
+no new heavy-scene FPS measurement or 60 FPS result is claimed. The game is
+left open. Existing unrelated working-tree changes are preserved.
+
+
+## 2026-10-21: reported slowdown, independent decoder investigation
+
+The user reports the latest query-resource build feels slower. This follow-up
+uses reSOT logs, CPU sampling and same-session A/B tests, not another port.
+The new Android log contains repeated 18.4-19.3 FPS windows at 1622 draws/frame,
+about 116,000 uploaded vertices/frame and roughly 39 ms executor time.
+Reference waits remain at 43.8 ms cumulative; no compilation-skipped draws.
+The query cache stabilizes at 46 allocations with tens of thousands of reuses.
+That establishes a slow scene, not proof that allocation pooling caused it.
+An eight-second simpleperf capture has 70,448 CPU-cycle samples (7 kernel
+samples lost); the executor thread accounts for 52.20% of sampled cycles,
+49.34% in the scanner/callees, and method dispatch has 4.51% self samples.
+Evidence: ignored logs/vulkan-regression-{retail,profile}.txt.
+
+The first diagnostic build batches pure payloads but still calls the vertex
+upload setters per word. Same-session modes, each held for 32 seconds, with
+the last three five-second windows summarized by their median:
+
+| Mode | Payload dispatch | Query reuse | FPS median | Executor ms median | Draws/frame |
+| --- | --- | --- | --- | --- | --- |
+| 0 | Scalar | On | 20.9 | 37.56 | 1622 |
+| 1 | Batched | On | 21.8 | 34.15 | 1622 |
+| 2 | Scalar | Off | 22.2 | 31.40 | 1622 |
+| 3 | Batched | Off | 26.8 | 27.53 | 1622 |
+| 1 repeated | Batched | On | 24.0 | 33.82 | 1622 |
+| 3 repeated | Batched | Off | 21.2 | 35.25 | 1622 |
+
+The reversal does not reproduce the initial apparent pooling win/loss.
+FPS and CPU cost drift substantially even when draw/vertex counts match.
+CPU-frequency snapshots also vary, but were not collected synchronously with
+every window. Do not call this a proven pool regression, a controlled 28%
+speedup, or evidence that all remaining cost is in GPU shaders. Conservatively
+restore Vulkan's previous native-query allocation/retirement policy; D3D12
+keeps its tested reuse path. Precise samples, fences and report ordering stay
+intact. The opt-in developer control still permits either policy.
+
+Final implementation:
+
+- The two existing command walkers validate the contiguous packet prefix
+  against PUT/end and the physical-memory bound before offering it to the
+  executor. Pure program/constant uploads, 16/32-bit indices and inline vertex
+  payloads avoid per-word generic method dispatch. State transitions, surveys,
+  verbose logs, frame traces and overflow diagnostics keep their scalar path.
+- Vertex uploads compare/copy contiguous raw bytes, invalidating their content
+  generation once per changed run. Partial cursors, ignored invalid slots,
+  uint32 slot wrap, signed zero and NaN payloads match scalar execution.
+- RESOT_PB_PAYLOAD_BATCH=0 selects the old dispatcher. The optional developer
+  file control also permits same-session comparisons, with no file access in
+  the packet hot path and no query/draw omission.
+
+Final contiguous-upload A/B, with Vulkan query pooling off in all phases:
+
+| Same-scene phase | FPS median | Executor ms median | Draws/frame |
+| --- | --- | --- | --- |
+| Scalar reference | 20.6 | 38.40 | 1622 |
+| Contiguous uploads | 21.5 | 34.85 | 1622 |
+| Scalar reference repeated | 20.8 | 38.27 | 1622 |
+| Contiguous uploads repeated | 21.5 | 34.69 | 1622 |
+
+The reverse comparison reproduces about 9% less executor time and 3-4% more
+FPS in this heavy view. It does not resolve the remaining near-20-FPS case.
+Vertex counts remain near 116,000/frame, texture uploads near one/frame,
+reference waits fixed at 37.2 ms cumulative, and no draws skipped compiling.
+CPU timings are half-second snapshots alongside five-second FPS windows,
+so this is a repeated local comparison, not a universal frame-time guarantee.
+Evidence: logs/vulkan-ab-final-{scalar,bulk,scalar-repeat,bulk-repeat}*.txt.
+The user held the camera still for both comparisons. The final APK is
+installed; the diagnostic control file was removed after selecting batching
+on / pooling off, matching production defaults. The game remains running.
+
+Final validation commands are the documented BuildOnly commands for demo
+and retail, tools/build-android.ps1, tools/check-hlsl.py, and:
+
+```powershell
+python tools/run-build-tool.py cmake --build build/tests/native-gpu --config Release
+python tools/run-build-tool.py ctest --test-dir build/tests/native-gpu -C Release --output-on-failure
+python tools/run-build-tool.py cmake --build build/tests/vsh-generation --config Release
+python tools/run-build-tool.py ctest --test-dir build/tests/vsh-generation -C Release --output-on-failure
+```
+
+GPU/support/decoder suite: 12/12 in 112.77 s. Interpreter: 1/1, including
+raw-bit equality, mixed scalar/contiguous cursors, invalid slots and wrap.
+Build/test logs: logs/vulkan-regression-final-{android-build,demo-build,
+retail-build,tests-build,tests}.txt and vulkan-regression-vsh-build.txt.
+The device image/log are logs/vulkan-regression-final.png and
+logs/vulkan-regression-final-retail.txt. No sustained-60-FPS claim is made.
+
+The final version is built for both Windows targets and Android, and installed
+on the connected Android device with the user's restart authorization.
+All twelve GPU/support/decoder tests pass; the vertex-interpreter regression
+also verifies contiguous/scalar mixed uploads, invalid slots and cursor wrap.
+Shader checks still pass all ten entries. Windows retail's diagnostic build
+passed a 35-second Vulkan menu run. No game settings or resolution were changed.
+The original installed APK is retained at logs/vulkan-regression-before.apk;
+the attempted separate save pull stalled and was canceled, leaving device
+saves intact. Existing unrelated working-tree changes are preserved.
+
+
+## 2026-10-21: Vulkan cache, scheduling, constants and query resources
+
+Read-only comparison with Black Android native/vulkan.cpp and
+native/vk_shader.cpp; primary Khronos/SDL references and live profiling
+details are recorded in [VULKAN-PERFORMANCE.md](VULKAN-PERFORMANCE.md).
+Shared changes remove the cache lock from disk/validation work, replace
+pipeline polling with completion notification, queue missing reference jobs
+before waiting, cache unchanged vertex-program generations, avoid dirtying
+identical constants, pool completed visibility resources, and avoid repeated
+adjacent polling of the same pending fence. No generated guest C or seeds
+were edited. Existing working-tree changes were preserved.
+
+Final commands/results:
+
+```powershell
+python tools/check-hlsl.py
+.\tools\recomp.ps1 -Target xbox-demo -BuildOnly
+.\tools\recomp.ps1 -Target xbox-retail -BuildOnly
+.\tools\build-android.ps1
+python tools/run-build-tool.py cmake --build build/tests/native-gpu --config Release
+python tools/run-build-tool.py ctest --test-dir build/tests/native-gpu -C Release --output-on-failure
+python tools/run-build-tool.py cmake -S port/third_party/xboxrecomp/tests/nv2a_vsh -B build/tests/vsh-generation
+python tools/run-build-tool.py cmake --build build/tests/vsh-generation --config Release
+python tools/run-build-tool.py ctest --test-dir build/tests/vsh-generation -C Release --output-on-failure
+```
+
+Ten HLSL entries pass. Both Windows targets and the release APK (27.3 MB)
+build. Eleven GPU/support tests pass in 118.70 s, including D3D12/Vulkan
+precise visibility, color/depth/scissor readbacks, translated vertex and
+specialized fragment comparisons. Pooling assertions verify nine logical
+queries require only two native resources, with seven reuses; old normalized
+report samples survive native-handle reuse. The real compiler/cache test
+passes corrupted headers, truncated files, input mismatch, invalid SPIR-V,
+trailing garbage, four concurrent readers/writers and disabled caching.
+The interpreter test passes cursor advancement and bit-exact dirty-generation
+checks for repeated values, signed zero and different NaN payloads.
+
+Build/test logs: ignored logs/vulkan-audit-{shader-check,tests-build,
+final-gpu-tests,cache-test,vsh-build,demo-build,retail-build,android-build}.txt.
+Sandbox MSBuild FileTracker and Gradle native-loader failures were retried
+outside the sandbox. An intermediate test rebuild collided with the running
+test executable; the final sequential build/test run succeeds.
+
+Windows demo's earlier scheduling/cache build ran for 35 seconds with:
+`tools/run.ps1 -Target xbox-demo -Windowed -Seconds 35 -NoVsync -Set
+@{RESOT_RENDERER='vulkan';RECOMP_PAD_SCRIPT='2000:a:200,6000:a:200';RESOT_GPU_DEBUG='1'}`.
+Menu windows reach 189-199.8 FPS, 66 background PSOs, zero skipped draws,
+154 wait calls totalling 4.7 ms; logs/vulkan-audit-windows-demo.txt.
+These are warm, uncontrolled startup observations, not an A/B speedup.
+The final retail Windows build also ran the equivalent 35-second command;
+details are retained in logs/vulkan-audit-windows-retail.txt.
+
+The preceding Android scheduling/cache APK was installed and retail started.
+The user played through garden views and reports a large improvement,
+explicitly clarifying that dips toward 20 FPS also existed before this work.
+Screenshot logs/vulkan-audit-android-retail.png shows textured 1401_Cour
+at 43.6 FPS. The live log records heavy windows at 25.4/25.6 FPS with
+1,467-1,591 draws/frame, about 28 ms executor time and unchanged cumulative
+reference wait time (23.7 ms). The eight-second simpleperf sample confirms
+substantial CPU command/encoding work, not a shader-compilation explanation.
+Five-second log averages do not capture every instantaneous 20 FPS value.
+Profiling is observational, not a controlled benchmark.
+
+The final constant/query-pool APK is built but not installed over that
+active game. Its device FPS impact, demo Android runtime behavior, full
+gameplay correctness and sustained 60 FPS remain unverified. No game options,
+quality, resolution or saves were changed for the live collection.
+
+
+## 2026-10-21: retail startup and halo follow-up
+
+Rooted Android stacks and loader heap captured an orphaned streaming chunk: item+4=0x20000 with empty task queues and no completed bytes. Retail callback 0x00096130 now defers counter changes until the scheduler acquires its existing critical section (manager 0x00758634, +0x2C); cancellation discards removed-item results before unlock. User confirmed the updated Android build started successfully; repeated cold-start stress testing remains pending. Windows retail/demo and Android builds succeeded.
+
+User confirms halo occlusion works, but white discs remain. The live DXT1 texture at guest 0x81230000 was decoded: the original image has soft rays and falloff. A material-specific presentation adjustment scales final halo RGB constants by 0.25 (net 0.5 texture RGB after the guest 2x combiner), before additive blending/bloom; no texture asset is changed. This is an intentional visual adjustment, not a proven Xbox emulation correction. Shader checks (10), Windows retail build and Android release build passed; APK installed. Visual confirmation of this intensity change remains pending.
+
+## 2026-10-21: Android retail fountain return, pipeline correctness and lifecycle
+
+User input: Desktop/logs/xbox-retail-err.txt (13:56-14:01), screenshot of
+1401_CourUpperLevel, and clarification that the final sub-1-FPS windows
+followed backgrounding; reopening then showed only touch controls.
+Immediately after 1401_MgcFntRm loads, the original log reports invalid
+pushbuffer jumps out of physical RAM, including float word 3F000000 at
+800E8C38. Pipeline count rises to 737 and 6,243 guest draws are skipped.
+This establishes command-stream corruption and missing work, not a broken
+translated vertex opcode.
+
+Runtime corrections: retail's legacy fence mirror now snapshots its time
+before scanning and commits that snapshot afterwards. Demo keeps its own
+policy. Cold translated pipelines use a reference pipeline; if necessary,
+wait for that reference rather than dropping geometry, effect writes or
+occlusion samples. Inactive blend/depth/culling state is canonicalized in
+PSO keys on both native backends. Explicitly enabling fully ordered fences
+was rejected: an experimental Windows retail run stalled at one flip for
+35 seconds; the final build retains the existing opt-in switch.
+
+Validation completed for the fountain revision:
+- python tools/check-hlsl.py: all ten entries pass.
+- tools/recomp.ps1 -Target xbox-retail -BuildOnly and xbox-demo equivalent:
+  successful (logs/retail-room-fix-build.txt, logs/demo-room-fix-build.txt).
+- tools/build-android.ps1: release APK builds with both targets
+  (logs/android-room-fix-build.txt).
+- ctest --test-dir build/tests/native-gpu -C Release -R
+  "native_vulkan|vertex_program_vulkan" --output-on-failure: 2/2 pass,
+  109.29 s and 6.97 s (logs/room-fix-gpu-tests.txt). These are shader,
+  query and GPU readback regressions, not a synthetic reproduction of the
+  guest completion-mirror race.
+- Windows retail: tools/run.ps1 -Target xbox-retail -Windowed -Seconds 35
+  -NoVsync -Set @{RESOT_RENDERER='vulkan';
+  RECOMP_PAD_SCRIPT='2000:a:200,6000:a:200';RESOT_GPU_DEBUG='1'}.
+  Final steady menu samples 154.4-160.2 FPS; 75 background pipelines,
+  zero skipped draws, 33 reference waits totalling 51.9 ms. No out-of-RAM
+  pushbuffer walks. Evidence: logs/room-fix-windows-retail.txt.
+- Android: adb install -r bin/reSOT-android.apk, then GameActivity with
+  target retail and the installed xbox-retail folder. Copied saves first
+  to /sdcard/Download/resot-saves-before-room-fix. The user played the
+  fountain passage and confirms that the garden renders correctly on
+  return. Retained log: logs/room-fix-android-fountain-confirmed.txt;
+  no out-of-RAM PB walks, zero compilation-skipped draws, 254 compiled
+  pipelines and 61 reference waits totalling 157.2 ms. This confirms this
+  route, not every room transition. Significant scene-dependent FPS drops
+  remain (30.4-59.5 FPS examples); waits stay unchanged through several
+  drops, so shader compilation alone does not explain them.
+
+Further user report: bright white light sprites cover background objects
+and remain visible through occluders. Captured the prepared garden view
+(logs/retail-lights-before.png) and one-frame trace
+(logs/retail-light-trace.txt). The trace contains additive light quads and
+alternating ALWAYS/LEQUAL visibility passes. Correction is still under
+investigation; do not describe the light rendering as validated.
+
+Android lifecycle work is separate: SDL_events.h requires immediate event
+watchers for lifecycle events, so main_android.c now uses SDL_AddEventWatch.
+A device test then reproduced the black return and logcat reported an
+abandoned BufferQueue/No such device on Vulkan's old native window. The
+user confirms cold restart renders again. The next revision reclaims only
+the presentation window after a foreground generation change, retaining
+guest images and the composed frame. It builds (logs/android-room-fix-
+surface-build.txt). A controlled Home/foreground cycle records renderer
+suspended, renderer resumed and Vulkan presentation surface reclaimed (1).
+The following device screenshot (logs/retail-surface-fixed.png) shows the
+textured garden at 35.9 FPS, with game draws and visibility reports advancing.
+This verifies one cycle, not repeated backgrounding or device-loss recovery. Windows has
+no Android SurfaceView lifecycle and needs no analogous host change.
+
+MSBuild/Gradle/adb needed unsandboxed execution after access/native-loader
+failures. Generated guest C, seeds and XBE facts were not modified.
+
+
 ## 2026-10-21: clear the Android upper-left HUD and FPS panel
 
 The user approves the gold/blue artwork on device. Their 2712x1220 retail
@@ -3608,3 +4268,55 @@ Known target facts: entry point
 `0x00335753`; D3D fence routines `sub_00370080` / `sub_00370140` with device
 pointer global `0x0037B648` and the same `+0x2C` / `+0x30` offsets as the
 demo; overlay disable code at `0x00379027`.
+
+
+### 2026-10-22: retail missing music investigation
+
+User reports no retail menu or battle music, with menu effects audible; user also confirms cutscene audio is no longer delayed. Existing device log shows archive opens and sustained APU output but does not identify music voices. Added bounded APU-MUSIC onset, first-signal routing and early stream-stop diagnostics. Audio decoding, routing and queue behavior are unchanged. Ran python tools/check-hlsl.py (10 entries pass), tools/recomp.ps1 -Target xbox-demo -BuildOnly and -Target xbox-retail -BuildOnly. Android release build and installation recorded in logs/retail-music-build-android.txt. No game launch or listening test by agent. Music cause and restoration are NOT verified. Previous APK and edited source preserved in logs/retail-music-backup/.
+
+
+2026-10-22 retail device diagnostic follow-up: pulled files/logs/xbox-retail-err.txt without launching the game. Voices 64-68 have looping PCM buffer formats and no first-signal trace; voices 69-71 reach bins 0/1 with envelope 1. No early stream-stop trace observed. One 10-second interval has zero nonsilent blocks with output queue 9 and no dropped blocks at that point. This does not identify which voices carry music or establish the root cause. See logs/retail-music-analysis.txt. No runtime behavior changes or APK installation in this follow-up.
+
+
+### 2026-10-22: retail synchronous streaming completion ordering
+
+User reports that clearing app data does not restore menu/gameplay music;
+cutscene music remains audible and cutscene timing is now correct.
+Passive shell/ADB capture of the already running retail process (no launch or
+input by agent) found looping PCM voices 64-68 active and unpaused. Voice 68
+has a progressing cursor. Streaming item 0x744B8990 has item+0=0xFFFEADD9 and
+item+4=0x20000 in the captured session. These are session heap addresses,
+not XBE constants. Binary snapshots remain ignored under logs/music-*.bin.
+This does not by itself identify the voice content or prove music restoration.
+
+Source evidence: retail generated C for 0x00095E80 and 0x00095F60 polls the
+task backend while holding manager+0x2C. Callback 0x00096130 originally updates
+item+0/+4 synchronously. The prior override deferred even callbacks already
+holding this lock until another acquisition, allowing the consumer at
+0x00095BE0 to see completed chunks before their byte counts were published.
+kernel_rtl.c now tracks recursive manager-lock ownership in TLS and performs
+the original counter updates immediately for those callbacks. Other-thread
+callbacks retain the queued path; cancellation cleanup remains in place.
+Demo behavior, audio output pacing and cutscene queue recovery are unchanged.
+
+Checks: python tools/check-hlsl.py, tools/recomp.ps1 -Target xbox-demo
+-BuildOnly, tools/recomp.ps1 -Target xbox-retail -BuildOnly, and
+tools/build-android.ps1. Build logs are logs/retail-music-fix-*.txt.
+Previous source/APK/Windows executables: logs/retail-music-fix-before/.
+Compilation does not establish listening correctness; no game launch or
+playback test by agent. User must confirm menu/battle music and cutscene sync.
+REA native provider was unconfigured; static conclusions use published lifted
+C and passive ADB snapshots, not REA decompilation Evidence.
+
+Deployment: adb install -r bin/reSOT-android.apk returned Success. New APK SHA-256: 9612886DFE2820F78E9E8B188FC4ADF9430F7F5FE51C1BFCB40AB08211FDA911. User listening confirmation pending.
+
+
+### 2026-10-22: music still absent after synchronous callback follow-up
+
+User reports no menu/gameplay music after the previous APK. Its listening outcome is a failure to restore music. No claim of restored music is made. Passive ADB heap capture of the running session traces driver 0x004210C8 through TAdder 0x00424C28, ThemePath 0x00425238, TFader 0x00426148, rate conversion and the resource reader. The pending source request remains at completed bytes 0xFFFEADD9 and pending 0x20000. Addresses above identify retail XBE vtables; session heap addresses are only in ignored logs/music-heap2.bin. This demonstrates the previous change was insufficient, not which individual completion was lost.
+
+Restricted stream_discard_removed_locked to the verified cancellation release at retail call 0x00095B30 (return 0x00095B36). Previously every scheduler lock release ran removed-item cleanup, without establishing cancellation. Added a 32-line completion trace (queued/owned/applied/cancelled) to distinguish completion delivery from cleanup on the next user run. No output queue, pitch, decoder or renderer changes. Checks: python tools/check-hlsl.py; Windows demo/retail BuildOnly; Android release build. Logs: logs/retail-music-cleanup-*.txt. Previous APK and edited source: logs/retail-music-cleanup-before/. No game launch or listening test by agent. Restoration remains unverified.
+
+Deployment blocked: adb install -r returned no devices/emulators found. This follow-up APK is built but NOT installed on the device. Previous installed APK remains the user-tested version without music.
+
+Deployment follow-up: device reconnected; adb install -r bin/reSOT-android.apk returned Success. Game not launched by agent. User music listening confirmation pending.

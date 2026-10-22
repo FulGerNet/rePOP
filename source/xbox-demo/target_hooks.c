@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "target.h"
+#include "../../port/game/resot_menu_pointer.h"
 
 #if defined(_MSC_VER)
 #define RESOT_TLS __declspec(thread)
@@ -58,7 +59,9 @@ extern void sub_00018EA0_gen(void);
 void sub_00018EA0(void)
 {
     static int was_down;
-    int down = resot_movie_skip_down();
+    int down;
+    resot_menu_movie(GMEM32(0x0034AC34u) != 0); /* handle read by 0x00018EA0 */
+    down = resot_movie_skip_down() | resot_menu_movie_tap();
     int pressed = down && !was_down;
     was_down = down;
     if (pressed && GMEM32(0x0034AC34u)) { /* Bink handle, read at 0x00018EA0 */
@@ -269,7 +272,14 @@ void sub_000EF340_enter(void)
 
 void sub_000EF140_enter(void)
 {
+    extern RESOT_TLS uint32_t g_edi, g_ebp;
     uint8_t *mem = (uint8_t *)(uintptr_t)g_xbox_mem_offset;
+
+    /* 0x000EF5C6..0x000EF5D7 publishes left/top/width/height to D3D.
+     * At this existing call (0x000EF5A5), EDI is top and EBP is height;
+     * screen+0xA4 is the full height read at 0x000EF389. */
+    if (GMEM32(g_esp) == 0x000EF5AAu && g_edx == 0x00650C20u)
+        resot_menu_camera_viewport(g_edi, g_ebp, GMEM32(GMEM32(0x0064D29Cu) + 0xA4u));
 
     if (widen_factor() > 1.0f
             && *(const uint32_t *)(mem + g_esp) == 0x000EF5AAu
@@ -401,7 +411,12 @@ void sub_0031C68A(void)
         stdcall_return(1167, 2);
         return;
     }
-    stdcall_return(xbox_HlePadState(0, (uint8_t *)((uintptr_t)g_xbox_mem_offset + st)), 2);
+    {
+        uint8_t *state=(uint8_t *)((uintptr_t)g_xbox_mem_offset+st);
+        uint32_t result=xbox_HlePadState(0,state);
+        if(!result) resot_menu_pointer_pad(state);
+        stdcall_return(result,2);
+    }
 }
 
 /* XInputSetState */
@@ -438,6 +453,7 @@ static int menu_trace(void)
 }
 
 static int hidden_menus(void);
+static void native_reset(void);
 static void native_build(uint32_t menu);
 static void native_bind(void);
 
@@ -447,9 +463,14 @@ static void native_bind(void);
  * menu, flags, top, spacing; floats in screen fractions). */
 #define MENU_LOADMAP_OPEN_RET 0x0015E854u /* 0x0023F110 building the page */
 #define MENU_TITLE_OPEN_RET   0x0015EB37u /* 0x0023F110 opening the title page */
+#define MENU_E3_OPEN_RET      0x0015E8EAu /* 0x0023F110 opening the E3 main page */
 
 void sub_0023F110_enter(void)
 {
+    /* 0x0015D3B0 rebuilds these pages after leaving a game. Guest handles
+     * belong to that construction, not to the lifetime of the host process. */
+    if (GMEM32(g_esp) == MENU_E3_OPEN_RET && hidden_menus())
+        native_reset();
     if (menu_trace())
         fprintf(stderr, "[MENU] page open  menu=%08X ret=%08X flags=%08X top=%g step=%g\n",
                 g_eax, GMEM32(g_esp), GMEM32(g_esp + 8), GMEMF(g_esp + 16), GMEMF(g_esp + 20));
@@ -834,6 +855,18 @@ static uint32_t native_build_page(uint32_t menu, NativePage *p)
 }
 
 static int s_native_built, s_native_bound;
+
+static void native_reset(void)
+{
+    int i;
+    s_native_built = s_native_bound = s_entries_added = 0;
+    s_resot_root = s_bind_edx = s_menu_vars = 0;
+    memset(s_pages, 0, sizeof s_pages);
+    for (i = 0; i < MENU_ENTRIES; i++) {
+        s_entries[i].choice = 0;
+        s_entries[i].bound = 0;
+    }
+}
 
 static void native_build(uint32_t menu)
 {

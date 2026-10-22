@@ -30,12 +30,16 @@ std::filesystem::path cache_path(const void *input, size_t bytes, uint32_t kind)
     const auto *p = static_cast<const unsigned char *>(input);
     for (size_t i=0; i<bytes; ++i) hash=(hash^p[i])*1099511628211ull;
     char name[64]; std::snprintf(name,sizeof name,"translated-v%u-%u-%016llx.spv",cache_version,kind,(unsigned long long)hash);
-    return cache_directory/name;
+    // Only configuration needs synchronization. Disk I/O and SPIR-V validation
+    // are independent per module and must not serialize the pipeline workers.
+    std::lock_guard<std::mutex> guard(cache_mutex);
+    return cache_directory.empty() ? std::filesystem::path{} : cache_directory/name;
 }
 bool load(const void *input,size_t bytes,uint32_t kind,std::vector<uint32_t>& output) {
-    std::lock_guard<std::mutex> guard(cache_mutex);
-    if (cache_directory.empty() || bytes>4*1024*1024) return false;
-    std::ifstream file(cache_path(input,bytes,kind),std::ios::binary);
+    if (bytes>4*1024*1024) return false;
+    const auto path=cache_path(input,bytes,kind);
+    if (path.empty()) return false;
+    std::ifstream file(path,std::ios::binary);
     Header h{}; file.read(reinterpret_cast<char*>(&h),sizeof h);
     if (!file || h.magic!=0x52535453 || h.version!=cache_version || h.kind!=kind || h.input_bytes!=bytes ||
         h.output_bytes<20 || h.output_bytes%4 || h.output_bytes>16*1024*1024) return false;
@@ -47,10 +51,9 @@ bool load(const void *input,size_t bytes,uint32_t kind,std::vector<uint32_t>& ou
     return validator.Validate(output);
 }
 void save(const void *input,size_t bytes,uint32_t kind,const std::vector<uint32_t>& output) {
-    std::lock_guard<std::mutex> guard(cache_mutex);
-    if (cache_directory.empty()) return;
     static std::atomic<uint64_t> serial{0};
     auto path=cache_path(input,bytes,kind), temporary=path;
+    if (path.empty()) return;
     temporary += "."+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+
                  "."+std::to_string(serial++)+".tmp";
     Header h{0x52535453,cache_version,kind,(uint32_t)bytes,(uint32_t)(output.size()*4)};
@@ -58,7 +61,8 @@ void save(const void *input,size_t bytes,uint32_t kind,const std::vector<uint32_
       if (!file) return;
       file.write(reinterpret_cast<const char*>(&h),sizeof h); file.write(static_cast<const char*>(input),bytes);
       file.write(reinterpret_cast<const char*>(output.data()),h.output_bytes);
-      file.close(); if (!file) return; }
+      file.close();
+      if (!file) { std::error_code ec; std::filesystem::remove(temporary,ec); return; } }
     std::error_code ec;
 #ifdef _WIN32
     // Windows rename does not replace an existing (possibly invalid) cache entry.

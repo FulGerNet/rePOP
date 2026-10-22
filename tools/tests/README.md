@@ -1,5 +1,16 @@
 # Regression tests
 
+## Menu pointer (Windows host test, both Xbox layouts)
+
+Run `python tools/test-menu-pointer.py`. It compiles the production shared
+mouse/touch bridge against synthetic guest objects for both target layouts.
+Checks include row selection, separate direction/activation releases, a single
+activation per tap, drag cancellation, page changes during a press, physical
+input priority, idle movie polling, Bink taps, cinematic viewport state,
+pillarbox misses and invalid guest metadata. Products stay in
+`build/menu-pointer-tests/`. This does not replace mouse testing in the actual
+window or Android device touch/lifecycle validation.
+
 Run `python tools/test-apu-irq.py` on Windows to compile the demo's actual APU
 interrupt dispatcher with mock kernel/guest callbacks. It checks that 10,000
 masked polls preserve the pending IRQ and that removing the mask delivers

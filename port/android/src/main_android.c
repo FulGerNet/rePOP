@@ -74,6 +74,23 @@ static __thread int s_profile_role = -1;
 static pthread_mutex_t s_foreground_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t s_foreground_changed = PTHREAD_COND_INITIALIZER;
 static int s_foreground = 1;
+static unsigned s_resume_generation;
+/* RE-SoT: thermal events set an effective cap without touching the user's INI.
+ * No JNI, temperature polling or allocation on the frame pacing hot path. */
+static int s_thermal_frame_limit;
+JNIEXPORT void JNICALL Java_com_fulger_resot_GameActivity_nativeThermalFrameLimit(
+    JNIEnv *env, jclass cls, jint fps)
+{
+    (void)env; (void)cls;
+    if (fps!=0 && fps!=30 && fps!=45 && fps!=60 && fps!=90) return;
+    int old=__atomic_exchange_n(&s_thermal_frame_limit,(int)fps,__ATOMIC_RELAXED);
+    if(old!=fps) fprintf(stderr,"[POWER] Android thermal FPS budget: %d (0 = user limit)\n",(int)fps);
+}
+int resot_android_effective_frame_limit(int configured)
+{
+    int cap=__atomic_load_n(&s_thermal_frame_limit,__ATOMIC_RELAXED);
+    return cap && (!configured || cap<configured)?cap:configured;
+}
 
 /* Park GPU work when the activity is hidden. The SDL event thread remains
  * available to wake it, so no polling or guest timing changes are needed. */
@@ -87,10 +104,32 @@ void resot_android_wait_foreground(void)
 static void set_foreground(int active)
 {
     pthread_mutex_lock(&s_foreground_lock);
+    if (active && !s_foreground) ++s_resume_generation;
     s_foreground = active;
     pthread_cond_broadcast(&s_foreground_changed);
     pthread_mutex_unlock(&s_foreground_lock);
     fprintf(stderr,"[POWER] renderer %s\n",active?"resumed":"suspended in background");
+}
+
+unsigned resot_android_resume_generation(void)
+{
+    unsigned generation;
+    pthread_mutex_lock(&s_foreground_lock);
+    generation = s_resume_generation;
+    pthread_mutex_unlock(&s_foreground_lock);
+    return generation;
+}
+
+/* SDL queues Android lifecycle events just before its event pump may block
+ * on pause. Handle them when queued, as SDL_events.h requires, rather than
+ * waiting for SDL_WaitEventTimeout to return. This also works if the GPU
+ * thread pumps lifecycle events while Android replaces its native surface. */
+static bool SDLCALL lifecycle_watch(void *unused, SDL_Event *event)
+{
+    (void)unused;
+    if (event->type == SDL_EVENT_WILL_ENTER_BACKGROUND) set_foreground(0);
+    if (event->type == SDL_EVENT_DID_ENTER_FOREGROUND) set_foreground(1);
+    return true;
 }
 
 /* Keep the display request in step with the shared live FPS option. */
@@ -434,6 +473,13 @@ int SDL_main(int argc, char **argv)
     set_default("RECOMP_APU_DSP_ACK", "gp+0x810");
     set_default("RECOMP_HEAP_RECLAIM", "1");
     set_default("RESOT_RENDERER", "vulkan");
+    /* RE-SoT: opt-in same-scene packet decoder A/B; no per-frame file checks.
+     * The shared executor polls this existing file at its report cadence. */
+    if (access("pb-payload-control", F_OK) == 0)
+        set_default("RESOT_PB_PAYLOAD_CONTROL", "pb-payload-control");
+    /* RE-SoT: opt-in live geometry-cache comparison, shared native encoder. */
+    if (access("geometry-cache-control", F_OK) == 0)
+        set_default("RESOT_NATIVE_GEOMETRY_CONTROL", "geometry-cache-control");
     /* Opt-in developer frame capture: avoid a per-frame filesystem probe
      * in ordinary runs. The second file triggers the existing one-frame trace. */
     if (access("frame-trace-enable", F_OK) == 0)
@@ -447,6 +493,10 @@ int SDL_main(int argc, char **argv)
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO | SDL_INIT_EVENTS)) {
         __android_log_print(ANDROID_LOG_ERROR, TAG, "SDL_Init: %s", SDL_GetError());
+        return 1;
+    }
+    if (!SDL_AddEventWatch(lifecycle_watch, NULL)) {
+        fail("Could not register Android lifecycle handling.");
         return 1;
     }
     {
@@ -514,8 +564,6 @@ int SDL_main(int argc, char **argv)
     for (;;) {
         SDL_Event event;
         while (SDL_WaitEventTimeout(&event, 8)) {
-            if (event.type == SDL_EVENT_WILL_ENTER_BACKGROUND) set_foreground(0);
-            if (event.type == SDL_EVENT_DID_ENTER_FOREGROUND) set_foreground(1);
             if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_TERMINATING) {
                 fprintf(stderr, "  [FBWIN] close requested; exiting game process\n");
                 fflush(stderr);

@@ -156,6 +156,12 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
     int i;
 
+    /* Retail 0x00096130 is deliberately left to the lifted callback: its
+     * completed/pending byte counters must change before the task backend
+     * returns to consumers 0x00095BE0/0x00095E80. Deferring that update until
+     * another scheduler lock acquisition starved menu/gameplay music.
+     * Restoring the original callback was heard on Windows (2026-10-22). */
+
     if (s_trace_count < 0)
         trace_init();
     for (i = 0; i < s_trace_count; i++)

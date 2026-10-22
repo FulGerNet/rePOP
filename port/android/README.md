@@ -28,6 +28,15 @@ remain under validation; see [VALIDATION.md](../../docs/VALIDATION.md).
 
 ## What is in the APK
 
+Version 0.3.0 (Android versionCode 5) includes the original retail music-stream
+completion path, the demo menu lifecycle correction and removal of retail's
+pause Xbox Live entry. Tap native menu rows directly; swipe right to go back
+or use Android Back. The pad overlay hides automatically in menus, Bink movies
+and camera scenes with cinematic bars, then restores the player's visibility
+preference in gameplay. A tap skips a Bink movie. Physical pads and keyboard
+remain available. This APK builds; device touch/scene transitions and music
+listening have not been checked because no ADB device was connected.
+
 Version 0.2.0 (Android versionCode 4) bundles
 [the supplied Android defaults](default-options.ini): Vulkan, unlimited FPS,
 VSync/glow/logs off, 480p (100%), post-processing Low and look sensitivity 200%.
@@ -419,3 +428,55 @@ can still occur until a pipeline is ready. `RESOT_NATIVE_TRANSLATE=0` and
 `RESOT_ASYNC_PIPELINES=0` forces synchronous compilation. See
 [the shader study](../../docs/VULKAN-PERFORMANCE.md) and
 [validation](../../docs/VALIDATION.md) for scope and observed results.
+
+## Developer packet performance comparisons
+
+The shared executor batches only pure shader/constant/index/inline payloads.
+`RESOT_PB_PAYLOAD_BATCH=0` selects scalar dispatch. Surveys, verbose method
+logging and active frame traces retain the original per-word path.
+
+For same-session developer comparisons, `RESOT_PB_PAYLOAD_CONTROL` may point
+to an ASCII file containing one digit: 0 scalar/query reuse on, 1 batched/reuse
+on, 2 scalar/reuse off, 3 batched/reuse off. It is polled at the slow diagnostic
+cadence; wait at least 15 seconds after changing it before measuring. Production
+defaults are batched uploads and Vulkan query reuse off; D3D12 keeps reuse.
+The log reports mode and cumulative batched words/packets. Compare the same
+scene, camera, settings, draw counts and warm caches; discard mode transitions.
+
+On Android, creating `pb-payload-control` in the app's external files directory
+before game startup enables this optional control. Remove it after testing.
+Windows uses the environment path directly (e.g. the run script's `-Set`).
+This is diagnostic-only; no launcher/options UI or game defaults are changed.
+
+
+Vulkan reuses input geometry already uploaded into its vertex/index rings
+(2026-10-22), shared with Windows Vulkan. It compares the complete source data,
+indices and input state before each reuse. A changed/cycled range uses the
+normal path. Snapshot storage is bounded to 16 MiB; inline and oversized
+inputs remain uncached. Draws, constants, visibility and graphics quality stay
+unchanged. RESOT_NATIVE_GEOMETRY_CACHE=0 disables this developer feature.
+RESOT_NATIVE_GEOMETRY_CONTROL may point to an ASCII 0/1 file polled every five
+seconds for comparisons. Android enables this optional control only when
+geometry-cache-control exists in the app files folder at game startup.
+Compare identical views with warm caches; counters alone do not establish FPS.
+See [validation](../../docs/VALIDATION.md) for the installed build's limits.
+
+
+Shadow follow-up (2026-10-22): known projected character shadows are retained
+even when screen post-processing is Off, at that setting's reduced map size.
+RGB565 targets sample with implicit alpha one and known projected receivers
+are bounded to the shadow footprint. Shared Windows/Android builds compile;
+visual correctness remains for the user's gameplay check.
+
+Touch pictograms now show an eye for first-person look, a camera for overhead
+view, a runner/wall action for RT, and a jumping figure with motion marks for A.
+Bindings and saved control placement are preserved.
+
+Android thermal events temporarily cap rendering at 90/60/45/30 FPS for
+Light/Moderate/Severe/Critical heat reports. A lower selected FPS limit wins;
+cooling restores the configured limit after 30 seconds. The saved preference
+is unchanged; display refresh follows the effective cap. Android SDL audio
+also recovers stale queues after a backlog/stall and uses a smaller prime.
+The retail APU scheduler now tolerates short Android scheduling delays without
+immediately discarding elapsed audio time. Cutscene sync and thermal benefit
+await user testing; the APK was installed without launching it.

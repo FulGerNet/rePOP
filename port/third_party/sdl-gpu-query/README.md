@@ -1,5 +1,35 @@
 # reSOT native GPU query extension
 
+Selective descriptor binding was withdrawn after the Android user reported
+a drop from over 100 FPS to 88 FPS in the same location. The full four-set
+bind is restored; material descriptor caching remains enabled. The helper
+and contract test are retained as experimental evidence, not active code.
+
+`resot_descriptor_cache_vulkan.inc` adds a 64-slot command-local material
+descriptor lookup. Eligible fragment sets contain up to eight combined
+texture/sampler bindings and no storage resources. The complete key includes
+the descriptor-set layout and all active image-view/sampler identities; a
+hash collision becomes a miss. A previous A set can be reused after A/B/A
+material switches without allocating/updating it again. Sets stay immutable
+and owned by SDL's command-buffer descriptor pool. Fresh recordings clear
+lookup identities, and larger/storage layouts use the upstream builder.
+The technique was compared with Black's per-frame material cache, without
+copying code; reSOT uses a bounded command-buffer lifetime to match SDL's
+existing resource/fence ownership.
+
+The Vulkan patch also preserves graphics descriptor handles and tracked
+resource identities across render-pass boundaries in the same command buffer.
+An identical cached resource-layout object leaves existing descriptor dirty
+flags intact rather than marking every set dirty on every PSO change. Changed
+resources, cycled texture views, UBO backing changes and different layouts
+still invalidate the affected sets. Command-buffer acquisition resets all
+state. Uniform-offset-only updates omit zero-write vkUpdateDescriptorSets.
+This follows Vulkan's descriptor-layout compatibility/binding lifetime rules;
+compute and graphics have separate descriptor bind points. No persistent
+descriptor contents are overwritten while earlier draws use them.
+See tools/patch-sdl-gpu-query.py for the version-checked/idempotent source
+patch. This is shared by Android Vulkan and Windows Vulkan; D3D12 is unchanged.
+
 SDL GPU 3.4.18 does not expose occlusion queries in its public API. These
 MIT-licensed additions compile inside the pinned SDL D3D12/Vulkan driver
 translation units and expose a small versioned ABI. reSOT never guesses a

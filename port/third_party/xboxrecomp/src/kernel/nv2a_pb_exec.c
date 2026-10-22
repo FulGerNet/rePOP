@@ -3100,6 +3100,9 @@ static void tex_stage_method(uint32_t method, uint32_t param)
         record_tex_reg(method, param);
 }
 
+/* RE-SoT: bounded scanner payload runs share the exact upload state below. */
+#include "nv2a_pb_payload.inc"
+
 void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
 {
     static int inited;
@@ -3146,7 +3149,9 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
         static int all = -1;
         if (all < 0)
             all = getenv("RECOMP_FRAME_TRACE_METHODS") != NULL;
-        if (all && !(method >= 0x1800 && method < 0x1A00))
+        if ((all || (method >= 0x0300 && method <= 0x0378) ||
+                    method == 0x0214 || (method >= 0x17C8 && method <= 0x17D0)) &&
+            !(method >= 0x1800 && method < 0x1A00)) /* RE-SoT: retain light masks/depth/query evidence without full vertex-program dumps. */
             fprintf(stderr, "[FTRACE]   m %u:%04X = %08X%c", subch, method,
                     param, 10);
     }
@@ -3707,6 +3712,19 @@ static void peek_chain(void)
 
 void nv2a_pb_exec_report(void)
 {
+    /* RE-SoT: observe payload coverage; no state/draw methods are omitted. */
+    {
+        /* RE-SoT: optional developer A/B file is read only at this slow report
+         * cadence, never per packet. Zero selects the original dispatcher. */
+        const char *control = getenv("RESOT_PB_PAYLOAD_CONTROL");
+        if (control) {
+            FILE *f = fopen(control,"r");
+            if (f) { int mode = fgetc(f); fclose(f);
+                if (mode >= '0' && mode <= '3') s_pb_payload_enabled = (mode-'0') & 1; }
+        }
+        fprintf(stderr,"[PB] payload batching: mode %d, %llu words in %llu packets\n",
+                s_pb_payload_enabled,(unsigned long long)s_pb_payload_words,(unsigned long long)s_pb_payload_batches);
+    }
     peek_addresses();
     peek_chain();
     if (getenv("RECOMP_FIND_NAN")) {

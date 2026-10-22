@@ -24,6 +24,7 @@
 
 #include "platform/win32_compat.h"
 #include "xinput_xbox.h"
+#include "../../game/resot_menu_pointer.h"
 
 extern void xbox_FramebufferHostKey(int vk, int down);
 extern void xbox_FramebufferHostMouse(int dx, int dy);
@@ -41,6 +42,26 @@ static pthread_mutex_t s_touch_lock = PTHREAD_MUTEX_INITIALIZER;
 /* SDL gamepad axes (lx, ly, rx, ry, lt, rt) and SDL_GamepadButton bits. */
 static int32_t s_touch[7];
 static volatile int s_rumble;      /* 0..255, for the phone's vibrator */
+
+JNIEXPORT jint JNICALL Java_com_fulger_resot_TouchControls_nativeScene(JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return resot_menu_scene();
+}
+
+JNIEXPORT void JNICALL Java_com_fulger_resot_TouchControls_nativeViewport(
+    JNIEnv *env, jclass cls, jfloat aspect)
+{
+    (void)env; (void)cls;
+    resot_menu_pointer_viewport(aspect);
+}
+
+JNIEXPORT void JNICALL Java_com_fulger_resot_TouchControls_nativePointer(
+    JNIEnv *env, jclass cls, jfloat x, jfloat y, jint action)
+{
+    (void)env; (void)cls;
+    resot_menu_pointer_event(x, y, action);
+}
 
 JNIEXPORT void JNICALL Java_com_fulger_resot_TouchControls_nativeState(
     JNIEnv *env, jclass cls, jint lx, jint ly, jint rx, jint ry, jint lt, jint rt, jint buttons)
@@ -149,6 +170,17 @@ static int vk_from_key(SDL_Keycode key, SDL_Scancode scan)
 
 static volatile int s_back_down;
 
+/* Android mice use the same absolute menu path as the Windows host. */
+static void menu_mouse(SDL_WindowID window, float x, float y, int action)
+{
+    int w = 0, h = 0;
+    SDL_Window *win = SDL_GetWindowFromID(window);
+    if (win && SDL_GetWindowSize(win, &w, &h) && w > 0 && h > 0) {
+        resot_menu_pointer_viewport((float)w / h);
+        resot_menu_pointer_event(x / w, y / h, action);
+    }
+}
+
 /* Called on the SDL thread for every event (main_android.c). */
 void resot_android_input_event(const SDL_Event *e)
 {
@@ -169,12 +201,23 @@ void resot_android_input_event(const SDL_Event *e)
         break;
     }
     case SDL_EVENT_MOUSE_MOTION:
-        if (e->motion.which != SDL_TOUCH_MOUSEID)
-            xbox_FramebufferHostMouse((int)e->motion.xrel, (int)e->motion.yrel);
+        if (e->motion.which != SDL_TOUCH_MOUSEID) {
+            if (resot_menu_scene() != 0)
+                menu_mouse(e->motion.windowID, e->motion.x, e->motion.y, 0);
+            else xbox_FramebufferHostMouse((int)e->motion.xrel, (int)e->motion.yrel);
+        }
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (e->button.which != SDL_TOUCH_MOUSEID) {
+            if (resot_menu_scene() != 0) {
+                int down = e->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+                if (e->button.button == SDL_BUTTON_LEFT)
+                    menu_mouse(e->button.windowID, e->button.x, e->button.y, down ? 1 : 2);
+                else if (e->button.button == SDL_BUTTON_RIGHT && !down)
+                    menu_mouse(e->button.windowID, e->button.x, e->button.y, 4);
+                break;
+            }
             int vk = e->button.button == SDL_BUTTON_LEFT ? VK_LBUTTON
                    : e->button.button == SDL_BUTTON_RIGHT ? VK_RBUTTON : VK_MBUTTON;
             xbox_FramebufferHostKey(vk, e->type == SDL_EVENT_MOUSE_BUTTON_DOWN);
@@ -182,6 +225,7 @@ void resot_android_input_event(const SDL_Event *e)
         break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
     case SDL_EVENT_DID_ENTER_BACKGROUND: {
+        resot_menu_pointer_event(0, 0, 3);
         int vk;
         for (vk = 1; vk < 256; vk++) xbox_FramebufferHostKey(vk, 0);
         s_back_down = 0;
@@ -255,7 +299,8 @@ DWORD xbox_InputGetState(DWORD port, XBOX_INPUT_STATE *state)
         pthread_mutex_lock(&s_touch_lock);
         memcpy(touch, s_touch, sizeof touch);
         pthread_mutex_unlock(&s_touch_lock);
-        from_sdl(&state->Gamepad, touch, (uint32_t)touch[6]);
+        if (resot_menu_scene() == 0)
+            from_sdl(&state->Gamepad, touch, (uint32_t)touch[6]);
         if (s_back_down) state->Gamepad.bAnalogButtons[XBOX_BUTTON_B] = 255;
         any = 1;   /* the touch controls are always a pad on port 0 */
     }

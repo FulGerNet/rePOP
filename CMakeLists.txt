@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.20)
 #
 # One executable per target. A target is built when its lifted sources exist
 # (source/<target>/gen, produced from the user's own XBE by tools/recomp.ps1);
-# they are derived from the game and are never part of the repository.
+# generated C is published; the source XBE and game data stay private.
 # Portable releases include the C runtime; users do not need Visual Studio
 # or a separately installed Visual C++ redistributable to start the game.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -100,6 +100,7 @@ function(resot_add_target id exe_name)
         port/windows/src/options.c
         port/windows/src/diag.c
         port/game/recomp_manual.c
+        port/game/resot_menu_pointer.c
         port/third_party/extract-xiso/extract-xiso.c
         "${guest_resource}"
         ${hooks}

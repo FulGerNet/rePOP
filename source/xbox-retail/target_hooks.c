@@ -17,6 +17,7 @@
 #include <string.h>
 #include "../../port/game/guest_probe.h"
 #include "target.h"
+#include "../../port/game/resot_menu_pointer.h"
 #if defined(_MSC_VER)
 #define RESOT_TLS __declspec(thread)
 #else
@@ -95,7 +96,9 @@ extern void sub_0001E970_gen(void);
 void sub_0001E970(void)
 {
     static int was_down;
-    int down = resot_movie_skip_down();
+    int down;
+    resot_menu_movie(GMEM32(0x0044AA1Cu) != 0); /* handle read by 0x0001E970 */
+    down = resot_movie_skip_down() | resot_menu_movie_tap();
     int pressed = down && !was_down;
     was_down = down;
     if (pressed && GMEM32(0x0044AA1Cu)) { /* Bink handle, read at 0x0001E970 */
@@ -151,6 +154,13 @@ static float widen_factor(void)
 
 void sub_000CD970_enter(void)
 {
+    extern RESOT_TLS uint32_t g_ebp;
+    /* 0x000CFEAB..0x000CFEBD publishes the camera viewport. At this
+     * existing call EBP is top; caller local +0x1C (here ESP+0x20) is
+     * height. Full screen height is read from screen+0xA8 at 0x000CFC5B. */
+    if (GMEM32(g_esp) == PROJ_RET && g_esi == PROJ_HOLDER)
+        resot_menu_camera_viewport(g_ebp, GMEM32(g_esp + 0x20u),
+                                  GMEM32(GMEM32(0x00758E34u) + 0xA8u));
     if (widen_factor() > 1.0f && GMEM32(g_esp) == PROJ_RET && g_esi == PROJ_HOLDER) {
         GMEMF(PROJ_BUILT) /= s_widen;
         GMEMF(PROJ_HOLDER + 0x60) /= s_widen;
@@ -391,7 +401,12 @@ void sub_00417F85(void)
         stdcall_return(1167, 2);
         return;
     }
-    stdcall_return(xbox_HlePadState(0, (uint8_t *)((uintptr_t)g_xbox_mem_offset + st)), 2);
+    {
+        uint8_t *state=(uint8_t *)((uintptr_t)g_xbox_mem_offset+st);
+        uint32_t result=xbox_HlePadState(0,state);
+        if(!result) resot_menu_pointer_pad(state);
+        stdcall_return(result,2);
+    }
 }
 
 /* XInputSetState */
@@ -854,10 +869,14 @@ void sub_002A2B20_enter(void)
  * The skipped add writes handle 0 to its out argument. The skipped bind
  * writes binding 0 and returns as 0x00116660 does (0x00116765-0x00116799):
  * eax/ecx/edx = the [0x758D64]/[0x758D68]/[0x758D6C] values it restores.
- * RESOT_XBOX_LIVE_MENU=1 keeps the choice. The pause menu's Xbox Live
- * choice (return 0x001A33F6) is not changed. */
+ * The pause Options page also adds Xbox Live at 0x001A33F1 (return
+ * 0x001A33F6, text group from var+0x544, index var+0x548+0x38), storing
+ * its handle at var+0xD4 (0x001A3400). Unlike the main-menu entry, it has
+ * no binding in the pause binder 0x001A1610; suppress its add as well.
+ * RESOT_XBOX_LIVE_MENU=1 keeps both choices. */
 #define LIVE_ADD_RET  0x00234D3Au
 #define LIVE_BIND_RET 0x0023540Bu
+#define LIVE_PAUSE_ADD_RET 0x001A33F6u
 extern void sub_002A3910_gen(void);
 extern void sub_00116660_gen(void);
 static int hide_live(void)
@@ -868,7 +887,8 @@ static int hide_live(void)
 }
 void sub_002A3910(void)
 {
-    if (hide_live() && GMEM32(g_esp) == LIVE_ADD_RET) {
+    if (hide_live() && (GMEM32(g_esp) == LIVE_ADD_RET ||
+                       GMEM32(g_esp) == LIVE_PAUSE_ADD_RET)) {
         GMEM32(GMEM32(g_esp + 4)) = 0;
         g_esp += 4;                                   /* ret (cdecl) */
         return;

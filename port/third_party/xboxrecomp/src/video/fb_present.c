@@ -34,6 +34,22 @@
 #include "../kernel/resot_runtime.h" /* RE-SoT: per-target behaviour. */
 
 extern ptrdiff_t xbox_GetMemoryOffset(void);
+/* RE-SoT: host events are queued; only the guest thread touches Jade menus. */
+static void (*s_menu_pointer_event)(float, float, int);
+static int (*s_menu_scene)(void);
+static void (*s_menu_pointer_viewport)(float);
+/* RE-SoT: register before starting runtime threads; standalone runtime users
+ * keep ordinary mouse input without linking a title-specific UI module. */
+void xbox_FramebufferSetMenuPointer(void (*event)(float,float,int),
+                                   int (*scene)(void),void (*viewport)(float))
+{
+    s_menu_pointer_event=event; s_menu_scene=scene; s_menu_pointer_viewport=viewport;
+}
+static int resot_menu_scene(void) { return s_menu_scene?s_menu_scene():0; }
+static void resot_menu_pointer_event(float x,float y,int action)
+{ if(s_menu_pointer_event) s_menu_pointer_event(x,y,action); }
+static void resot_menu_pointer_viewport(float aspect)
+{ if(s_menu_pointer_viewport) s_menu_pointer_viewport(aspect); }
 
 static volatile LONG s_fb_running;
 static volatile LONG s_hw_mode; /* RE-SoT: also selects the flip pacing owner. */
@@ -376,11 +392,19 @@ static void fb_limit_frame(void)
     static LONG generation = -1;
     LARGE_INTEGER now, qf;
     LONG fps = InterlockedCompareExchange(&s_frame_limit, 0, 0);
+#if defined(__ANDROID__)
+    /* RE-SoT: react to Android thermal events without changing guest clocks
+     * or overwriting the saved FPS preference; sleep instead of busy work. */
+    static LONG last_effective = -1;
+    extern int resot_android_effective_frame_limit(int);
+    fps=resot_android_effective_frame_limit(fps);
+    if(fps!=last_effective) { last_effective=fps; last=0; }
+#endif
     LONG current_generation = InterlockedCompareExchange(&s_frame_limit_generation, 0, 0);
     LONGLONG deadline, remaining;
     if (!frequency) { QueryPerformanceFrequency(&qf); frequency = qf.QuadPart; }
     QueryPerformanceCounter(&now);
-    if (!fps || generation != current_generation) {
+    if (!fps || !last || generation != current_generation) {
         generation = current_generation; last = now.QuadPart;
         return;
     }
@@ -549,6 +573,29 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         return m == WM_SETCURSOR ? TRUE : 0;
     }
 
+    /* RE-SoT: absolute pointing in menus, raw camera input only in gameplay.
+     * A captured release outside the client is retained and rejected by the
+     * guest hit test. Do not leak clicks into sword/special bindings. */
+    if (resot_menu_scene() != 0 &&
+            (m == WM_MOUSEMOVE || m == WM_LBUTTONDOWN || m == WM_LBUTTONDBLCLK ||
+             m == WM_LBUTTONUP || m == WM_RBUTTONUP)) {
+        RECT r;
+        GetClientRect(h, &r);
+        if (r.right > 0 && r.bottom > 0) {
+            resot_menu_pointer_viewport((float)r.right / r.bottom);
+            int action = m == WM_MOUSEMOVE ? 0 : m == WM_LBUTTONUP ? 2 :
+                         m == WM_RBUTTONUP ? 4 : 1;
+            resot_menu_pointer_event((float)(short)LOWORD(l) / r.right,
+                                     (float)(short)HIWORD(l) / r.bottom, action);
+        }
+        s_key_down[VK_LBUTTON] = s_key_down[VK_RBUTTON] = 0;
+        if (m == WM_LBUTTONDOWN || m == WM_LBUTTONDBLCLK) SetCapture(h);
+        if (m == WM_LBUTTONUP) ReleaseCapture();
+        return 0;
+    }
+    if (resot_menu_scene() != 0 && (m == WM_RBUTTONDOWN || m == WM_RBUTTONDBLCLK))
+        return 0;
+
     switch (m) {
     case WM_SYSKEYDOWN:
         /* RE-SoT: route Alt+F4 explicitly, including the borderless popup
@@ -662,8 +709,10 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
                             sizeof(RAWINPUTHEADER)) != (UINT)-1
             && ri.header.dwType == RIM_TYPEMOUSE
             && !(ri.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
-            InterlockedExchangeAdd(&s_mouse_dx, ri.data.mouse.lLastX);
-            InterlockedExchangeAdd(&s_mouse_dy, ri.data.mouse.lLastY);
+            if (resot_menu_scene() == 0) {
+                InterlockedExchangeAdd(&s_mouse_dx, ri.data.mouse.lLastX);
+                InterlockedExchangeAdd(&s_mouse_dy, ri.data.mouse.lLastY);
+            }
         }
         break;                      /* DefWindowProc does the cleanup */
     }
@@ -672,13 +721,14 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
      * the camera rather than pointing at anything. */
     case WM_SETCURSOR:
         if (LOWORD(l) == HTCLIENT) {
-            SetCursor(NULL);
+            SetCursor(resot_menu_scene() == 1 ? LoadCursor(NULL, IDC_ARROW) : NULL);
             return TRUE;
         }
         break;
 
     /* Alt-tabbing away with a key held would leave it held for ever. */
     case WM_KILLFOCUS:
+        resot_menu_pointer_event(0, 0, 3); /* RE-SoT: abandon an unfinished click. */
         memset((void *)s_key_down, 0, sizeof s_key_down);
         InterlockedExchange(&s_mouse_dx, 0);
         InterlockedExchange(&s_mouse_dy, 0);

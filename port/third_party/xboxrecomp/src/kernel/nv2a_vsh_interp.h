@@ -42,6 +42,10 @@ void nv2a_vsh_program_word(uint32_t word);            /* _PROGRAM(i)        */
 void nv2a_vsh_set_start_slot(uint32_t slot);          /* _PROGRAM_START     */
 void nv2a_vsh_set_constant_load(uint32_t index);      /* _CONSTANT_LOAD     */
 void nv2a_vsh_constant_word(uint32_t word);           /* _CONSTANT(i)       */
+/* RE-SoT: equivalent contiguous payload uploads; generations mark changed
+ * contents once per run, rather than once per component. */
+void nv2a_vsh_program_words(const uint32_t *words, uint32_t count);
+void nv2a_vsh_constant_words(const uint32_t *words, uint32_t count);
 void nv2a_vsh_set_cxt_write(uint32_t enable);         /* _CXT_WRITE_EN      */
 
 /* Run the program from the start slot on one vertex. Inputs are the ten

@@ -33,7 +33,7 @@ not a person.*
 | Target | Source executable | State |
 | --- | --- | --- |
 | `xbox-demo` | E3 2003 demo, `default.xbe` built 2003-07-18 | Runs movies, menus, pause and the scripted level sections at about 58-60 FPS with VSync; played by a person to the third level without a freeze. Compact F5 and F6 options added. User confirms corrected audio and 120+ FPS (2026-10-18); intermittent visual defects remain under validation; no console comparison. Dedicated Vulkan shaders exercised on PC and Android (2026-10-21), with validation limits below |
-| `xbox-retail` | NTSC retail, title `0x5553001D`, `default.xbe` built 2003-10-20 | Bring-up: first playable level reached by the user and a scripted run. The invalid-refresh timestep that caused extreme slow motion is corrected: gameplay measured 9.003 real seconds / 9.008 simulation seconds with the fix. User confirms corrected audio, 120+ FPS and the save-crash fix (2026-10-18); full-level accuracy and broader audio/visual validation remain incomplete. Dedicated Vulkan shaders exercised on PC and Android (2026-10-21) |
+| `xbox-retail` | NTSC retail, title `0x5553001D`, `default.xbe` built 2003-10-20 | Bring-up: first playable level reached by the user and a scripted run. The invalid-refresh timestep that caused extreme slow motion is corrected: gameplay measured 9.003 real seconds / 9.008 simulation seconds with the fix. User confirms corrected audio, 120+ FPS and the save-crash fix (2026-10-18); full-level accuracy and broader audio/visual validation remain incomplete. User reports missing retail menu/gameplay music but audible cutscene music and corrected cutscene timing (2026-10-22); the speculative deferred completion override has now been removed and the user confirms music in the Windows menu; gameplay/Android listening remains unverified. Dedicated Vulkan shaders exercised on PC and Android (2026-10-21); fountain-return corruption corrected in the runtime and confirmed by the user on Android (2026-10-21). Scene-dependent FPS drops remain; user reports slowdown after query-resource update; Vulkan pooling reverted and user confirms a large material-cache gain; selective binds withdrawn after user-reported regression; material cache retained; Android Vulkan surface recovery passed one background/resume cycle |
 
 The existing post-processing quality selector now budgets auxiliary effect
 buffers and projected shadows as well as recognized blur/bloom chains, on
@@ -58,6 +58,33 @@ and initial PC/device scenes were inspected (2026-10-21). This does not establis
 a controlled FPS improvement or sustained 60 FPS: demo device scenes still
 include about 49�50 FPS windows. See [the shader study](docs/VULKAN-PERFORMANCE.md).
 
+The confirmed Vulkan material-descriptor cache remains enabled; selective
+descriptor binds and the compact-constant/reduced-output experiment are withdrawn.
+The user clarified that the earlier 100 FPS comparison came from another build
+and mostly empty views; it is not a verified same-scene regression measurement.
+The prior material-cache APK was recovered and matched the restored base by
+SHA-256. New work starts from that base.
+
+Vulkan now reuses already uploaded input geometry across draws and frames on
+Windows and Android (2026-10-22). Every index, source byte, input format and
+current attribute is checked; changed data or a cycled GPU ring uses the normal
+conversion/upload path. Source snapshots are bounded to 16 MiB. Both Windows
+targets and Android build, the exact-cache test and short Vulkan GPU check pass,
+and the APK is installed. Retail gameplay logs show actual reuse and the user
+reports good FPS in this first session. No controlled FPS uplift, sustained
+60/100 FPS, thermal diagnosis or demo-device gameplay result is established.
+See [the study](docs/VULKAN-PERFORMANCE.md) and [validation](docs/VALIDATION.md).
+
+The user reports a slowdown with the later query-resource revision.
+Vulkan now returns to the previous query allocation policy, while a new
+bounded command-payload path batches indices and shader/constant uploads.
+Both Windows targets and Android build; 12 GPU/support/decoder tests plus
+the vertex interpreter regression pass. Same-scene Android measurements
+are recorded in [the study](docs/VULKAN-PERFORMANCE.md); substantial timing
+drift prevents a claim of sustained 60 FPS or a universal speedup. The final
+contiguous-upload A/B repeats about 9% lower executor time and 3-4% more
+FPS in one heavy retail view; it still runs near 21.5 FPS there.
+
 The log viewers have a source-selection repair: Windows follows the logger's
 actual file path, and Android reads the `logs/` subfolder. Output from these
 repairs still awaits user confirmation.
@@ -69,6 +96,15 @@ moved beside the central overlay toggle (pause/back) and to the upper right
 (rewind) to clear the HUD and FPS panel. That adjustment
 awaits device confirmation; see
 [VALIDATION.md](docs/VALIDATION.md).
+
+The user confirms the geometry-cache APK performs much better on a rested
+phone. A further shadow/touch/audio/thermal APK is installed (2026-10-22),
+without launching or testing the game at the user's request. It corrects
+implicit RGB565 target alpha and bounds known shadow projections, keeps shadows
+at Off, updates touch pictograms, bounds stale Android audio queues and adds
+temporary Android thermal FPS budgets. These fixes compile; shadow appearance,
+cutscene sync and sustained thermal benefit still require user confirmation.
+See [VALIDATION.md](docs/VALIDATION.md).
 
 **Both targets remain under gameplay validation.** The user reports
 angle-dependent object flickering in the demo's first level and a crash at
@@ -160,6 +196,16 @@ In short, on Windows:
 
 ## Development status
 
+Version 0.3.0 restores retail's original synchronous music-stream completion
+callback after comparison with the previous source snapshot. The user confirms
+music is audible again in the Windows retail menu (2026-10-22); gameplay and
+Android listening still need confirmation. The demo rebuilds Load Map and
+reSOT Options with each main-menu instance. Retail hides Xbox Live in pause
+Options as well as the main menu. Native menu choices accept mouse/touch
+pointing; Android hides its pad overlay in menus, Bink movies and letterboxed
+camera scenes. Windows demo/retail and Android release builds pass; see
+[validation](docs/VALIDATION.md) for the observed scope and remaining checks.
+
 Version 0.2.0 bundles the user's platform-specific INI defaults: unlimited
 FPS, VSync/glow/logs off and 200% look sensitivity on both hosts; Windows
 uses D3D11, 720p and post-processing Low, Android uses Vulkan, 480p and
@@ -208,6 +254,9 @@ see [VALIDATION.md](docs/VALIDATION.md).
 
 | Component | Xbox demo | Xbox retail |
 | --- | --- | --- |
+| Shadow/Android audio/touch/thermal follow-up (2026-10-22) | Builds and shader compilation pass; installed APK awaits user-only gameplay checks | RGB565 target-alpha correction and shadow projection bounds implemented; Android audio/thermal updates installed; runtime results await user |
+| Vulkan input-geometry reuse (Windows/Android, 2026-10-22) | Builds; exact cache and GPU support checks pass; demo-device gameplay untested | Installed; gameplay reuse observed and user reports good FPS; controlled uplift unmeasured |
+| Vulkan compact-constant / reduced-output experiment (2026-10-22) | Withdrawn | Withdrawn; user corrected the 100 FPS comparison, so a 20% same-scene regression is not established |
 | Shared effect-quality selector (Windows/Android) | 🟡 expanded to auxiliary buffers and projected shadows; builds and support tests pass; user confirms the option works (2026-10-20, target unspecified); [all-effects audit remains partial](docs/POST-PROCESSING.md) | 🟡 independent shadow/bloom trace evidence, shared implementation builds; broader water/time-effect identification remains incomplete |
 | Lift and build | 🟢 11,215 functions (2 of them written by hand: the D3D KickOff), 0 failed | 🟢 14,418 functions (2 by hand: the D3D KickOff), 0 failed |
 | Boot to first frame | 🟢 | 🟢 |
@@ -221,6 +270,7 @@ see [VALIDATION.md](docs/VALIDATION.md).
 | Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or F11; culling widened to the new sides; pause backdrop expanded; HUD at its 4:3 proportions and anchored to the screen's left edge, confirmed by the user (2026-10-18); the menu garden is not modelled past its 4:3 edge | 🟡 16:9 by default; demo's projection and culling hooks ported to the retail addresses, projected-UI policy on (menu backdrop full width); dialog text wider than its box at 16:9; health bar anchored to the left edge in first-level readbacks (2026-10-18), tutorial text unchanged |
 | Frame rate | 🟡 120+ FPS reported by the user (2026-10-18); first-use shader stalls moved off the executor (hourglass room: lowest 80 fps, was 7); batches reused across frames (garden 93-100 fps at ~880 draws, was 67-78); title and executor still run in lockstep; broader performance validation incomplete | 🟡 latest user session: 302 timing windows, median 146.3 FPS, minimum 48.6 (not frame percentiles); P8/ARGB upload conversion optimized, native pipeline lookup and texture reuse improved (2026-10-19); matched-scene and Android performance comparison pending |
 | Controller / keyboard | 🟢 verified by the user (2026-10-18) | 🟢 verified by the user (2026-10-18) |
+| Mouse/touch menus (v0.3.0) | Synthetic pointer tests pass; Windows menu geometry inspected; demo custom entries recreated on menu rebuild | Synthetic pointer tests pass; pause Xbox Live entry removed; Android device interaction untested |
 | Audio | 🟡 audio corrected, confirmed by the user (2026-10-18); bath-fight stutter fixed, user confirmed. Android Sand Birds crash (2026-10-20): APU idle-trap overwrite corrected; APU/IRQL tests pass, device retest records about 260 s of audio and a regular exit without a crash; user confirms the fix | 🟡 audio corrected, confirmed by the user (2026-10-18). Android making-of audio loss (2026-10-20): dispatch timeout bypasses and callback lock leak corrected; APU/IRQL tests pass, user confirms audio persists through the video and return to the menu; broader audio validation incomplete |
 | Save / load, memory unit | 🟡 save crash reported resolved by the user (2026-10-18); full save/load and memory-unit validation incomplete | 🟡 save crash reported resolved by the user (2026-10-18); Android random-write and migration corrections pass host tests (2026-10-19); "damaged profile" on Android traced to a stale directory search, fix built, device save/relaunch/load still unverified |
 | Virtual memory reservations | 🟡 reserve/commit fix tested on synthetic input; optional, gameplay with this option not checked | 🟡 corrected reserve/commit and audio address translation; user passed the previous crash point; checkpoint save/load still untested |

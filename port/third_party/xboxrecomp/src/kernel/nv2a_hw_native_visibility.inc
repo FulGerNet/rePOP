@@ -34,6 +34,13 @@ typedef struct NgVisibility {
     uint32_t count, capacity;
     NgVisReport *first, *last;
     uint64_t queries, reports, completed;
+    /* RE-SoT: bounded reuse of completed native query resources. Retail can
+     * issue thousands per second; allocating a Vulkan pool / D3D12 heap and
+     * readback resource every time adds avoidable driver/allocator work. */
+    void *idle_queries[64];
+    uint32_t idle_count;
+    int pool_disabled; /* RE-SoT: opt-in live A/B, bit 1 in the developer control. */
+    uint64_t allocated, reused;
     int enabled, failed;
 } NgVisibility;
 typedef void (*NgVisComplete)(void *, uint32_t, uint64_t, uint32_t);
@@ -51,7 +58,10 @@ static NgVisSegment *ng_vis_prepare(NgVisibility *v, SDL_GPUCommandBuffer *cmd, 
     }
     s = (NgVisSegment *)calloc(1,sizeof *s);
     if (!s) { v->failed = 1; SDL_SetError("native visibility segment allocation failed"); return NULL; }
-    s->query = v->api->create(v->device);
+    /* RE-SoT: only queries whose submission fence completed and whose samples
+     * were copied into their immutable segment can enter this free list. */
+    if (!v->pool_disabled && v->idle_count) { s->query = v->idle_queries[--v->idle_count]; v->reused++; }
+    else { s->query = v->api->create(v->device); if (s->query) v->allocated++; }
     if (!s->query) { free(s); v->failed = 1; return NULL; }
     s->refs = 1; s->pixel_scale = scale > 0 ? scale : 1;
     s->all_next = v->all; v->all = s;
@@ -96,16 +106,27 @@ static int ng_vis_report(NgVisibility *v, uint32_t address, uint64_t stamp)
 static int ng_vis_poll(NgVisibility *v, NgVisComplete complete, void *opaque)
 {
     NgVisSegment **link = &v->all;
+    /* RE-SoT: adjacent segments share one submission fence. A pending fence
+     * needs one driver check per run, not one syscall per segment. */
+    NgVisFence *checked = NULL;
     if (v->failed) return 0;
     if (v->all && !v->api->healthy(v->device)) { v->failed = 1; return 0; }
     while (*link) {
         NgVisSegment *s = *link;
         NgVisFence *fence = s->fence;
         if (!s->ready && fence) {
-            if (!fence->ready) fence->ready = SDL_QueryGPUFence(v->device,fence->gpu);
+            if (!fence->ready && fence != checked)
+                fence->ready = SDL_QueryGPUFence(v->device,fence->gpu);
+            checked = fence; /* RE-SoT: retain only identity, never dereference after retirement. */
             if (fence->ready) {
                 if (!v->api->read(v->device,s->query,&s->samples)) { v->failed = 1; return 0; }
-                s->ready = 1; v->api->destroy(v->device,s->query); s->query = NULL;
+                s->ready = 1;
+                /* RE-SoT: reports retain samples/scale, not a native handle.
+                 * Reusing the handle cannot overwrite an older report. Reset
+                 * is still recorded outside the next render pass. */
+                if (!v->pool_disabled && v->idle_count < 64) v->idle_queries[v->idle_count++] = s->query;
+                else v->api->destroy(v->device,s->query);
+                s->query = NULL;
                 s->fence = NULL;
                 if (--fence->refs == 0) { SDL_ReleaseGPUFence(v->device,fence->gpu); free(fence); }
             }
@@ -144,5 +165,7 @@ static void ng_vis_destroy(NgVisibility *v)
         }
         free(s);
     }
+    /* RE-SoT: active and pooled resources have disjoint ownership. */
+    while (v->idle_count) v->api->destroy(v->device,v->idle_queries[--v->idle_count]);
     free(v->counter); memset(v,0,sizeof *v);
 }

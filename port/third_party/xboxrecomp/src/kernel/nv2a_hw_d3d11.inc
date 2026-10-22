@@ -183,6 +183,7 @@ typedef struct {
     uint32_t misc[4];
     float    border[4][4], border_info[4][4]; /* RE-SoT: native SDL has no custom border sampler. */
 } HwPsConst;
+static int hw_shadow_receiver(const Texture *t); /* RE-SoT: shared observed caster/receiver provenance. */
 
 static struct {
     int tried, ok, scale, nocull;
@@ -561,6 +562,12 @@ static const char s_hw_hlsl[] =
 "    return float4(0, 0, 0, 0); }\n"
 "  return float4(0, 0, 0, 0); }\n"
 "float2 proj_uv(float4 tc, float4 sc) { float q = tc.w != 0.0 ? tc.w : 1.0; return tc.xy / q * sc.xy; }\n"
+/* RE-SoT: a projected shadow has a finite footprint. Behind-projector and
+ * out-of-map receivers must not smear the clamp-to-edge texel up a wall.
+ * Black is neutral for the observed ZERO / ONE_MINUS_SRC_COLOR receivers. */
+"float4 shadow_sample(float4 value, float4 tc, float4 scale) {\n"
+"  float2 uv = proj_uv(tc, scale);\n"
+"  return tc.w > 0.0001 && all(uv >= 0.0) && all(uv <= 1.0) ? value : float4(0,0,0,0); }\n"
 /* RE-SoT: retail light maps request white CLAMP_TO_BORDER. A zero border
  * multiplies the underlying surface to black outside the light-map atlas.
  * Both backends sample clamp-to-edge, then blend the guest border per tap
@@ -607,10 +614,19 @@ static const char s_hw_hlsl[] =
 "  float4 s3 = float4(1, 1, 1, 1);\n"
 "  [branch] if (tscale[3].z > 0.5) { if (tscale[3].w > 0.5) s3 = cx3.Sample(sm3, i.t3.xyz);\n"
 "    else s3 = tx3.Sample(sm3, proj_uv(i.t3, tscale[3])); }\n"
+/* RE-SoT: RGB565 has implicit alpha one. Host BGRA render targets retain
+ * clear alpha when the guest writes RGB only; retail alpha-tested shadow
+ * receivers otherwise reject the entire map even at High quality. */
+"  if (misc.z & 1u) s0.a = 1.0; if (misc.z & 2u) s1.a = 1.0;\n"
+"  if (misc.z & 4u) s2.a = 1.0; if (misc.z & 8u) s3.a = 1.0;\n"
 "  if (border_info[0].z != 0 || border_info[0].w != 0) s0 = guest_border(s0, proj_uv(i.t0, tscale[0]), border_info[0], border[0]);\n"
 "  if (border_info[1].z != 0 || border_info[1].w != 0) s1 = guest_border(s1, proj_uv(i.t1, tscale[1]), border_info[1], border[1]);\n"
 "  if (border_info[2].z != 0 || border_info[2].w != 0) s2 = guest_border(s2, proj_uv(i.t2, tscale[2]), border_info[2], border[2]);\n"
 "  if (border_info[3].z != 0 || border_info[3].w != 0) s3 = guest_border(s3, proj_uv(i.t3, tscale[3]), border_info[3], border[3]);\n"
+"  if (misc.y & 1u) s0 = shadow_sample(s0, i.t0, tscale[0]);\n"
+"  if (misc.y & 2u) s1 = shadow_sample(s1, i.t1, tscale[1]);\n"
+"  if (misc.y & 4u) s2 = shadow_sample(s2, i.t2, tscale[2]);\n"
+"  if (misc.y & 8u) s3 = shadow_sample(s3, i.t3, tscale[3]);\n"
 "  bool keep = true; uint sp = ctl.y; uint cpm = atest.w;\n"
 "  float4 Q1 = 0, Q2 = 0, Q3 = 0, Q4 = 0, Q5 = 0, Q6 = 0, Q7 = 0, Q12 = 0, Q13 = 0, Q14 = 0, Q15 = 0;\n"
 "  float4 Q8  = stage_tex(sp & 31, i.t0, s0, tscale[0].z, keep, cpm);\n"
@@ -685,9 +701,11 @@ static const char s_hw_hlsl_simple[] =
 "  float2 uv = proj_uv(i.t0, tscale[0]);\n"
 "  float4 texel = float4(1,1,1,1);\n"
 "  [branch] if (tscale[0].z > 0.5) texel = tx0.Sample(sm0, uv);\n"
+"  if (misc.z & 1u) texel.a = 1.0;\n" /* RE-SoT: same implicit format alpha as the generic shader. */
 /* RE-SoT: diffuse-only draws ignore texture and stale sampler borders. */
 "  if (ctl.y != 0 && (border_info[0].z != 0 || border_info[0].w != 0))\n"
 "    texel = guest_border(texel, uv, border_info[0], border[0]);\n"
+"  if (misc.y & 1u) texel = shadow_sample(texel, i.t0, tscale[0]);\n" /* RE-SoT */
 "  float3 factor = cw[0].x == 0x08010000 ? fac0[0].rgb : i.d0.rgb;\n"
 "  float alpha = cw[0].y == 0x18110000 ? fac0[0].a : i.d0.a;\n"
 "  float scale = cw[0].z == 0x00010C00 ? 2.0 : 1.0;\n"
@@ -1755,6 +1773,9 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
             srv[st] = s_hw.white;
         /* RE-SoT: cube directions use xyz without projective division. */
         pc.tscale[st][3] = t->cube && pc.tscale[st][2] > 0.5f ? 1.0f : 0.0f;
+        /* RE-SoT: format alpha and shadow projection policy also cover D3D11. */
+        if(t->valid && (t->color==0x05 || t->color==0x11)) pc.misc[2]|=1u<<st;
+        if(hw_shadow_receiver(t)) pc.misc[1]|=1u<<st;
         if (pc.tscale[st][3] > 0.5f) {
             srv[st + 4] = srv[st];
             srv[st] = s_hw.white;
@@ -2437,23 +2458,19 @@ static int hw_skip_shadow(void)
         }
         s_shadow_targets[best].offset=offset;s_shadow_targets[best].frame=s_hw.frame;
         s_shadow_targets[best].valid=1;
-        if(hw_post_quality()==0) {
-            if(s_ftrace==2)fprintf(stderr,"[POSTFX] shadow caster skipped\n");
-            return 1;
-        }
     }
-    if(hw_post_quality()!=0 || !s_gpu.blend_enable || s_gpu.blend_sfactor!=0
-        || s_gpu.blend_dfactor!=0x301 || s_gpu.depth_mask
-        || !t->valid || (t->color!=0x05 && t->color!=0x11)
-        || t->width!=256 || t->height!=256)return 0;
-    /* RE-SoT: an unused, still-bound stage is not a shadow dependency. */
-    if(s_gpu.rc_seen && ((s_gpu.rc.stage_program&31)<1 || (s_gpu.rc.stage_program&31)>3))return 0;
-    for(i=0;i<32;i++)if(s_shadow_targets[i].valid
-        && s_shadow_targets[i].offset==dma_resolve(t->offset)
-        && s_shadow_targets[i].frame==s_hw.frame) {
-        if(s_ftrace==2)fprintf(stderr,"[POSTFX] projected shadow skipped\n");
-        return 1;
-    }
+    /* RE-SoT: retain character shadows even when screen post-processing is
+     * Off. Its resolution budget still applies; provenance feeds clipping. */
+    (void)t;
+    return 0;
+}
+static int hw_shadow_receiver(const Texture *t)
+{
+    if(!s_gpu.blend_enable || s_gpu.blend_sfactor!=0 || s_gpu.blend_dfactor!=0x301 || s_gpu.depth_mask ||
+       !t->valid || (t->color!=0x05 && t->color!=0x11) || t->width!=256 || t->height!=256) return 0;
+    uint32_t offset=dma_resolve(t->offset);
+    for(unsigned i=0;i<32;i++) if(s_shadow_targets[i].valid && s_shadow_targets[i].offset==offset &&
+        s_hw.frame-s_shadow_targets[i].frame<=1) return 1;
     return 0;
 }
 

@@ -43,6 +43,11 @@ public final class TouchControls extends View implements InputManager.InputDevic
     private static native int nativeRumble();
     private static native void nativeToggleFps();
     private static native boolean nativeFpsVisible();
+    private static native int nativeScene(); // 0 gameplay, 1 menu, 2 cinematic/loading
+    private static native void nativePointer(float x, float y, int action);
+    private static native void nativeViewport(float aspect);
+    private int scene = 2, menuPointer = -1;
+    private float menuDownX, menuDownY;
 
     // SDL_GamepadButton bits; the triggers are SDL axes 4 and 5.
     private static final int SOUTH = 0, EAST = 1, WEST = 2, NORTH = 3, BACK = 4, START = 6,
@@ -65,9 +70,9 @@ public final class TouchControls extends View implements InputManager.InputDevic
         new Control("Sword", "sword", WEST, -1, 790, 472, 43),
         new Control("Dagger", "dagger", NORTH, -1, 912, 402, 33),
         new Control("Rewind", "rewind", -1, 4, 775, 40, 35),
-        new Control("Special", "special", -1, 5, 830, 375, 36),
-        new Control("Alt view", "altview", LEFT_SHOULDER, -1, 852, 36, 23),
-        new Control("Look", "look", RIGHT_SHOULDER, -1, 914, 36, 23),
+        new Control("Run / wall run / guard", "special", -1, 5, 830, 375, 36),
+        new Control("First person", "altview", LEFT_SHOULDER, -1, 852, 36, 23),
+        new Control("Overhead view", "look", RIGHT_SHOULDER, -1, 914, 36, 23),
         new Control("Reset camera", "recenter", RIGHT_STICK, -1, 700, 486, 23),
         new Control("Pause", "pause", START, -1, 414, 36, 23),
         new Control("Back", "back", BACK, -1, 546, 36, 23),
@@ -119,7 +124,8 @@ public final class TouchControls extends View implements InputManager.InputDevic
     private final Runnable rumblePoll = new Runnable() {
         public void run() {
             if (!active) return;
-            int amplitude = editing || gamepadConnected() ? 0 : Math.min(255, nativeRumble());
+            updateScene();
+            int amplitude = editing || scene != 0 || gamepadConnected() ? 0 : Math.min(255, nativeRumble());
             if (vibrator != null && vibrator.hasVibrator()) {
                 if (amplitude == 0) cancelRumble();
                 else if (amplitude != lastAmplitude || SystemClock.uptimeMillis() - lastVibration >= 70) {
@@ -131,7 +137,7 @@ public final class TouchControls extends View implements InputManager.InputDevic
                     } catch (RuntimeException e) { cancelRumble(); }
                 }
             }
-            postDelayed(this, 16);
+            postDelayed(this, amplitude != 0 ? 16 : 48); // Less idle JNI/vibrator polling; active rumble stays responsive.
         }
     };
 
@@ -147,6 +153,8 @@ public final class TouchControls extends View implements InputManager.InputDevic
         removeCallbacks(rumblePoll);
         if (inputManager != null) inputManager.unregisterInputDeviceListener(this);
         cancelRumble();
+        menuPointer = -1;
+        nativePointer(0, 0, 3);
         reset();
     }
 
@@ -176,6 +184,7 @@ public final class TouchControls extends View implements InputManager.InputDevic
     @Override public void onInputDeviceChanged(int deviceId) {}
 
     @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        if (w > 0 && h > 0) nativeViewport((float)w / h);
         scale = Math.max(0.01f, Math.min(w / 960f, h / 540f));
         float nw = w / scale, nh = h / scale;
         for (Control c : controls) {
@@ -199,7 +208,7 @@ public final class TouchControls extends View implements InputManager.InputDevic
     }
 
     private void publish() {
-        if (!visible || editing) { nativeState(0, 0, 0, 0, 0, 0, 0); return; }
+        if (!visible || editing || scene != 0) { nativeState(0, 0, 0, 0, 0, 0, 0); return; }
         int bits = 0, lt = 0, rt = 0;
         for (int i = 0; i < owners.size(); i++) {
             int c = owners.valueAt(i);
@@ -238,6 +247,8 @@ public final class TouchControls extends View implements InputManager.InputDevic
     }
 
     @Override public boolean onTouchEvent(MotionEvent e) {
+        updateScene();
+        if (scene != 0 && !editing) return menuTouch(e);
         int action = e.getActionMasked(), index = e.getActionIndex(), id = e.getPointerId(index);
         float x = e.getX(index) / scale, y = e.getY(index) / scale;
         switch (action) {
@@ -322,6 +333,46 @@ public final class TouchControls extends View implements InputManager.InputDevic
 
     @Override public boolean performClick() { super.performClick(); return true; }
 
+    // Like the Halo reference, clear all held controls at context changes.
+    // Keep the user's overlay preference: it returns only during gameplay.
+    private void updateScene() {
+        int next = nativeScene();
+        if (next == scene) return;
+        scene = next;
+        removeCallbacks(longToggle);
+        editing = false;
+        menuPointer = -1;
+        nativePointer(0, 0, 3);
+        reset();
+        cancelRumble();
+    }
+
+    private boolean menuTouch(MotionEvent e) {
+        int action = e.getActionMasked(), index = e.getActionIndex();
+        if (action == MotionEvent.ACTION_DOWN) {
+            menuPointer = e.getPointerId(index);
+            menuDownX = e.getX(index); menuDownY = e.getY(index);
+            nativePointer(menuDownX / getWidth(), menuDownY / getHeight(), 1);
+        } else if (action == MotionEvent.ACTION_MOVE && menuPointer >= 0) {
+            int i = e.findPointerIndex(menuPointer);
+            if (i >= 0) nativePointer(e.getX(i) / getWidth(), e.getY(i) / getHeight(), 0);
+        } else if ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP)
+                && e.getPointerId(index) == menuPointer) {
+            float x = e.getX(index), y = e.getY(index);
+            // A deliberate horizontal swipe backs out, without a visible pad.
+            boolean back = scene == 1 && x - menuDownX > getWidth() * .16f
+                && Math.abs(y - menuDownY) < getHeight() * .1f;
+            if (back) nativePointer(0, 0, 3);
+            nativePointer(x / getWidth(), y / getHeight(), back ? 4 : 2);
+            menuPointer = -1;
+            if (!back) performClick();
+        } else if (action == MotionEvent.ACTION_CANCEL) {
+            menuPointer = -1;
+            nativePointer(0, 0, 3);
+        }
+        return true;
+    }
+
     // ── drawing: night blue, luminous blue edges, gold accents (the launcher's style) ──
 
     private boolean held(int c) { return owners.indexOfValue(c) >= 0 || dragControl == c; }
@@ -400,19 +451,27 @@ public final class TouchControls extends View implements InputManager.InputDevic
         paint.setColor(on ? 0xFFFFFFFF : 0xFFFFD98A);
         switch (g) {
         case "jump":
-            c.drawCircle(2, -11, 3, paint);
-            line(c, -10, -8, -4, -2, 3, -5, 8, 2, 13, -3);
-            line(c, 1, -3, -3, 5, -10, 12); line(c, -3, 5, 5, 7, 8, 13); break;
+            c.drawCircle(0, -11, 2.8f, paint);
+            line(c, 0, -8, 0, 0); // Upright torso, raised arms, tucked legs.
+            line(c, -9, -12, -5, -5, 0, -4, 5, -5, 9, -12);
+            line(c, 0, 0, -6, 4, -3, 8); line(c, 0, 0, 6, 4, 3, 8);
+            line(c, -7, 12, -7, 15); line(c, 0, 11, 0, 16); line(c, 7, 12, 7, 15); break;
         case "cancel": line(c, -9, -9, 9, 9); line(c, 9, -9, -9, 9); break;
         case "sword": line(c, -11, 11, 9, -9); line(c, 9, -9, 12, -12); line(c, -11, 4, -4, 11); line(c, -12, 12, -9, 9); break;
         case "dagger": line(c, -6, 8, 6, -8, 9, -12, 5, -9); line(c, -9, 3, -3, 9); line(c, -8, 10, -10, 12); break;
         case "rewind":   // an hourglass: the Dagger of Time's sands
             paint.setColor(on ? 0xFFFFE6A0 : 0xFFFFD27A);
             line(c, -8, -12, 8, -12, -8, 12, 8, 12, -8, -12); line(c, -4, 9, 4, 9); break;
-        case "special": // Shield: the right-trigger action / wall run / guard.
-            line(c, 0, -13, 11, -8, 9, 4, 0, 13, -9, 4, -11, -8, 0, -13); break;
-        case "altview": line(c, -11, -6, 11, -6, 11, 8, -11, 8, -11, -6); c.drawCircle(0, 1, 4, paint); line(c, -5, -6, -3, -10, 3, -10, 5, -6); break;
-        case "look": line(c, -13, 0, -6, -6, 6, -6, 13, 0, 6, 6, -6, 6, -13, 0); c.drawCircle(0, 0, 3.5f, paint); break;
+        case "special": // Context action: runner next to a wall, rather than guard alone.
+            c.drawCircle(1, -10, 2.6f, paint);
+            line(c, 0, -7, -3, 0, 3, 4, 7, 9);
+            line(c, -3, 0, -8, 5, -12, 5); line(c, -1, -5, 5, -3, 9, -7);
+            line(c, -1, -5, -6, -7, -9, -3); line(c, 12, -13, 12, 13);
+            line(c, -14, -1, -10, -1); line(c, -14, 10, -8, 10); break;
+        case "altview": // First-person look.
+            line(c, -13, 0, -6, -6, 6, -6, 13, 0, 6, 6, -6, 6, -13, 0); c.drawCircle(0, 0, 3.5f, paint); break;
+        case "look": // The camera pictogram belongs to the overhead view.
+            line(c, -11, -6, 11, -6, 11, 8, -11, 8, -11, -6); c.drawCircle(0, 1, 4, paint); line(c, -5, -6, -3, -10, 3, -10, 5, -6); break;
         case "recenter": c.drawArc(new RectF(-10, -10, 10, 10), 40, 290, false, paint); line(c, 10, -8, 8, -1, 2, -4); break;
         case "pause": line(c, -5, -9, -5, 9); line(c, 5, -9, 5, 9); break;
         case "back": line(c, 10, 0, -10, 0); line(c, -4, -6, -10, 0, -4, 6); break;
@@ -428,6 +487,7 @@ public final class TouchControls extends View implements InputManager.InputDevic
     }
 
     @Override protected void onDraw(Canvas canvas) {
+        if (scene != 0 && !editing) return;
         canvas.save();
         canvas.scale(scale, scale);
         // the toolbar

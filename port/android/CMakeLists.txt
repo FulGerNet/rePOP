@@ -100,7 +100,8 @@ set(HOST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/host_files.c
     ${CMAKE_CURRENT_LIST_DIR}/src/sha256.c
     ${RESOT_ROOT}/port/windows/src/scene.c
-    ${RESOT_ROOT}/port/game/recomp_manual.c)
+    ${RESOT_ROOT}/port/game/recomp_manual.c
+    ${RESOT_ROOT}/port/game/resot_menu_pointer.c)
 
 function(resot_android_game id lib runtime_define)
     set(dir "${RESOT_ROOT}/source/${id}")

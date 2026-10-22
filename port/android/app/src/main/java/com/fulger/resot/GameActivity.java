@@ -5,6 +5,9 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.PowerManager;
 import android.view.Display;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -21,6 +24,26 @@ public class GameActivity extends SDLActivity {
     static final String EXTRA_TARGET = "target", EXTRA_GAME_DIR = "game";
     private TouchControls touchControls;
     private int renderFrameLimit = 60;
+    private int thermalFrameLimit;
+    private PowerManager powerManager;
+    private final Handler thermalHandler = new Handler(Looper.getMainLooper());
+    private Runnable thermalRecovery;
+    private static native void nativeThermalFrameLimit(int fps);
+    private final PowerManager.OnThermalStatusChangedListener thermalListener = status -> {
+        int cap = status >= PowerManager.THERMAL_STATUS_CRITICAL ? 30
+                : status >= PowerManager.THERMAL_STATUS_SEVERE ? 45
+                : status >= PowerManager.THERMAL_STATUS_MODERATE ? 60
+                : status >= PowerManager.THERMAL_STATUS_LIGHT ? 90 : 0;
+        if (thermalRecovery != null) thermalHandler.removeCallbacks(thermalRecovery);
+        Runnable apply = () -> {
+            thermalFrameLimit = cap;
+            nativeThermalFrameLimit(cap);
+            applyRefreshRate();
+        };
+        // React to heating immediately; require 30 seconds before raising the budget.
+        if (thermalFrameLimit == 0 || (cap != 0 && cap <= thermalFrameLimit)) apply.run();
+        else { thermalRecovery = apply; thermalHandler.postDelayed(apply, 30000); }
+    };
 
     private boolean retail() {
         return "retail".equals(getIntent().getStringExtra(EXTRA_TARGET));
@@ -52,6 +75,11 @@ public class GameActivity extends SDLActivity {
     @Override protected void onCreate(Bundle savedInstanceState) {
         DefaultOptions.ensure(this);
         super.onCreate(savedInstanceState);
+        powerManager = (PowerManager)getSystemService(POWER_SERVICE);
+        if (powerManager != null) {
+            powerManager.addThermalStatusListener(getMainExecutor(), thermalListener);
+            thermalListener.onThermalStatusChanged(powerManager.getCurrentThermalStatus());
+        }
         if (mLayout != null) {
             touchControls = new TouchControls(this);
             mLayout.addView(touchControls, new ViewGroup.LayoutParams(
@@ -72,6 +100,12 @@ public class GameActivity extends SDLActivity {
         super.onPause();
     }
 
+    @Override protected void onDestroy() {
+        if (powerManager != null) powerManager.removeThermalStatusListener(thermalListener);
+        thermalHandler.removeCallbacksAndMessages(null);
+        super.onDestroy();
+    }
+
     @Override public void onWindowFocusChanged(boolean hasFocus) {
         if (touchControls != null) {
             if (hasFocus) touchControls.start(); else touchControls.stop();
@@ -88,7 +122,9 @@ public class GameActivity extends SDLActivity {
     private void applyRefreshRate() {
         Display display = getWindowManager().getDefaultDisplay();
         Display.Mode current = display.getMode(), best = null, fastest = current;
-        float wanted = Math.max(60, renderFrameLimit);
+        int effective = thermalFrameLimit != 0 && (renderFrameLimit == 0 || thermalFrameLimit < renderFrameLimit)
+                ? thermalFrameLimit : renderFrameLimit;
+        float wanted = Math.max(60, effective);
         for (Display.Mode mode : display.getSupportedModes())
             if (mode.getPhysicalWidth() == current.getPhysicalWidth()
                     && mode.getPhysicalHeight() == current.getPhysicalHeight()) {
@@ -96,7 +132,7 @@ public class GameActivity extends SDLActivity {
                 if (mode.getRefreshRate() + 0.5f >= wanted
                         && (best == null || mode.getRefreshRate() < best.getRefreshRate())) best = mode;
             }
-        if (renderFrameLimit == 0 || best == null) best = fastest;
+        if (effective == 0 || best == null) best = fastest;
         WindowManager.LayoutParams attributes = getWindow().getAttributes();
         attributes.preferredDisplayModeId = best.getModeId();
         attributes.preferredRefreshRate = best.getRefreshRate();

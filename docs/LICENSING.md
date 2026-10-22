@@ -97,8 +97,9 @@ publishing it or an executable that embeds it.
   user from their own discs and are ignored by Git.
 - The C in `source/*/gen`. It is a mechanical translation of Ubisoft's game
   code and of Microsoft's XDK libraries linked into it. It is generated
-  locally, ignored by Git and must not be published. An executable built from
-  it is for the owner of the original game. The local executable also embeds
+  locally and published with the project as required by AGENTS.md; this does
+  not place it under reSOT's MIT licence. An executable built from it is for
+  the owner of the original game. The local executable also embeds
   its verified original Xbox image as a generated build resource, so players
   need no separate XBE at runtime. That resource is game data and is not
   covered by the repository licence or committed to the repository.

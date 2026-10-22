@@ -799,8 +799,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 #endif
     {
         extern void resot_current_wow(char *, size_t);
+        extern void resot_menu_pointer_event(float,float,int);
+        extern int resot_menu_scene(void);
+        extern void resot_menu_pointer_viewport(float);
+        extern void xbox_FramebufferSetMenuPointer(void (*)(float,float,int),int (*)(void),void (*)(float));
         extern void xbox_FramebufferSetWowProvider(void (*)(char *, size_t));
         xbox_FramebufferSetWowProvider(resot_current_wow);
+        xbox_FramebufferSetMenuPointer(resot_menu_pointer_event,resot_menu_scene,resot_menu_pointer_viewport);
     }
     resot_options_init();
 

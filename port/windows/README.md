@@ -1,5 +1,12 @@
 # reSOT on Windows
 
+Version 0.3.0 restores retail menu music (confirmed by the user), rebuilds the
+demo's custom menu entries on returning to the title, and hides retail Xbox
+Live in pause Options. Point at a native menu row with the mouse; left-click
+selects it and right-click goes back. The normal controller/keyboard remains
+available. Clicks are cancelled across page changes or loss of focus.
+
+
 Version 0.2.0 bundles [the supplied Windows defaults](default-options.ini):
 D3D11, unlimited FPS, VSync/glow/logs off, 720p (150%), post-processing Low
 and look sensitivity 200%. A missing INI is created before the launcher;
@@ -181,8 +188,8 @@ in the [README](../../README.md#supply-your-game-files).
 Both targets share the runtime in `port/third_party/xboxrecomp`; each has
 its own build tree, `build/<target>`, which compiles it for that target
 (`RESOT_RUNTIME_DEMO` or `RESOT_RUNTIME_RETAIL`). `-BuildOnly` rebuilds only
-the target named. The lifted C goes to `source/<target>/gen` (ignored by
-Git). The executables
+the target named. The lifted C goes to `source/<target>/gen` (published with
+the project). The executables
 land in `bin/` as `sot-xbox-demo.exe` and `sot-xbox-retail.exe`, with the
 reSOT icon (`port/windows/res`).
 
@@ -312,3 +319,46 @@ can still occur until a pipeline is ready. `RESOT_NATIVE_TRANSLATE=0` and
 `RESOT_ASYNC_PIPELINES=0` forces synchronous compilation. See
 [the shader study](../../docs/VULKAN-PERFORMANCE.md) and
 [validation](../../docs/VALIDATION.md) for scope and observed results.
+
+## Developer packet performance comparisons
+
+The shared executor batches only pure shader/constant/index/inline payloads.
+`RESOT_PB_PAYLOAD_BATCH=0` selects scalar dispatch. Surveys, verbose method
+logging and active frame traces retain the original per-word path.
+
+For same-session developer comparisons, `RESOT_PB_PAYLOAD_CONTROL` may point
+to an ASCII file containing one digit: 0 scalar/query reuse on, 1 batched/reuse
+on, 2 scalar/reuse off, 3 batched/reuse off. It is polled at the slow diagnostic
+cadence; wait at least 15 seconds after changing it before measuring. Production
+defaults are batched uploads and Vulkan query reuse off; D3D12 keeps reuse.
+The log reports mode and cumulative batched words/packets. Compare the same
+scene, camera, settings, draw counts and warm caches; discard mode transitions.
+
+On Android, creating `pb-payload-control` in the app's external files directory
+before game startup enables this optional control. Remove it after testing.
+Windows uses the environment path directly (e.g. the run script's `-Set`).
+This is diagnostic-only; no launcher/options UI or game defaults are changed.
+
+
+Vulkan reuses input geometry already uploaded into its vertex/index rings
+(2026-10-22), shared with Android. It compares the complete source data,
+indices and input state before each reuse. A changed/cycled range uses the
+normal path. Snapshot storage is bounded to 16 MiB; inline and oversized
+inputs remain uncached. Draws, constants, visibility and graphics quality stay
+unchanged. RESOT_NATIVE_GEOMETRY_CACHE=0 disables this developer feature.
+RESOT_NATIVE_GEOMETRY_CONTROL may point to an ASCII 0/1 file polled every five
+seconds for comparisons. Android enables this optional control only when
+geometry-cache-control exists in the app files folder at game startup.
+Compare identical views with warm caches; counters alone do not establish FPS.
+See [validation](../../docs/VALIDATION.md) for the installed build's limits.
+
+
+Shadow follow-up (2026-10-22): known projected character shadows are retained
+even when screen post-processing is Off, at that setting's reduced map size.
+RGB565 targets sample with implicit alpha one and known projected receivers
+are bounded to the shadow footprint. Shared Windows/Android builds compile;
+visual correctness remains for the user's gameplay check.
+
+Android-only audio queue recovery and thermal FPS budgeting use SDL audio and
+PowerManager respectively; Windows keeps its XAudio2 queue and user-selected
+frame cap. The Android overlay icon changes do not alter Windows input mappings.

@@ -15,6 +15,7 @@
 #include "xbox_memory_layout.h"
 #include "kernel.h"
 #include "guest_vmem.h"
+#include "resot_runtime.h" /* RE-SoT: fence policy belongs to the checked XBE. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -689,6 +690,7 @@ static struct {
     uint32_t device_ptr_va;
     uint32_t put_off;
     uint32_t get_ptr_off;
+    uint32_t pending_ptr, pending_value; /* RE-SoT: retail mirror snapshot, published after the scan. */
 } g_fence_mirrors[XBOX_MAX_FENCE_MIRRORS];
 static int g_fence_mirror_count = 0;
 
@@ -919,7 +921,10 @@ static uint32_t g_resot_fence_offset;
  * sword, props and wall vegetation in the first level blinked and sometimes
  * distorted; paired traces showed the draws absent). With
  * RESOT_ORDERED_FENCES=0 the user saw no flicker at the same place.
- * RESOT_ORDERED_FENCES=1 restores ordered release for comparison. */
+ * RESOT_ORDERED_FENCES=1 restores ordered release for comparison.
+ * RE-SoT: retail's legacy mirror is now deferred across the executor scan
+ * below. Fully ordered release remains opt-in: it stalls retail startup in
+ * the 2026-10-21 Windows Vulkan regression run (only one flip in 35 s). */
 static int resot_ordered_fences(void)
 {
     static int ordered = -1;
@@ -962,6 +967,7 @@ static void fence_mirrors_tick(void)
     if (pb_exec && resot_ordered_fences()) return;
     for (int i = 0; i < g_fence_mirror_count; i++) {
         uint32_t dev, get_ptr;
+        g_fence_mirrors[i].pending_ptr = 0; /* RE-SoT: no stale snapshot on unreadable device. */
 
         if (!fence_readable(g_fence_mirrors[i].device_ptr_va, 4))
             continue;
@@ -980,10 +986,37 @@ static void fence_mirrors_tick(void)
             uint32_t put =
                 *(volatile uint32_t *)((uintptr_t)(dev + g_fence_mirrors[i].put_off)
                                        + g_memory_offset);
-            if (*fence != put)
-                *fence = put;
+            if (*fence != put) {
+#if RESOT_RUNTIME_RETAIL
+                /* RE-SoT: 1401_MgcFntRm Android logs show float payloads
+                 * interpreted as jumps after the stream is overwritten.
+                 * Snapshot before consuming PUT, publish after its scan so
+                 * the producer cannot recycle that data while it is read.
+                 * Preserve legacy idle acknowledgements needed at startup. */
+                if (pb_exec) {
+                    g_fence_mirrors[i].pending_ptr = get_ptr;
+                    g_fence_mirrors[i].pending_value = put;
+                } else *fence = put;
+#else
+                *fence = put; /* RE-SoT: demo's independently validated policy. */
+#endif
+            }
         }
     }
+}
+
+static void fence_mirrors_commit(void)
+{
+#if RESOT_RUNTIME_RETAIL
+    /* RE-SoT: executor-owned snapshots; never read a newer producer value
+     * here, which could refer to commands submitted during the scan. */
+    for (int i = 0; i < g_fence_mirror_count; i++) {
+        uint32_t ptr = g_fence_mirrors[i].pending_ptr;
+        if (ptr && fence_readable(ptr, 4))
+            *(volatile uint32_t *)((uintptr_t)ptr + g_memory_offset) = g_fence_mirrors[i].pending_value;
+        g_fence_mirrors[i].pending_ptr = 0;
+    }
+#endif
 }
 
 static int s_nv2a_trace = 0;
@@ -1262,6 +1295,7 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
                 }
             }
         }
+        fence_mirrors_commit(); /* RE-SoT: submitted guest memory has now been consumed. */
         if (s_nv2a_trace) {
             static uint32_t last_start = 0xFFFFFFFFu;
             uint32_t start = *(volatile uint32_t *)((char *)regs + 0x600800);
