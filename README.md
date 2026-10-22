@@ -64,7 +64,11 @@ letterboxed cutscene frames. These are gameplay examples, not a full-game test.*
   right or use Android Back to go back. Keyboard and controller remain available.
 - **Automatic Android control visibility.** The touch pad hides in menus,
   Bink movies and camera scenes with cinematic bars, then restores the
-  player's visibility preference in gameplay. Tapping a Bink movie skips it.
+  player's visibility preference in gameplay. FPS remains visible. The
+  overlay toggle fades to invisible but keeps its touch area active, allowing
+  the full pad to be reopened in menus and cutscenes. With the pad hidden,
+  styled Back and Confirm buttons appear at the bottom corners. Tapping a
+  Bink movie or pressing Confirm skips it.
 - **Vulkan performance work.** Dedicated shader translation and caching,
   material descriptor caching, exact input-geometry reuse, batched command
   payloads and texture-upload improvements reduce repeated work on both hosts.
@@ -231,6 +235,7 @@ It is regenerated from the user's own checked XBE and is never edited by hand.
 | `Assets/`, `research/`, `bin/`, `build*/`, `logs/` | Private game files, analysis or local outputs; ignored |
 
 - [Validation and observed results](docs/VALIDATION.md)
+- [v0.3.0 release notes](docs/releases/v0.3.0.md)
 - [Recompilation pipeline and target evidence](docs/RECOMP.md)
 - [Windows/Android parity](docs/PLATFORM-PARITY.md)
 - [Vulkan performance and rendering studies](docs/VULKAN-PERFORMANCE.md)

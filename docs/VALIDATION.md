@@ -1,5 +1,35 @@
 # Validation log
 
+## 2026-10-22: final v0.3.0 Android overlay navigation
+
+User requests FPS and the overlay toggle remain accessible when automatic
+menu/cinematic hiding suppresses gameplay controls. Android now always draws
+FPS, fades only the eye toggle to alpha zero over 450 ms after a tap or
+automatic hiding, and retains its unchanged hit area. Tapping the invisible
+toggle reopens the full pad even in menus/cinematics. This temporary override
+is cleared on context changes without overwriting gameplay visibility.
+
+Blue/gold Back and right-arrow Confirm medallions appear in the lower left
+and right only during menus/cinematics while the full pad is hidden. They
+send B/A with a short controller pulse; their touch ownership keeps taps
+away from the direct menu-row pointer. Reopening the full pad hides both.
+TouchControls clears held controls/pulses, pending pointer gestures and long
+press callbacks on reset, scene changes and stop. The Android input host
+accepts explicit touch pad input in menus instead of discarding it by scene.
+Shared Xbox runtime, target hooks and Windows controls are unchanged; the
+Windows README explains the Android-only floating controls.
+
+Checks: python tools/test-touch-overlay.py passes the production Java policy
+scenarios (startup, gradual fade, alpha-zero reactivation, menu/cinematic
+overrides, corner-navigation visibility, preference restoration and editing).
+python tools/check-hlsl.py passes all ten entries. tools/build-android.ps1
+builds the release APK with both game libraries; version 0.3.0/code 5.
+Build log: logs/v030-overlay-android-build.txt. ADB finds a device, but another
+activity is foreground; no APK installation or game launch was performed.
+No on-device Canvas, touch, controller-delivery or background/resume result
+is claimed. The latest changes need a device interaction check.
+
+
 ## 2026-10-22: README status and encoding refresh
 
 The user describes the game as now running well on Android and Windows and

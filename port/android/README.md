@@ -32,10 +32,25 @@ Version 0.3.0 (Android versionCode 5) includes the original retail music-stream
 completion path, the demo menu lifecycle correction and removal of retail's
 pause Xbox Live entry. Tap native menu rows directly; swipe right to go back
 or use Android Back. The pad overlay hides automatically in menus, Bink movies
-and camera scenes with cinematic bars, then restores the player's visibility
-preference in gameplay. A tap skips a Bink movie. Physical pads and keyboard
-remain available. This APK builds; device touch/scene transitions and music
-listening have not been checked because no ADB device was connected.
+and camera scenes with cinematic bars, then restores the player's gameplay
+visibility preference. FPS always stays visible, including while its panel
+is open. The top-centre eye toggle fades to zero opacity over 450 ms after
+a tap or automatic hiding; its hit area stays active. Tap that same spot
+to reopen the full pad, including during menus or cutscenes. This override
+lasts until the next scene-context change and does not replace the saved
+gameplay preference.
+
+While the full pad is hidden in a menu or cutscene, matching blue/gold Back
+and right-arrow Confirm buttons appear at the bottom left and right. They
+send the normal B/A actions; Confirm also skips Bink playback. They disappear
+when the full pad is reopened and are not shown during ordinary gameplay.
+Held input is cleared on context changes, cancellation and backgrounding.
+Physical pads and keyboard remain available. The final overlay build and
+host Java policy tests pass; device rendering/touch and music listening after
+the streaming restoration remain unverified.
+
+These floating controls are Android-specific. Windows uses its existing
+mouse/controller controls, right-click Back and F5 FPS shortcut.
 
 Version 0.2.0 (Android versionCode 4) bundles
 [the supplied Android defaults](default-options.ini): Vulkan, unlimited FPS,

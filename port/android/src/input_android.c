@@ -299,8 +299,10 @@ DWORD xbox_InputGetState(DWORD port, XBOX_INPUT_STATE *state)
         pthread_mutex_lock(&s_touch_lock);
         memcpy(touch, s_touch, sizeof touch);
         pthread_mutex_unlock(&s_touch_lock);
-        if (resot_menu_scene() == 0)
-            from_sdl(&state->Gamepad, touch, (uint32_t)touch[6]);
+        /* Java clears held controls on context changes, and can explicitly
+         * reopen the full pad in menus/cinematics. Also retain its corner
+         * Back/Confirm pulses while the gameplay pad is hidden. */
+        from_sdl(&state->Gamepad, touch, (uint32_t)touch[6]);
         if (s_back_down) state->Gamepad.bAnalogButtons[XBOX_BUTTON_B] = 255;
         any = 1;   /* the touch controls are always a pad on port 0 */
     }

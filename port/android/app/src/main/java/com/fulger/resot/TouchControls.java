@@ -81,7 +81,8 @@ public final class TouchControls extends View implements InputManager.InputDevic
         new Control("Left", "left", DPAD_LEFT, -1, 224, 458, 18),
         new Control("Right", "right", DPAD_RIGHT, -1, 300, 458, 18),
     };
-    private static final int TOGGLE = -2, FPS = -3, SAVE = -4, RESET = -5, MOVE = -6, CAMERA = -7, NONE = -100;
+    private static final int TOGGLE = -2, FPS = -3, SAVE = -4, RESET = -5, MOVE = -6, CAMERA = -7,
+        MENU_BACK = -8, MENU_CONFIRM = -9, NONE = -100;
     private static final float STICK_R = 70, CAMERA_R = 80;
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -93,7 +94,9 @@ public final class TouchControls extends View implements InputManager.InputDevic
     private final AudioAttributes rumbleAttributes = new AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_GAME).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build();
     private float scale = 1, logicalW = 960, logicalH = 540;
-    private boolean visible = true, editing, active;
+    private final TouchOverlayState overlay;
+    private boolean editing, active;
+    private int navigationPulse;
     private int movePointer = -1, cameraPointer = -1, dragPointer = -1, dragControl = -1;
     private float moveX, moveY, moveDX, moveDY, camX, camY, camDX, camDY, dragOffX, dragOffY;
     private long toggleDown;
@@ -114,7 +117,7 @@ public final class TouchControls extends View implements InputManager.InputDevic
             controls[i].x = preferences.getFloat(positionPrefix(controls[i]) + "x" + i, controls[i].x0);
             controls[i].y = preferences.getFloat(positionPrefix(controls[i]) + "y" + i, controls[i].y0);
         }
-        visible = preferences.getBoolean("visible", !gamepadConnected());
+        overlay = new TouchOverlayState(preferences.getBoolean("visible", !gamepadConnected()), SystemClock.uptimeMillis());
         setFocusable(false);
         setContentDescription("reSOT touch controller");
     }
@@ -176,10 +179,14 @@ public final class TouchControls extends View implements InputManager.InputDevic
 
     /** A controller arriving hides the overlay; the toggle brings it back. */
     @Override public void onInputDeviceAdded(int deviceId) {
-        if (gamepadConnected() && visible && !editing) { visible = false; reset(); invalidate(); }
+        if (gamepadConnected() && controlsVisible() && !editing) {
+            overlay.setGameplayVisible(false, SystemClock.uptimeMillis()); reset();
+        }
     }
     @Override public void onInputDeviceRemoved(int deviceId) {
-        if (!gamepadConnected() && !visible) { visible = true; invalidate(); }
+        if (!gamepadConnected() && !overlay.gameplayVisible()) {
+            overlay.setGameplayVisible(true, SystemClock.uptimeMillis()); invalidate();
+        }
     }
     @Override public void onInputDeviceChanged(int deviceId) {}
 
@@ -200,6 +207,11 @@ public final class TouchControls extends View implements InputManager.InputDevic
     // ── state ────────────────────────────────────────────────
 
     private void reset() {
+        removeCallbacks(longToggle);
+        removeCallbacks(clearNavigation);
+        navigationPulse = 0;
+        menuPointer = -1;
+        nativePointer(0, 0, 3);
         owners.clear();
         movePointer = cameraPointer = dragPointer = dragControl = -1;
         moveDX = moveDY = camDX = camDY = 0;
@@ -208,8 +220,9 @@ public final class TouchControls extends View implements InputManager.InputDevic
     }
 
     private void publish() {
-        if (!visible || editing || scene != 0) { nativeState(0, 0, 0, 0, 0, 0, 0); return; }
-        int bits = 0, lt = 0, rt = 0;
+        if (editing) { nativeState(0, 0, 0, 0, 0, 0, 0); return; }
+        if (!controlsVisible()) { nativeState(0, 0, 0, 0, 0, 0, navigationPulse); return; }
+        int bits = navigationPulse, lt = 0, rt = 0;
         for (int i = 0; i < owners.size(); i++) {
             int c = owners.valueAt(i);
             if (c < 0) continue;
@@ -232,14 +245,25 @@ public final class TouchControls extends View implements InputManager.InputDevic
     }
 
     private float toolbarY() { return 36; }
+    private float navigationY() { return logicalH - 56; }
+    private boolean controlsVisible() { return editing || overlay.controlsVisible(); }
+    private boolean navigationVisible() { return !editing && overlay.navigationVisible(); }
 
     private int hit(float x, float y) {
         if (inside(x, y, logicalW / 2, toolbarY(), 30)) return TOGGLE;
+        if (inside(x, y, 36, toolbarY(), 26)) return FPS;
         if (editing) {
             if (inside(x, y, logicalW / 2 + 150, toolbarY(), 30)) return SAVE;
             if (inside(x, y, logicalW / 2 - 150, toolbarY(), 30)) return RESET;
-        } else if (inside(x, y, 36, toolbarY(), 26)) return FPS;
-        if (!visible && !editing) return NONE;
+        }
+        if (navigationVisible()) {
+            // Include the caption below each medallion in its touch target.
+            if (y >= navigationY() - 36 && y <= logicalH) {
+                if (x >= 16 && x <= 96) return MENU_BACK;
+                if (x >= logicalW - 96 && x <= logicalW - 16) return MENU_CONFIRM;
+            }
+        }
+        if (!controlsVisible()) return NONE;
         for (int i = 0; i < controls.length; i++)
             if (inside(x, y, controls[i].x, controls[i].y, controls[i].r * 1.15f)) return i;
         if (editing) return NONE;
@@ -248,7 +272,6 @@ public final class TouchControls extends View implements InputManager.InputDevic
 
     @Override public boolean onTouchEvent(MotionEvent e) {
         updateScene();
-        if (scene != 0 && !editing) return menuTouch(e);
         int action = e.getActionMasked(), index = e.getActionIndex(), id = e.getPointerId(index);
         float x = e.getX(index) / scale, y = e.getY(index) / scale;
         switch (action) {
@@ -257,6 +280,7 @@ public final class TouchControls extends View implements InputManager.InputDevic
             int c = hit(x, y);
             if (c == TOGGLE) { toggleDown = SystemClock.uptimeMillis(); owners.put(id, TOGGLE); postDelayed(longToggle, 600); }
             else if (c == FPS) { nativeToggleFps(); owners.put(id, FPS); }
+            else if (c == MENU_BACK || c == MENU_CONFIRM) { owners.put(id, c); }
             else if (c == SAVE) { save(); editing = false; owners.put(id, SAVE); reset(); }
             else if (c == RESET) { for (Control k : controls) { k.x = k.x0 + (centred(k) ? (logicalW - 960) / 2 : k.x0 > 480 ? logicalW - 960 : 0); k.y = k.y0 + (k.y0 > 270 ? logicalH - 540 : 0); } owners.put(id, RESET); }
             else if (editing && c >= 0 && dragPointer < 0) {
@@ -264,12 +288,17 @@ public final class TouchControls extends View implements InputManager.InputDevic
             } else if (c == MOVE && movePointer < 0) { movePointer = id; moveX = x; moveY = y; moveDX = moveDY = 0; owners.put(id, MOVE); }
             else if (c == CAMERA && cameraPointer < 0) { cameraPointer = id; camX = x; camY = y; camDX = camDY = 0; owners.put(id, CAMERA); }
             else if (c >= 0) owners.put(id, c);
+            else if (c == NONE && scene != 0 && menuPointer < 0) {
+                menuPointer = id; menuDownX = e.getX(index); menuDownY = e.getY(index);
+                nativePointer(menuDownX / getWidth(), menuDownY / getHeight(), 1);
+            }
             break;
         }
         case MotionEvent.ACTION_MOVE:
             for (int i = 0; i < e.getPointerCount(); i++) {
                 int p = e.getPointerId(i);
                 float px = e.getX(i) / scale, py = e.getY(i) / scale;
+                if (p == menuPointer) nativePointer(e.getX(i) / getWidth(), e.getY(i) / getHeight(), 0);
                 if (p == dragPointer && dragControl >= 0) {
                     Control k = controls[dragControl];
                     k.x = Math.max(k.r, Math.min(logicalW - k.r, px - dragOffX));
@@ -291,9 +320,22 @@ public final class TouchControls extends View implements InputManager.InputDevic
             if (owners.get(id, NONE) == TOGGLE) {
                 removeCallbacks(longToggle);
                 if (!editing && SystemClock.uptimeMillis() - toggleDown < 600) {
-                    visible = !visible;
-                    preferences.edit().putBoolean("visible", visible).apply();
+                    overlay.toggle(SystemClock.uptimeMillis());
+                    if (scene == 0) preferences.edit().putBoolean("visible", overlay.gameplayVisible()).apply();
+                    reset();
                 }
+            }
+            int owner = owners.get(id, NONE);
+            if ((owner == MENU_BACK || owner == MENU_CONFIRM) && hit(x, y) == owner)
+                pulseNavigation(owner);
+            if (id == menuPointer) {
+                float px = e.getX(index), py = e.getY(index);
+                boolean back = scene == 1 && px - menuDownX > getWidth() * .16f
+                    && Math.abs(py - menuDownY) < getHeight() * .1f;
+                if (back) nativePointer(0, 0, 3);
+                nativePointer(px / getWidth(), py / getHeight(), back ? 4 : 2);
+                menuPointer = -1;
+                if (!back) performClick();
             }
             if (id == movePointer) { movePointer = -1; moveDX = moveDY = 0; }
             if (id == cameraPointer) { cameraPointer = -1; camDX = camDY = 0; }
@@ -312,8 +354,19 @@ public final class TouchControls extends View implements InputManager.InputDevic
 
     /** Holding the toggle opens the layout editor. */
     private final Runnable longToggle = new Runnable() {
-        public void run() { editing = true; visible = true; owners.clear(); reset(); }
+        public void run() { editing = true; overlay.showForEditing(); reset(); }
     };
+
+    // Keep even a very short corner-button tap visible to a controller poll.
+    private final Runnable clearNavigation = () -> { navigationPulse = 0; publish(); invalidate(); };
+    private void pulseNavigation(int control) {
+        menuPointer = -1;
+        nativePointer(0, 0, 3);
+        navigationPulse = 1 << (control == MENU_BACK ? EAST : SOUTH);
+        removeCallbacks(clearNavigation);
+        postDelayed(clearNavigation, 100);
+        performClick();
+    }
 
     // Only the three relocated controls get new keys: apply the HUD clearance
     // on upgrade without discarding the player's other custom positions.
@@ -334,43 +387,18 @@ public final class TouchControls extends View implements InputManager.InputDevic
     @Override public boolean performClick() { super.performClick(); return true; }
 
     // Like the Halo reference, clear all held controls at context changes.
-    // Keep the user's overlay preference: it returns only during gameplay.
+    // Preserve the gameplay preference; a menu/cinematic override is temporary.
     private void updateScene() {
         int next = nativeScene();
         if (next == scene) return;
         scene = next;
+        overlay.sceneChanged(next, SystemClock.uptimeMillis());
         removeCallbacks(longToggle);
         editing = false;
         menuPointer = -1;
         nativePointer(0, 0, 3);
         reset();
         cancelRumble();
-    }
-
-    private boolean menuTouch(MotionEvent e) {
-        int action = e.getActionMasked(), index = e.getActionIndex();
-        if (action == MotionEvent.ACTION_DOWN) {
-            menuPointer = e.getPointerId(index);
-            menuDownX = e.getX(index); menuDownY = e.getY(index);
-            nativePointer(menuDownX / getWidth(), menuDownY / getHeight(), 1);
-        } else if (action == MotionEvent.ACTION_MOVE && menuPointer >= 0) {
-            int i = e.findPointerIndex(menuPointer);
-            if (i >= 0) nativePointer(e.getX(i) / getWidth(), e.getY(i) / getHeight(), 0);
-        } else if ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP)
-                && e.getPointerId(index) == menuPointer) {
-            float x = e.getX(index), y = e.getY(index);
-            // A deliberate horizontal swipe backs out, without a visible pad.
-            boolean back = scene == 1 && x - menuDownX > getWidth() * .16f
-                && Math.abs(y - menuDownY) < getHeight() * .1f;
-            if (back) nativePointer(0, 0, 3);
-            nativePointer(x / getWidth(), y / getHeight(), back ? 4 : 2);
-            menuPointer = -1;
-            if (!back) performClick();
-        } else if (action == MotionEvent.ACTION_CANCEL) {
-            menuPointer = -1;
-            nativePointer(0, 0, 3);
-        }
-        return true;
     }
 
     // ── drawing: night blue, luminous blue edges, gold accents (the launcher's style) ──
@@ -475,6 +503,7 @@ public final class TouchControls extends View implements InputManager.InputDevic
         case "recenter": c.drawArc(new RectF(-10, -10, 10, 10), 40, 290, false, paint); line(c, 10, -8, 8, -1, 2, -4); break;
         case "pause": line(c, -5, -9, -5, 9); line(c, 5, -9, 5, 9); break;
         case "back": line(c, 10, 0, -10, 0); line(c, -4, -6, -10, 0, -4, 6); break;
+        case "confirm": line(c, -10, 0, 10, 0); line(c, 4, -6, 10, 0, 4, 6); break;
         case "up": line(c, -7, 4, 0, -4, 7, 4); break;
         case "down": line(c, -7, -4, 0, 4, 7, -4); break;
         case "left": line(c, 4, -7, -4, 0, 4, 7); break;
@@ -487,23 +516,37 @@ public final class TouchControls extends View implements InputManager.InputDevic
     }
 
     @Override protected void onDraw(Canvas canvas) {
-        if (scene != 0 && !editing) return;
         canvas.save();
         canvas.scale(scale, scale);
         // the toolbar
-        disc(canvas, logicalW / 2, toolbarY(), 26, editing);
-        glyph(canvas, "eye", logicalW / 2, toolbarY(), 20, visible || editing);
+        long now = SystemClock.uptimeMillis();
+        float toggleAlpha = editing ? 1f : overlay.toggleAlpha(now);
+        if (toggleAlpha > 0f) {
+            int layer = canvas.saveLayerAlpha(logicalW / 2 - 32, toolbarY() - 32,
+                logicalW / 2 + 32, toolbarY() + 32, Math.round(toggleAlpha * 255));
+            disc(canvas, logicalW / 2, toolbarY(), 26, editing);
+            glyph(canvas, "eye", logicalW / 2, toolbarY(), 20, controlsVisible());
+            canvas.restoreToCount(layer);
+        }
+        if (!editing && overlay.fading(now)) postInvalidateOnAnimation();
         if (editing) {
             disc(canvas, logicalW / 2 + 150, toolbarY(), 28, false);
             label(canvas, "SAVE", logicalW / 2 + 150, toolbarY(), 13);
             disc(canvas, logicalW / 2 - 150, toolbarY(), 28, false);
             label(canvas, "RESET", logicalW / 2 - 150, toolbarY(), 12);
             label(canvas, "DRAG THE CONTROLS, THEN SAVE", logicalW / 2, toolbarY() + 56, 15);
-        } else if (!nativeFpsVisible()) { // Keep hit() active at this location while the button is hidden.
-            disc(canvas, 36, toolbarY(), 22, false);
-            label(canvas, "FPS", 36, toolbarY(), 11);
         }
-        if (visible || editing) {
+        disc(canvas, 36, toolbarY(), 22, nativeFpsVisible());
+        label(canvas, "FPS", 36, toolbarY(), 11);
+        if (navigationVisible()) {
+            disc(canvas, 56, navigationY(), 28, held(MENU_BACK));
+            glyph(canvas, "back", 56, navigationY(), 20, held(MENU_BACK));
+            label(canvas, "Back", 56, navigationY() + 42, 13);
+            disc(canvas, logicalW - 56, navigationY(), 28, held(MENU_CONFIRM));
+            glyph(canvas, "confirm", logicalW - 56, navigationY(), 20, held(MENU_CONFIRM));
+            label(canvas, "Confirm", logicalW - 56, navigationY() + 42, 13);
+        }
+        if (controlsVisible()) {
             for (int i = 0; i < controls.length; i++) {
                 Control k = controls[i];
                 boolean on = held(i);

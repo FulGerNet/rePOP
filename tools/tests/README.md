@@ -1,5 +1,15 @@
 # Regression tests
 
+## Android contextual overlay
+
+Run `python tools/test-touch-overlay.py` with a JDK on PATH. This exercises
+the app's production visibility/fade policy: automatic hiding, transparent
+toggle reactivation, menu/cinematic overrides, Back/Confirm visibility,
+restoration of saved gameplay preferences, and layout editing. It uses no
+game files or Android device and writes classes under ignored
+`build/touch-overlay-tests/`. Canvas rendering, touch hit testing and JNI
+controller delivery still require the Android build and device checks.
+
 ## Menu pointer (Windows host test, both Xbox layouts)
 
 Run `python tools/test-menu-pointer.py`. It compiles the production shared

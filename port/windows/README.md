@@ -75,8 +75,11 @@ original skip permission is disabled. F5 opens/closes the compact translucent to
 with game FPS, `Current WOW` (the loaded BF world's own name, `None`
 when no world is loaded), and `Renderer:` showing the active Direct3D 11,
 Direct3D 12, Vulkan or software renderer. F11 changes window mode; Alt+F4 exits.
-Android's FPS touch button hides while its panel is open and keeps the same
-touch area to close it; Windows uses F5 and has no on-screen FPS button.
+Android keeps its FPS touch button visible even when its panel or gameplay
+overlay is hidden. Its overlay toggle can fade out while retaining its hit
+area, with contextual Back/Confirm buttons in menus and cutscenes. These
+floating controls are Android-specific; Windows uses F5 for FPS, mouse or
+controller menu input and right-click Back.
 F6 opens the translucent diagnostics panel. Like F5 it leaves the game
 playable. It shows, twice a second: frame rate and frame time with the
 current graphics settings; executor time (interpreter, draw calls), present
