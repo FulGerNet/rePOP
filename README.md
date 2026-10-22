@@ -64,7 +64,9 @@ letterboxed cutscene frames. These are gameplay examples, not a full-game test.*
   right or use Android Back to go back. Keyboard and controller remain available.
 - **Automatic Android control visibility.** The touch pad hides in menus,
   Bink movies and camera scenes with cinematic bars, then restores the
-  player's visibility preference in gameplay. FPS remains visible. The
+  player's visibility preference in gameplay. The FPS button remains available
+  when the pad is hidden; it becomes invisible while its panel is open, with
+  the same touch area available to close the panel. The
   overlay toggle fades to invisible but keeps its touch area active, allowing
   the full pad to be reopened in menus and cutscenes. With the pad hidden,
   styled Back and Confirm buttons appear at the bottom corners. Tapping a

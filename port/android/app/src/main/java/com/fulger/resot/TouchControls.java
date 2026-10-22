@@ -536,8 +536,11 @@ public final class TouchControls extends View implements InputManager.InputDevic
             label(canvas, "RESET", logicalW / 2 - 150, toolbarY(), 12);
             label(canvas, "DRAG THE CONTROLS, THEN SAVE", logicalW / 2, toolbarY() + 56, 15);
         }
-        disc(canvas, 36, toolbarY(), 22, nativeFpsVisible());
-        label(canvas, "FPS", 36, toolbarY(), 11);
+        // Leave the hit target active, but keep the panel text unobstructed.
+        if (!nativeFpsVisible()) {
+            disc(canvas, 36, toolbarY(), 22, false);
+            label(canvas, "FPS", 36, toolbarY(), 11);
+        }
         if (navigationVisible()) {
             disc(canvas, 56, navigationY(), 28, held(MENU_BACK));
             glyph(canvas, "back", 56, navigationY(), 20, held(MENU_BACK));

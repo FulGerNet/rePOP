@@ -33,8 +33,10 @@ completion path, the demo menu lifecycle correction and removal of retail's
 pause Xbox Live entry. Tap native menu rows directly; swipe right to go back
 or use Android Back. The pad overlay hides automatically in menus, Bink movies
 and camera scenes with cinematic bars, then restores the player's gameplay
-visibility preference. FPS always stays visible, including while its panel
-is open. The top-centre eye toggle fades to zero opacity over 450 ms after
+visibility preference. The FPS button stays visible when the gameplay pad
+is hidden, including in menus/cinematics. While the FPS panel is open, the
+button becomes invisible so it cannot cover the text; its usual touch area
+remains active to close the panel. The top-centre eye toggle fades to zero opacity over 450 ms after
 a tap or automatic hiding; its hit area stays active. Tap that same spot
 to reopen the full pad, including during menus or cutscenes. This override
 lasts until the next scene-context change and does not replace the saved

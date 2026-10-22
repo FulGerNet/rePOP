@@ -1,5 +1,21 @@
 # Validation log
 
+## 2026-10-22: Android FPS button no longer overlaps its panel
+
+User reports that the newly persistent FPS button covers the FPS panel.
+TouchControls now draws the FPS medallion/label only while the panel is
+closed. Its hit target remains active at the same top-left position, so a
+second tap closes the panel. This applies with the full pad visible or
+hidden, including menus and cinematics. Overlay-toggle fading and the
+Back/Confirm controls are unchanged. Updated the platform guides, README
+and release notes to describe this corrected visibility rule.
+
+Check: tools/build-android.ps1 builds the v0.3.0 release APK; log at
+logs/v030-fps-button-android-build.txt. git diff --check passes. This is a
+Java drawing condition change; no new game/device test or Windows rebuild
+was performed.
+
+
 ## 2026-10-22: final v0.3.0 Android overlay navigation
 
 User requests FPS and the overlay toggle remain accessible when automatic
