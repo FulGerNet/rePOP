@@ -3,158 +3,158 @@
 </p>
 
 <p align="center">
-  <a href="https://www.buymeacoffee.com/fulger" target="_blank"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee" height="37" width="170" style="height: 37px !important;width: 170px !important;box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;-webkit-box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;"></a>
+  <a href="https://www.buymeacoffee.com/fulger" target="_blank"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee" height="37" width="170"></a>
 </p>
 
 # reSOT
 
-Static recompilation of the original Xbox builds of
-**Prince of Persia: The Sands of Time** into native Windows executables
-and one native Android app for both games (device validation in progress).
+**Prince of Persia: The Sands of Time, recompiled from Xbox to native Windows and Android.**
 
-<img src="docs/media/gameplay-xbox-retail.jpg" alt="The Xbox retail game recompiled, 16:9: the ramparts cutscene, the Vizier's guard, the Prince in the courtyard, a wall run, a ladder, the inner courtyard, two sword fights, the pause menu">
+**Current version: v0.3.0.** reSOT is an advanced, playable recompilation and
+port of the original Xbox retail game and E3 2003 demo. Both games now run
+well on Windows and Android in the configurations tested by the user, with
+working gameplay, menus, movies, audio and controller support. The project
+has progressed beyond initial boot and rendering bring-up into gameplay,
+performance improvements and platform polish.
 
-*The Xbox retail game, recompiled, at 16:9 (Hor+), from one run
-(2026-10-17) through the first areas (`0101_Porte`, `0102_Rempart_Couloir`):
-a cutscene on the ramparts, the Vizier's guard, the courtyard, the wall-run
-and ladder tutorials, two fights and the pause menu. Captures of the game
-window; inputs from the scripted pad (`RECOMP_PAD_SCRIPT` / `RECOMP_PAD_LIVE`),
-not a person. In the two cutscene frames the F5 panel, which sat on the
-letterbox bar, was painted over in black.*
+Windows has separate native executables for demo and retail. Android has one
+native arm64 app for both, with Vulkan rendering, a game installer and touch
+controls. This is static recompilation: the original game's code runs as
+native code against reSOT's replacement for the Xbox hardware and services.
 
-<img src="docs/media/gameplay-xbox-demo.jpg" alt="The Xbox demo recompiled, 16:9: main menu, intro, the Prince waking, the Vizier's soldiers, explosions on the ramparts, a ledge, the Sands of Time transition">
+**You need your own game files.** reSOT does not include the game, extracted
+assets or Xbox executables. The generated C is published with the project;
+it remains derived from the original game and is not covered by reSOT's MIT licence.
 
-*The Xbox demo, recompiled, at 16:9 (Hor+), from one scripted 185-second
-run (2026-10-14): main menu, the intro, the first level's opening, the
-soldiers' scene, the ramparts under fire, a ledge prompt, the transition into
-the next section. Frame dumps from the game window; inputs from a pad script,
-not a person.*
+## Playable targets
 
-| Target | Source executable | State |
+| Target | Supported Xbox executable | Current state |
 | --- | --- | --- |
-| `xbox-demo` | E3 2003 demo, `default.xbe` built 2003-07-18 | Runs movies, menus, pause and the scripted level sections at about 58-60 FPS with VSync; played by a person to the third level without a freeze. Compact F5 and F6 options added. User confirms corrected audio and 120+ FPS (2026-10-18); intermittent visual defects remain under validation; no console comparison. Dedicated Vulkan shaders exercised on PC and Android (2026-10-21), with validation limits below |
-| `xbox-retail` | NTSC retail, title `0x5553001D`, `default.xbe` built 2003-10-20 | Bring-up: first playable level reached by the user and a scripted run. The invalid-refresh timestep that caused extreme slow motion is corrected: gameplay measured 9.003 real seconds / 9.008 simulation seconds with the fix. User confirms corrected audio, 120+ FPS and the save-crash fix (2026-10-18); full-level accuracy and broader audio/visual validation remain incomplete. User reports missing retail menu/gameplay music but audible cutscene music and corrected cutscene timing (2026-10-22); the speculative deferred completion override has now been removed and the user confirms music in the Windows menu; gameplay/Android listening remains unverified. Dedicated Vulkan shaders exercised on PC and Android (2026-10-21); fountain-return corruption corrected in the runtime and confirmed by the user on Android (2026-10-21). Scene-dependent FPS drops remain; user reports slowdown after query-resource update; Vulkan pooling reverted and user confirms a large material-cache gain; selective binds withdrawn after user-reported regression; material cache retained; Android Vulkan surface recovery passed one background/resume cycle |
+| `xbox-demo` | E3 2003 demo, built 2003-07-18 | 🟢 Playable on Windows and Android. Menus, movies, audio, controls and level gameplay are running. Windows play has reached the third level; the demo also has its restored Load Map menu. |
+| `xbox-retail` | NTSC retail, title `0x5553001D`, built 2003-10-20 | 🟢 Playable on Windows and Android. Substantial gameplay has been reported, with corrected game timing, audio, rendering and HUD alignment. The v0.3.0 Windows menu-music restoration is confirmed by the user. |
 
-The existing post-processing quality selector now budgets auxiliary effect
-buffers and projected shadows as well as recognized blur/bloom chains, on
-both hosts and targets. The user confirms that it works (2026-10-20).
-The in-game selector offers Low/Mid/High; Off remains accessible via the INI
-and Windows F7. Both hosts now default to Low (2026-10-21); compilation
-and runtime validation of this menu/default change are recorded below.
-The [effect study](docs/POST-PROCESSING.md) records the remaining water,
-motion-blur and other effect-identification gaps. Windows native renderers
-also synchronize SDL window borders when F11 leaves fullscreen; that separate
-correction still awaits confirmation. See [VALIDATION.md](docs/VALIDATION.md).
+The user reports that the game now runs well on both platforms. Performance
+still depends on the device, renderer, scene and graphics settings. This is
+an advanced playable port, with full-game completion, remaining graphical
+edge cases and some recent platform features still under validation.
 
-Retail's forming sand-tank ring now follows the rest of the HUD on ultrawide
-Android displays; the user confirms its corrected alignment (2026-10-21).
-The shared correction also builds on Windows. See [VALIDATION.md](docs/VALIDATION.md).
+<img src="docs/media/gameplay-xbox-retail.jpg" alt="Xbox retail running in reSOT: cutscenes, courtyard gameplay, climbing, combat and pause menu">
 
-Vulkan now translates supported vertex programs to dedicated SPIR-V and
-optimizes complex fragment programs before pipeline creation, on Windows and
-Android for both targets. Compiled programs are cached on disk; reference
-pipelines can draw while dedicated pipelines compile. GPU comparisons pass,
-and initial PC/device scenes were inspected (2026-10-21). This does not establish
-a controlled FPS improvement or sustained 60 FPS: demo device scenes still
-include about 49�50 FPS windows. See [the shader study](docs/VULKAN-PERFORMANCE.md).
+*Windows retail captures from the first areas, 2026-10-17, using scripted
+controller input at 16:9 Hor+. The F5 panel was covered with black in the two
+letterboxed cutscene frames. These are gameplay examples, not a full-game test.*
 
-The confirmed Vulkan material-descriptor cache remains enabled; selective
-descriptor binds and the compact-constant/reduced-output experiment are withdrawn.
-The user clarified that the earlier 100 FPS comparison came from another build
-and mostly empty views; it is not a verified same-scene regression measurement.
-The prior material-cache APK was recovered and matched the restored base by
-SHA-256. New work starts from that base.
+<img src="docs/media/gameplay-xbox-demo.jpg" alt="Xbox demo running in reSOT: main menu, intro, ramparts and level transitions">
 
-Vulkan now reuses already uploaded input geometry across draws and frames on
-Windows and Android (2026-10-22). Every index, source byte, input format and
-current attribute is checked; changed data or a cycled GPU ring uses the normal
-conversion/upload path. Source snapshots are bounded to 16 MiB. Both Windows
-targets and Android build, the exact-cache test and short Vulkan GPU check pass,
-and the APK is installed. Retail gameplay logs show actual reuse and the user
-reports good FPS in this first session. No controlled FPS uplift, sustained
-60/100 FPS, thermal diagnosis or demo-device gameplay result is established.
-See [the study](docs/VULKAN-PERFORMANCE.md) and [validation](docs/VALIDATION.md).
+*Windows demo captures from a scripted 185-second run, 2026-10-14, at 16:9 Hor+.*
 
-The user reports a slowdown with the later query-resource revision.
-Vulkan now returns to the previous query allocation policy, while a new
-bounded command-payload path batches indices and shader/constant uploads.
-Both Windows targets and Android build; 12 GPU/support/decoder tests plus
-the vertex interpreter regression pass. Same-scene Android measurements
-are recorded in [the study](docs/VULKAN-PERFORMANCE.md); substantial timing
-drift prevents a claim of sustained 60 FPS or a universal speedup. The final
-contiguous-upload A/B repeats about 9% lower executor time and 3-4% more
-FPS in one heavy retail view; it still runs near 21.5 FPS there.
+## What's included in v0.3.0
 
-The log viewers have a source-selection repair: Windows follows the logger's
-actual file path, and Android reads the `logs/` subfolder. Output from these
-repairs still awaits user confirmation.
+- **Retail music restoration.** Restores the original synchronous streaming
+  completion path. Music is audible again in the Windows retail main menu,
+  confirmed by the user. Gameplay music and Android listening after this
+  particular fix still need separate confirmation.
+- **Persistent demo menu additions.** Load Map and reSOT Options are rebuilt
+  whenever the demo recreates its main menu, fixing their disappearance
+  after a menu rebuild or return from gameplay.
+- **Cleaner retail menus.** Xbox Live is hidden in both the main menu and
+  the pause Options page. Xbox Live itself is not implemented.
+- **Mouse and touch menus.** Point at native menu rows and left-click to
+  select; right-click goes back. On Android, tap a row to select and swipe
+  right or use Android Back to go back. Keyboard and controller remain available.
+- **Automatic Android control visibility.** The touch pad hides in menus,
+  Bink movies and camera scenes with cinematic bars, then restores the
+  player's visibility preference in gameplay. Tapping a Bink movie skips it.
+- **Vulkan performance work.** Dedicated shader translation and caching,
+  material descriptor caching, exact input-geometry reuse, batched command
+  payloads and texture-upload improvements reduce repeated work on both hosts.
+  The user confirms a substantial improvement with the geometry-cache build.
+- **Rendering and HUD corrections.** Includes the retail fountain-return
+  correction and ultrawide sand-tank alignment, plus newer RGB565 alpha and
+  shadow-projection corrections. The latter still need visual confirmation.
+- **Android audio and power handling.** Bounds stale audio queues after
+  stalls, permits bounded audio catch-up, and adjusts display refresh and
+  temporary thermal frame budgets without overwriting the user's settings.
+- **Updated controls and diagnostics.** Refined Android touch pictograms and
+  HUD clearance, repaired log-source selection, and retained the shared
+  graphics, input and diagnostic options.
 
-Android touch controls now use gold-rimmed blue medallions and a mobile action
-arc inspired by the supplied Warrior Within references (2026-10-21).
-The user approves the appearance on device; pause/back/rewind have since been
-moved beside the central overlay toggle (pause/back) and to the upper right
-(rewind) to clear the HUD and FPS panel. That adjustment
-awaits device confirmation; see
-[VALIDATION.md](docs/VALIDATION.md).
+Both Windows targets and the Android release APK build as **0.3.0**;
+Android uses **versionCode 5**. Shader compilation, pointer, audio and GPU
+regressions passed in the recorded release checks. The latest APK's new
+touch-menu and overlay transitions have not yet been tested on a connected
+device. See [VALIDATION.md](docs/VALIDATION.md) for commands and observations.
 
-The user confirms the geometry-cache APK performs much better on a rested
-phone. A further shadow/touch/audio/thermal APK is installed (2026-10-22),
-without launching or testing the game at the user's request. It corrects
-implicit RGB565 target alpha and bounds known shadow projections, keeps shadows
-at Off, updates touch pictograms, bounds stale Android audio queues and adds
-temporary Android thermal FPS budgets. These fixes compile; shadow appearance,
-cutscene sync and sustained thermal benefit still require user confirmation.
-See [VALIDATION.md](docs/VALIDATION.md).
+## Features and current status
 
-**Both targets remain under gameplay validation.** The user reports
-angle-dependent object flickering in the demo's first level and a crash at
-the garden lever, and a retail crash at the second ladder of its first level
-(2026-10-16). The user reports the save crash resolved (2026-10-18);
-full save/load validation remains incomplete.
-Build and runtime observations are recorded in [VALIDATION.md](docs/VALIDATION.md).
+🟢 Working in recorded runs or confirmed by the user. 🟡 Implemented with
+remaining checks or known limitations. ⚪ Not validated or not implemented.
+Green describes the listed feature and tested scope; it does not certify
+every level, device or exact console accuracy.
 
-The goal is both games fully playable from the user's own disc files, with
-the generated code readable enough to be replaced by hand-written source
-function by function. Retail and the remaining accuracy and validation work are still ahead.
+| Feature | Xbox demo | Xbox retail |
+| --- | --- | --- |
+| Static recompilation and native builds | 🟢 Windows and Android | 🟢 Windows and Android |
+| Boot, title screen and main menu | 🟢 | 🟢 |
+| In-level gameplay and rendering | 🟢 Played through multiple demo levels; remaining visual edge cases tracked | 🟢 Substantial gameplay reported; remaining scene-specific issues tracked |
+| Windows play | 🟢 Keyboard/mouse or controller; high frame rates reported | 🟢 Corrected timing; high frame rates reported |
+| Android play with native Vulkan | 🟢 Runs well in user-tested configurations | 🟢 Runs well in user-tested configurations; caching improvements confirmed |
+| Bink movies and video skipping | 🟢 Audio/video confirmed | 🟢 Audio/video confirmed |
+| Game audio and effects | 🟢 Audio and earlier stutter/crash fixes confirmed | 🟢 Audio and earlier movie-return fix confirmed; Windows menu music restored in v0.3.0 |
+| Keyboard and physical controllers | 🟢 | 🟢 |
+| Android gameplay touch controls | 🟢 Custom layout, vibration and approved visual design | 🟢 Same shared controls |
+| Native menu navigation and pause | 🟢 Includes Load Map and reSOT Options | 🟢 Includes reSOT Options; Xbox Live entries hidden |
+| Mouse/touch selection of menu rows | 🟡 Shared bridge and synthetic tests pass; broader interaction checks pending | 🟡 Shared bridge and synthetic tests pass; Android device checks pending |
+| Automatic Android overlay hiding | 🟡 Implemented for menus, Bink and letterboxed camera scenes; device checks pending | 🟡 Same shared implementation and validation limit |
+| Native Vulkan renderer | 🟢 Windows and Android runs; shader/GPU comparisons pass | 🟢 Windows and Android runs; gameplay and GPU comparisons recorded |
+| Native Direct3D 11 renderer | 🟢 Windows default | 🟢 Windows default |
+| Native Direct3D 12 renderer | 🟡 Optional Windows backend; startup and GPU tests pass | 🟡 Optional Windows backend; broader gameplay checks pending |
+| Widescreen Hor+ and HUD layout | 🟢 Widened view with preserved HUD proportions; artwork edges remain limited | 🟢 Widened view; ultrawide sand-tank alignment confirmed; some dialog layout limits remain |
+| Graphics options and effect-quality selector | 🟢 Shared options; selector confirmed by the user | 🟢 Shared options; broader effect accuracy remains under study |
+| Vulkan shader/material/geometry caches | 🟢 Shared optimizations and regression checks | 🟢 Gameplay geometry reuse observed; user reports improved performance |
+| Launcher, game-folder selection and ISO installation | 🟢 Available on both hosts; demo ISO installation used by the user | 🟢 Available on both hosts; separate retail game detection |
+| FPS panel, diagnostics and input rebinding | 🟢 | 🟢 |
+| Save/load and memory units | 🟡 Save crash resolved; complete persistence checks pending | 🟡 Save crash resolved; Android save/relaunch/load checks pending |
+| Shadows, stencil and remaining effects | 🟡 Projected shadows implemented; some effects and scene defects remain | 🟡 Rendering corrections included; shadow appearance and stencil remain incomplete |
+| Full-game completion and console comparison | ⚪ Not yet established | ⚪ Not yet established |
 
-reSOT does not contain the game. You supply the files from discs you own.
-The lifted C in `source/<target>/gen` is published with the project
-([AGENTS.md](AGENTS.md)); game data, executables and extracted assets are not.
+The current focus is longer playthroughs, remaining scene-specific crashes
+and visual defects, save/load persistence, and validation of the newest
+Android menu/overlay behavior. Older reports and performance experiments are
+kept in the validation log rather than used as the current player-facing status.
 
-## How it works
+## Playing on Windows and Android
 
-An Xbox executable is 32-bit x86 code. reSOT lifts every routine of
-`default.xbe` to C with [xboxrecomp](https://github.com/sp00nznet/xboxrecomp)
-(vendored and patched under `port/third_party/xboxrecomp`, one runtime for
-both targets that is compiled for one of them per build tree, the per-target
-fixes chosen with `RESOT_RUNTIME_DEMO` / `RESOT_RUNTIME_RETAIL`) and links the
-result against that Windows replacement for the console:
+| Platform | Renderer and package | Instructions |
+| --- | --- | --- |
+| Windows 10/11 x64 | Separate demo/retail EXEs. Direct3D 11 by default; native Vulkan and Direct3D 12 selectable, with restart. | [Windows guide](port/windows/README.md) |
+| Android 10+ arm64 | One APK, `com.fulger.resot`, for both targets. Native Vulkan through SDL GPU. | [Android guide](port/android/README.md) |
 
-```text
-default.xbe ──► disassemble ──► find functions ──► lift to C ──► MSVC x64
-                                                       │
-            ┌──────────────────────────────────────────┘
-            ▼
-   lifted game + XDK code          (source/<target>/gen/<folder>, generated)
-            │ kernel calls, GPU pushbuffer, USB, overlay registers
-            ▼
-   runtime (port/third_party/xboxrecomp/src, built for this target)
-     kernel    files, threads, timers, interrupts
-     nv2a      pushbuffer executor ─► Direct3D 11 (register combiners in HLSL)
-     video     window, PVIDEO overlay (Bink movies)
-     usb/input emulated OHCI controller, keyboard or XInput pad
-```
+**Windows:** open the target's EXE to use the launcher, select your game
+folder or install your ISO. Demo and retail use separate game folders.
+The locally built EXE embeds its checked Xbox image; a separate `default.xbe`
+is not needed beside that EXE to play. Space or controller A skips videos.
+F5 toggles the FPS/current-world panel, F6 the diagnostics panel, F7 the host
+options, and F11 fullscreen. Graphics and controls are also available through
+the native reSOT Options menu.
 
-The game's own code runs: its BigFile loader, the Jade engine, the compiled
-AI functions, the Bink decoder and even the statically linked Xbox Direct3D,
-which keeps writing NV2A commands that the runtime executes on the host GPU.
-Details, addresses and the fixes that were needed are in
-[docs/RECOMP.md](docs/RECOMP.md).
+**Android:** install the APK and use the launcher to install your own ISO.
+The app keeps demo and retail under
+`Android/data/com.fulger.resot/files/xbox-demo` and `xbox-retail` and reads
+`default.xbe` from the selected game folder. Use the touch controls or a
+physical controller. The overlay supports layout editing, vibration and
+manual visibility control. Compatible Adreno devices can also select a
+user-supplied custom Vulkan driver from the launcher; no custom driver is bundled.
 
-## Supply your game files
+Both hosts save preferences in `resot-options.ini`. Current bundled defaults
+are unlimited FPS, VSync/glow/logs off, post-processing Low and 200% look
+sensitivity. Windows defaults to D3D11 at 720p (150%); Android defaults to
+Vulkan at 480p (100%). Existing preferences survive upgrades. Resolution,
+frame limit, VSync and effect quality can be adjusted for the device.
 
-Copy the contents of your own discs into `Assets/`. These folders are ignored
-by Git.
+## Build from your own Xbox files
+
+Copy the contents of your discs into these ignored folders:
 
 ```text
 Assets/
@@ -162,172 +162,95 @@ Assets/
   xbox-retail/   default.xbe  prince.bf  shaders.bin  VIDEO/  SOUND/  MEDIA/  POP1/  POP2/
 ```
 
-Supported executables (SHA-256 of `default.xbe`); other revisions are refused
-because every address in the project belongs to these files:
+Only the checked executable revisions below are supported. Demo and retail
+have different addresses, hooks and seed lists; the build verifies SHA-256.
 
 ```text
 xbox-demo    79C1A47828630AB0D4E5DD19B1FD036FFA58EA2C0FE729B0D3456DAC3E79D4F5
 xbox-retail  753C58B191279BF4D1A8B28A936DF36AA222ED566487AB1FBDFCD090E91EE379
 ```
 
-## Platforms
-
-For players: double-click the target's executable in its portable folder.
-Keep your game data beside it (demo and retail in separate folders), or
-select the data folder when asked. `default.xbe` is a build input and is
-embedded in the compiled EXE; it is not required beside the player EXE.
-Space / controller A skips videos; F5 toggles the FPS / Current WOW panel;
-F6 toggles the diagnostics panel (copyable with Ctrl+Shift+C); F7 opens
-`reSOT Options` for graphics and controls, also available in the game's main menu. See the [Windows instructions](port/windows/README.md#play-portable-folder)
-for the folder contents and packaging from a local build.
-
-| Platform | Instructions |
-| --- | --- |
-| Windows 10/11 x64 (Direct3D 11, XInput, XAudio2; MSVC, CMake) | [port/windows/README.md](port/windows/README.md): requirements, build, run, controls |
-| Android 10+ arm64 (Vulkan via SDL GPU, SDL3 input and audio; NDK, Gradle): one app, `com.fulger.resot`, for both games, installed from their ISOs | [port/android/README.md](port/android/README.md): game files, touch controls, build |
-
-In short, on Windows:
+Windows builds use Visual Studio's C++ tools, CMake and Python with Capstone.
+Android adds the SDK, NDK and Gradle. See the platform guides for pinned
+versions and dependency setup.
 
 ```powershell
-.\tools\recomp.ps1 -Target xbox-demo      # analyse, lift and build
-.\tools\run.ps1                           # play the demo, full screen
-.\tools\shortcut.ps1                      # desktop shortcut that does the same
+.\tools\recomp.ps1 -Target xbox-demo
+.\tools\recomp.ps1 -Target xbox-retail
+.\tools\run.ps1 -Target xbox-demo
+.\tools\run.ps1 -Target xbox-retail
+
+# Rebuild existing lifted sources after host/runtime changes:
+python tools/check-hlsl.py
+.\tools\recomp.ps1 -Target xbox-demo -BuildOnly
+.\tools\recomp.ps1 -Target xbox-retail -BuildOnly
+
+# One Android APK containing both targets:
+.\tools\build-android.ps1
 ```
 
-## Development status
+Windows outputs are `bin/sot-xbox-demo.exe` and `bin/sot-xbox-retail.exe`;
+Android outputs `bin/reSOT-android.apk`. Outputs and game data stay local
+and ignored. Use `tools/shortcut.ps1` for a Windows desktop shortcut.
 
-Version 0.3.0 restores retail's original synchronous music-stream completion
-callback after comparison with the previous source snapshot. The user confirms
-music is audible again in the Windows retail menu (2026-10-22); gameplay and
-Android listening still need confirmation. The demo rebuilds Load Map and
-reSOT Options with each main-menu instance. Retail hides Xbox Live in pause
-Options as well as the main menu. Native menu choices accept mouse/touch
-pointing; Android hides its pad overlay in menus, Bink movies and letterboxed
-camera scenes. Windows demo/retail and Android release builds pass; see
-[validation](docs/VALIDATION.md) for the observed scope and remaining checks.
-
-Version 0.2.0 bundles the user's platform-specific INI defaults: unlimited
-FPS, VSync/glow/logs off and 200% look sensitivity on both hosts; Windows
-uses D3D11, 720p and post-processing Low, Android uses Vulkan, 480p and
-post-processing Off. Missing INIs are created from the bundled templates;
-existing preferences survive upgrades. This release includes the effect-quality
-and logging changes below. No further gameplay tests were run after the
-user confirmed the option works and requested that testing stop.
-
-Version 0.1.1 includes Android power follow-ups: display refresh follows
-the FPS limit, inactive timer scans use fewer locks, and eligible frames
-keep their internal-size snapshot until the final upscale. Thermal benefit
-and broader background/resume behavior remain under validation; an
-intermittent black-on-return report did not recur in the user's final retest.
-
-Vulkan specialization update (2026-10-20): an OpenCE rendering study led to
-cached constant combiner programs for Android and Windows Vulkan. Retail's
-480p title improved from about 31 to 59 FPS on SM8635. Demo opening scenes
-include 54–59 FPS windows, with later 46–51 FPS windows. The user reports
-about 60 FPS with drops to 49 and accepts this result for now. Both Windows
-targets and the APK build; all 8 GPU/support tests pass, including 64
-specialized-combiner comparisons. First-use shader stalls remain; sustained
-60 FPS throughout both games is unverified. See
-[the study](docs/VULKAN-PERFORMANCE.md) and [validation](docs/VALIDATION.md).
-
-Windows/Android parity audit (2026-10-20): the applicable recent APU/IRQL,
-texture and native-renderer corrections are already shared. Both Windows
-targets build; 8 GPU/support tests and 4 target APU/IRQL tests pass. Six
-20-second Windows startup checks (demo/retail, D3D11/Vulkan/D3D12) reached
-title/menu images with non-silent audio production and no recorded crash
-or backend fallback. These are not full-game checks or performance gains.
-See [PLATFORM-PARITY.md](docs/PLATFORM-PARITY.md) for the per-component audit
-and intentional host/backend differences.
-
-Android optimization update (2026-10-20): retail's small vertex interpreter
-now skips calculations whose results are unused. Android and both Windows
-builds pass, with 8/8 native GPU/support tests including Vulkan/D3D12 shader
-pixel comparisons. ADB retail title checks measured about 29-31 FPS at 480p,
-36-38 FPS at 360p and up to 48-49 FPS at 240p across sequential runs;
-the last vertex changes showed no clear gain at 480p. Power improvement
-and sustained gameplay performance remain unverified;
-see [VALIDATION.md](docs/VALIDATION.md).
-
-🟢 works in the runs recorded in [VALIDATION.md](docs/VALIDATION.md) ·
-🟡 partial · ⚪ not started. A green cell means "observed working here", not
-"matches the console".
-
-| Component | Xbox demo | Xbox retail |
-| --- | --- | --- |
-| Shadow/Android audio/touch/thermal follow-up (2026-10-22) | Builds and shader compilation pass; installed APK awaits user-only gameplay checks | RGB565 target-alpha correction and shadow projection bounds implemented; Android audio/thermal updates installed; runtime results await user |
-| Vulkan input-geometry reuse (Windows/Android, 2026-10-22) | Builds; exact cache and GPU support checks pass; demo-device gameplay untested | Installed; gameplay reuse observed and user reports good FPS; controlled uplift unmeasured |
-| Vulkan compact-constant / reduced-output experiment (2026-10-22) | Withdrawn | Withdrawn; user corrected the 100 FPS comparison, so a 20% same-scene regression is not established |
-| Shared effect-quality selector (Windows/Android) | 🟡 expanded to auxiliary buffers and projected shadows; builds and support tests pass; user confirms the option works (2026-10-20, target unspecified); [all-effects audit remains partial](docs/POST-PROCESSING.md) | 🟡 independent shadow/bloom trace evidence, shared implementation builds; broader water/time-effect identification remains incomplete |
-| Lift and build | 🟢 11,215 functions (2 of them written by hand: the D3D KickOff), 0 failed | 🟢 14,418 functions (2 by hand: the D3D KickOff), 0 failed |
-| Boot to first frame | 🟢 | 🟢 |
-| Portable launch / F5 overlay / video skip | 🟢 verified by the user (2026-10-18) | 🟢 verified by the user (2026-10-18) |
-| External game folder / options / F6 diagnostics (F7 panel restored: both builds pass, in-game check pending) | 🟢 verified by the user (2026-10-18), including Load Map; launcher with ISO installation run once by the user (demo ISO, 2026-10-18) | 🟢 verified by the user (2026-10-18); no hidden level select exists in this XBE |
-| Movies (Bink via overlay) | 🟢 audio and video verified by the user (2026-10-18) | 🟢 audio and video verified by the user (2026-10-18) |
-| Menus | 🟢 verified by the user (2026-10-18) | 🟢 verified by the user (2026-10-18); Xbox Live removed from the main menu (2026-10-19) |
-| Native D3D12 (optional in F7; restart required; SDL GPU, no 11On12) | 🟡 GPU vertex programs; 20-second Windows menu check with non-silent audio and no recorded crash (2026-10-20); native GPU readbacks pass; broader gameplay/performance validation pending | 🟡 GPU vertex programs; 20-second Windows menu check with non-silent audio and no recorded crash (2026-10-20); native visibility and vertex-program GPU tests pass; full gameplay/performance validation pending |
-| Native Vulkan (optional in F7; restart required; SDL GPU, no DXVK) | 🟡 GPU vertex programs; 20-second Windows menu check with non-silent audio and no recorded crash (2026-10-20); Android menu/gameplay observations below; broader validation pending | 🟡 vertex programs on the GPU (`vs_uber`, 2026-10-19): scripted run to the first courtyard, menu executor 4.6–6.7 ms (CPU interpreter 16.2–16.6 ms), courtyard 66–124 FPS, snapshots correct by eye; retail light-map borders and cycled texture lifetime pass host Vulkan/D3D12 GPU readbacks; simple combiner shaders plus reduced native vertex-interpreter operand work measured about 27-28 FPS at 480p on the connected phone (was 16.9 generic, then 24.7 fragment-only; 2026-10-19); 30 FPS minimum remains unmet; broader gameplay/performance validation pending |
-| In-level rendering | 🟡 projected shadows; cube-map upload/sampling implemented and host GPU test passed, game appearance unverified; first-level flickering/distortion traced to ordered GPU fences: gone for the user with them off (2026-10-17), now the demo default; no stencil | 🟡 substantial retail gameplay reported without crashes (2026-10-19); black garden panels traced to missing white light-map borders and corrected, confirmed by the user; forming sand-tank ring aligned in GPU readback; other scenes and console accuracy remain unverified |
-| Wide picture (Hor+) | 🟡 16:9 by default (`RESOT_ASPECT`); fills a 16:9 monitor with `-Fullscreen` or F11; culling widened to the new sides; pause backdrop expanded; HUD at its 4:3 proportions and anchored to the screen's left edge, confirmed by the user (2026-10-18); the menu garden is not modelled past its 4:3 edge | 🟡 16:9 by default; demo's projection and culling hooks ported to the retail addresses, projected-UI policy on (menu backdrop full width); dialog text wider than its box at 16:9; health bar anchored to the left edge in first-level readbacks (2026-10-18), tutorial text unchanged |
-| Frame rate | 🟡 120+ FPS reported by the user (2026-10-18); first-use shader stalls moved off the executor (hourglass room: lowest 80 fps, was 7); batches reused across frames (garden 93-100 fps at ~880 draws, was 67-78); title and executor still run in lockstep; broader performance validation incomplete | 🟡 latest user session: 302 timing windows, median 146.3 FPS, minimum 48.6 (not frame percentiles); P8/ARGB upload conversion optimized, native pipeline lookup and texture reuse improved (2026-10-19); matched-scene and Android performance comparison pending |
-| Controller / keyboard | 🟢 verified by the user (2026-10-18) | 🟢 verified by the user (2026-10-18) |
-| Mouse/touch menus (v0.3.0) | Synthetic pointer tests pass; Windows menu geometry inspected; demo custom entries recreated on menu rebuild | Synthetic pointer tests pass; pause Xbox Live entry removed; Android device interaction untested |
-| Audio | 🟡 audio corrected, confirmed by the user (2026-10-18); bath-fight stutter fixed, user confirmed. Android Sand Birds crash (2026-10-20): APU idle-trap overwrite corrected; APU/IRQL tests pass, device retest records about 260 s of audio and a regular exit without a crash; user confirms the fix | 🟡 audio corrected, confirmed by the user (2026-10-18). Android making-of audio loss (2026-10-20): dispatch timeout bypasses and callback lock leak corrected; APU/IRQL tests pass, user confirms audio persists through the video and return to the menu; broader audio validation incomplete |
-| Save / load, memory unit | 🟡 save crash reported resolved by the user (2026-10-18); full save/load and memory-unit validation incomplete | 🟡 save crash reported resolved by the user (2026-10-18); Android random-write and migration corrections pass host tests (2026-10-19); "damaged profile" on Android traced to a stale directory search, fix built, device save/relaunch/load still unverified |
-| Virtual memory reservations | 🟡 reserve/commit fix tested on synthetic input; optional, gameplay with this option not checked | 🟡 corrected reserve/commit and audio address translation; user passed the previous crash point; checkpoint save/load still untested |
-| Xbox Live (retail only) | n/a | ⚪ not planned |
-| Android (arm64, Vulkan; one APK for both) | 🟡 demo-specific draw evidence checked and native simple shaders enabled (2026-10-19): SM8635 480p title/menu improves from about 27.5 to 62.9–63.1 FPS in steady timing windows; first playable scenes include 33.8–53.3 FPS windows, so sustained 60 FPS gameplay remains unmet. Bulk texture conversion and image cycling also enabled; recurring audio-ISR crash (Reception Hall, guest read at 0xFFFFFFBE) addressed by mapping the full flash mirror, not yet replayed there (2026-10-20); see validation log | 🟡 user confirms runs and videos corrected; logs show severe FPS drops on Adreno 750; native vertex-buffer reuse, save diagnostics and device-width Hor+ built (2026-10-19), GPU vertex programs left the phone waiting on the GPU (8–18 FPS, long black screen before the menu); Vulkan pipeline cache removed the per-pipeline compile stalls (0.3–0.5 ms after the first, device log); GPU vertex programs with bound-only texture sampling rebuilt (2026-10-19), frame rate not yet seen on the device; white light-map borders, forming-tank alignment, bulk texture conversion and native cache optimizations built into the APK; single-stage fragment specialization measured on SM8635: menu 16.5–17.1 to 24.6–24.8 FPS at 480p; FPS touch button hides while its panel is visible, same spot closes it; broader device persistence/performance validation pending; seconds-long freezes traced to new-pipeline compiles (up to 1.8 s each), now compiled in the background with draws skipped until ready (built 2026-10-20, menu 58–59 FPS, not yet seen in a new area) |
-| Android scheduling / next Vulkan draw optimization (2026-10-20) | 🟡 system UI responsive per user; menu 40–57 FPS; compact vertex inputs and state-command reuse built locally, demo device measurement pending | 🟡 renewed ADB tests: final APK title about 29–31 FPS at 480p, 36–38 at 360p; preceding APK up to 48–49 at 240p; opening cutscene reached; sustained gameplay performance unverified |
-| Checked against the console | ⚪ | ⚪ |
-
-Android update (2026-10-20): the user confirms that system UI no longer lags
-with the scheduling/stability build, but reports demo menu fluctuations of
-40–57 FPS. The subsequent performance build restores SDL's two frames in
-flight, packs native vertex inputs into 16/32/64/128 bytes instead of always
-128, and skips unchanged viewport/scissor/blend commands. Both targets share
-these native-encoder changes (compact inputs on Vulkan; state-command reuse
-also on D3D12). Renewed retail phone tests measured the final build at
-29–31 FPS at 480p and 36–38 FPS at 360p in the title. Sustained 60 FPS remains
-unachieved. See [VALIDATION.md](docs/VALIDATION.md).
-
-## Repository layout
+## How it works
 
 ```text
-reSOT/
-  source/                one folder per Xbox executable (the game side)
-    xbox-demo/           target.h (addresses of that XBE), seed_functions.json,
-                         target_hooks.c, gen/ (lifted C by folder: main, engine,
-                         render, sound, ai, scripts, xdk/..., see gen/README.md)
-    xbox-retail/         the same for the retail build
-  port/                  what replaces the console
-    windows/src/         Windows host: entry point, launcher (title screen, ISO install), crash report, profiler
-    windows/res/         icon, version resource, launcher face (AtlantisMF.ttf, see docs/LICENSING.md)
-    android/             Android app: native host (src/), NDK CMakeLists.txt, Gradle project, launcher, touch controls (app/)
-    game/                hand-written overrides the lifted code calls
-    third_party/xboxrecomp/      recompiler (tools/) and Xbox runtime (src/) for both targets, patched; changes marked RE-SoT
-    third_party/extract-xiso/    extract-xiso 2.7.1, unchanged: the launcher's ISO installation
-  tools/                 recomp.ps1, build-android.ps1, run.ps1, shortcut.ps1, seed-scan.py, sort-functions.py, xbe-dis.py, check-hlsl.py
-  docs/                  RECOMP.md, VALIDATION.md, LICENSING.md, history/, media/ (logo, screenshots)
-  research/              analysis databases and Ghidra notes (ignored)
-  Assets/                your game files (ignored)
-  bin/ build/<target>/ logs/   outputs (ignored)
+Your default.xbe -> analyse and lift x86 to C -> native compiler
+                                                   |
+                 original game + linked Xbox libraries
+                                                   |
+                    reSOT platform and Xbox runtime
+                  /                                \
+     Windows: D3D11 / Vulkan / D3D12        Android: Vulkan
 ```
 
-## Contributing
+The original BigFile loader, Jade engine, compiled AI, Bink decoder and Xbox
+Direct3D code remain in the lifted program. reSOT replaces kernel services,
+memory, threads, input, audio and video, and translates the NV2A pushbuffer
+to host GPU rendering. Both targets share a runtime, with independently
+verified target-specific behavior selected at build time.
 
-Read [AGENTS.md](AGENTS.md) first: it is short and it is the rule set. In
-brief: never commit game files, executables or extracted assets, and never
-edit `source/<target>/gen` by hand (`tools/recomp.ps1` writes it); fix behaviour in
-`port/`, the target's `target.h`, hooks and seed list, or the runtime; record
-the XBE address that justifies every target-specific change; and write down
-what you actually observed in `docs/VALIDATION.md`.
+The generated C lives in `source/<target>/gen/`, sorted by kind of code and
+published alongside the executable descriptions, host layers and tools.
+It is regenerated from the user's own checked XBE and is never edited by hand.
 
-## Licence
+## Source layout and documentation
 
-reSOT's own files are MIT. `port/third_party/xboxrecomp` is MIT with
-LGPL-2.1-or-later parts taken from xemu; `port/third_party/extract-xiso` is
-under its own BSD-style licence. The game, its assets and the C
-generated from its executables belong to their owners and are not covered.
-See [LICENSE](LICENSE) and [docs/LICENSING.md](docs/LICENSING.md).
+| Path | Contents |
+| --- | --- |
+| `source/xbox-demo/`, `source/xbox-retail/` | Target facts, seed lists, entry hooks and generated C |
+| `port/windows/` | Windows host, launcher, options, diagnostics and resources |
+| `port/android/` | Android native host, Gradle app, launcher, installer and touch controls |
+| `port/game/` | Shared manual overrides and mouse/touch menu bridge |
+| `port/render/` | Native shader compiler and cache support |
+| `port/third_party/xboxrecomp/` | Vendored recompiler and shared Xbox runtime; local changes marked `RE-SoT` |
+| `port/third_party/extract-xiso/` | ISO extraction used by the launchers |
+| `tools/` | Build, run, setup, analysis and regression tools |
+| `docs/` | Validation, technical studies, licensing and screenshots |
+| `Assets/`, `research/`, `bin/`, `build*/`, `logs/` | Private game files, analysis or local outputs; ignored |
+
+- [Validation and observed results](docs/VALIDATION.md)
+- [Recompilation pipeline and target evidence](docs/RECOMP.md)
+- [Windows/Android parity](docs/PLATFORM-PARITY.md)
+- [Vulkan performance and rendering studies](docs/VULKAN-PERFORMANCE.md)
+- [Post-processing and remaining effect work](docs/POST-PROCESSING.md)
+- [Regression tests](tools/tests/README.md)
+- [Licensing and provenance](docs/LICENSING.md)
+
+## Contributing and licence
+
+Read [AGENTS.md](AGENTS.md) first. Keep demo and retail evidence separate;
+do not commit game files, Xbox images, extracted assets or local executables.
+Publish generated C with the project, regenerate it through the tools, and
+record tested behavior and remaining limits in the validation log.
+
+reSOT's own files are MIT. The vendored runtime includes MIT and
+LGPL-2.1-or-later components; extract-xiso carries its own BSD-style licence.
+The game, its assets and the generated game/XDK code belong to their owners
+and are not covered by reSOT's MIT licence. Locally built executables embed
+the user's checked Xbox image and are for the owner of the original game.
+See [LICENSE](LICENSE) and [LICENSING.md](docs/LICENSING.md).
 
 *Prince of Persia* is a trademark of Ubisoft. This project is not affiliated
 with or endorsed by Ubisoft or Microsoft.

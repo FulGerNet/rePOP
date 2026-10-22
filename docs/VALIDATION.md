@@ -1,5 +1,27 @@
 # Validation log
 
+## 2026-10-22: README status and encoding refresh
+
+The user describes the game as now running well on Android and Windows and
+requests that the README reflect the advanced state of recompilation and
+porting. This is recorded as an overall user report for both platforms,
+without inferring full-game completion, a fixed FPS target on every device,
+or validation of each recently added interaction.
+
+Rewrote README.md as valid UTF-8, consolidated the v0.3.0 additions and
+replaced outdated bring-up descriptions and superseded performance snapshots
+with a current feature table. Green entries describe features already
+observed or confirmed; new mouse/touch device interaction, automatic overlay
+transitions, complete save persistence, remaining effects and console
+comparison retain their explicit validation limits.
+
+Documentation-only checks: strict UTF-8 decoding, rejection of replacement
+characters and common mojibake sequences, local Markdown/HTML link checks,
+consistent Markdown table columns and `git diff --check`. No new build,
+game launch, performance measurement or device test was run for this edit.
+
+
+
 ## 2026-10-22: v0.3.0 music restoration and menu input
 
 Compared the uncommitted source tree with `C:/Users/Admin/Desktop/rePOP-reSOT`
