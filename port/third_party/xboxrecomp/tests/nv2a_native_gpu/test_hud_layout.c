@@ -15,6 +15,11 @@ int main(void)
         float widen=ratios[i]/(4.0f/3.0f);
         float left=320+(120-320)*(4.0f/3.0f)/widen;
         float right=320+(132-320)*(4.0f/3.0f)/widen;
+        /* RE-SoT: full upgrade crosses centre; its end cap is wholly right. */
+        CHECK(nv_hw_retail_health_frame(widen,left,320+180/widen,36.531f,68.531f,64,32,6));
+        CHECK(nv_hw_retail_health_frame(widen,320+100/widen,320+180/widen,36.531f,68.531f,64,32,6));
+        CHECK(!nv_hw_retail_health_frame(widen,left,right,48,168,64,32,6));
+        CHECK(!nv_hw_retail_health_frame(widen,left,right,36.531f,68.531f,128,32,6));
         CHECK(nv_hw_retail_forming_tank(widen,left,right,192,204));
         /* Same logical margin after the existing HUD shift, at any aspect. */
         float anchored=(left-320*(1-1/widen))*widen;

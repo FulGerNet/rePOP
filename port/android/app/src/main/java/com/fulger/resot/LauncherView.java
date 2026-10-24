@@ -52,7 +52,8 @@ final class LauncherView extends View {
     private static final float LOGO_Y = 22, LOGO_SIZE = 132, TEAL_X = 150, TITLE_Y = 150, TITLE_H = 84, SUB_Y = 248,
         BADGE_Y = 266, BADGE_H = 26, HEAD_RULE_Y = 320, HEAD_Y = 336, BTN_W = 300, BTN_H = 56, BTN_GAP = 64,
         BTN_Y = 368, MESSAGE_Y = 510, BAR_Y = 420, CANCEL_W = 240, CANCEL_Y = 498;
-    private static final String BADGE_TEXT = "RECOMPILED FOR ANDROID";
+    private static final String BADGE_TEXT = "The Sands of Time";
+    private final String versionLabel;
     // the ornament of the ground (launcher.c, ornament())
     private static final float PATTERN = 128, PETAL = 46, PETAL_W = 9, RING = 55, STAR = 19;
     private static final float[][] BOKEH = {
@@ -93,6 +94,10 @@ final class LauncherView extends View {
     LauncherView(Context context, Listener listener) {
         super(context);
         this.listener = listener;
+        String version;
+        try { version = context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionName; }
+        catch (android.content.pm.PackageManager.NameNotFoundException impossible) { version = "?"; }
+        versionLabel = "v" + version;
         Typeface face = null;
         try { face = Typeface.createFromAsset(context.getAssets(), "AtlantisMF.ttf"); } catch (RuntimeException ignored) {}
         atlantis = face != null;
@@ -529,12 +534,12 @@ final class LauncherView extends View {
             paint.setFilterBitmap(true);
             canvas.drawBitmap(logo, null, new RectF(cx - lw / 2, top + LOGO_Y, cx + lw / 2, top + LOGO_Y + LOGO_SIZE), paint);
         }
-        glowText(canvas, "Prince of Persia", cx, top + TITLE_Y + TITLE_H / 2, display, atlantis ? 66 : 56,
+        glowText(canvas, "reSOT", cx, top + TITLE_Y + TITLE_H / 2, display, atlantis ? 66 : 56,
                  top + TITLE_Y, top + TITLE_Y + TITLE_H, 0.55f, 0xFFFFF2C8, 0xFFB8883C, 3, true);
 
         // THE SANDS OF TIME between two gold lines ending in open diamonds
         float sub = top + SUB_Y + 0.5f;
-        float half = caps(canvas, "THE SANDS OF TIME", cx, sub, serifBold, 20, 4, 0xFFECD8A4) / 2 + 18;
+        float half = caps(canvas, "Prince of Persia", cx, sub, display, atlantis ? 30 : 26, 0, 0xFFECD8A4) / 2 + 18;
         line(canvas, cx - half - 130, sub, cx - half, sub, 1, GOLD, 0.9f);
         line(canvas, cx + half, sub, cx + half + 130, sub, 1, GOLD, 0.9f);
         for (int i = -1; i <= 1; i += 2) {
@@ -547,6 +552,10 @@ final class LauncherView extends View {
         plateEdge(canvas, bx, by, bw, BADGE_H, 9, 1, 0xFFF0C4, 1);
         plateEdge(canvas, bx + 3, by + 3, bw - 6, BADGE_H - 6, 7.6f, 1, 0x785824, 0.8f);
         caps(canvas, BADGE_TEXT, cx, by + BADGE_H / 2, serifBold, 14, 2, 0xFF161E32);
+        float vx = insetLeft + 24;
+        plateFill(canvas, vx, 20, 108, 28, 7, 0xFAE8B0, 0xB0843E, 1);
+        plateEdge(canvas, vx, 20, 108, 28, 7, 1, 0xFFF0C4, 1);
+        caps(canvas, versionLabel, vx + 54, 34, sansBold, 13, 1, 0xFF161E32);
 
         if (state.extracting) {
             float f = state.total > 0 ? Math.min(1f, (float) ((double) state.done / state.total)) : 0;

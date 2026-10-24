@@ -37,6 +37,17 @@ int main(void)
     poll(pad); CHECK(pad[6]==255);
     poll(pad); CHECK(!pad[6]);
     poll(pad); CHECK(!pad[6] && !pad[4]); // one activation only
+    /* Horizontal Yes/No: height alone must not make both taps choose Yes. */
+    real(0x16600+0x1C,.35f); real(0x16600+0x20,.5f);
+    real(0x17600+0x1C,.65f); real(0x17600+0x20,.5f);
+    tap(.65f,.5f); poll(pad); CHECK(pad[6]==255 && !pad[4]);
+    poll(pad);
+    tap(.35f,.5f); poll(pad); CHECK(pad[4]==1 && !pad[6]);
+    put(page+PAGE_SELECTED,0x16000); poll(pad); poll(pad); CHECK(pad[6]==255);
+    poll(pad);
+    real(0x16600+0x1C,.5f); real(0x16600+0x20,.4f);
+    real(0x17600+0x1C,.5f); real(0x17600+0x20,.6f);
+    put(page+PAGE_SELECTED,0x17000);
     resot_menu_pointer_event(.5f,.6f,1); resot_menu_pointer_event(.8f,.6f,2);
     poll(pad); CHECK(!pad[6]); // drag is not a tap
     resot_menu_pointer_event(.5f,.6f,1);
@@ -58,6 +69,34 @@ int main(void)
     resot_menu_pointer_viewport(16.0f/9);
     tap(.01f,.6f); poll(pad); CHECK(!pad[6]); // pillarbox miss
     tap(.5f,.6f); resot_menu_pointer_event(0,0,3); poll(pad); CHECK(!pad[6]);
+    /* Literal text is used by the real Yes/No popup in both Xbox layouts. */
+    resot_menu_pointer_viewport(4.0f/3);
+    put(0x16600,LITERAL_VTABLE); put(0x17600,LITERAL_VTABLE);
+    tap(.5f,.6f); poll(pad); CHECK(pad[6]==255); poll(pad);
+    /* Retail save carousel's live four-label structure, not any single row. */
+    put(page+PAGE_CHILDREN+4,children+4); put(page+PAGE_SELECTED,0x16000);
+    put(0x16200+0x10,0x16410);
+    for(i=0;i<4;i++) {
+        uint32_t a=0x18000+i*0x100;
+        const float x[4]={.5f,.275f,.5f,.725f},y[4]={.72f,.59f,.59f,.59f};
+        put(0x16400+i*4,a); put(a,LITERAL_VTABLE);
+        real(a+0x1C,x[i]); real(a+0x20,y[i]);
+    }
+    poll(pad);
+    tap(.125f,.5f); poll(pad);
+#if RESOT_RUNTIME_RETAIL
+    CHECK(pad[4]==4 && !pad[6]); poll(pad); CHECK(!pad[4]);
+    tap(.875f,.5f); poll(pad); CHECK(pad[4]==8 && !pad[6]); poll(pad);
+    /* The same arrows at their actual ultrawide screen positions. */
+    _putenv_s("RECOMP_HW_ASPECT","2712:1220"); resot_menu_pointer_viewport(2712.0f/1220);
+    float widen=(2712.0f/1220)/(4.0f/3);
+    tap(.5f+(.125f-.5f)/widen,.5f); poll(pad); CHECK(pad[4]==4); poll(pad);
+    _putenv_s("RECOMP_HW_ASPECT","4:3"); resot_menu_pointer_viewport(4.0f/3);
+    real(0x18100+0x20,.4f); // unrelated four-label group must not get arrows
+    tap(.875f,.5f); poll(pad); CHECK(!pad[4] && !pad[6]);
+#else
+    CHECK(!pad[4] && !pad[6]);
+#endif
     put(page+PAGE_CHILDREN,0xFFFFFFFCu); put(page+PAGE_CHILDREN+4,0);
     poll(pad); CHECK(!pad[6]); // invalid vector cannot be traversed
     free(memory);

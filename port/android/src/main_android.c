@@ -484,6 +484,8 @@ int SDL_main(int argc, char **argv)
      * in ordinary runs. The second file triggers the existing one-frame trace. */
     if (access("frame-trace-enable", F_OK) == 0)
         set_default("RECOMP_FRAME_TRACE", "frame-trace.flag");
+    if (access("menu-pointer-trace-enable", F_OK) == 0)
+        set_default("RESOT_POINTER_TRACE", "1");
 #if defined(RESOT_DEFAULT_EXT_VMA) && RESOT_DEFAULT_EXT_VMA
     set_default("RECOMP_EXT_VMA", "1");
 #endif

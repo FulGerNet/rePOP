@@ -537,7 +537,7 @@ public final class TouchControls extends View implements InputManager.InputDevic
             label(canvas, "DRAG THE CONTROLS, THEN SAVE", logicalW / 2, toolbarY() + 56, 15);
         }
         // Leave the hit target active, but keep the panel text unobstructed.
-        if (!nativeFpsVisible()) {
+        if (overlay.fpsButtonVisible(nativeFpsVisible())) {
             disc(canvas, 36, toolbarY(), 22, false);
             label(canvas, "FPS", 36, toolbarY(), 11);
         }

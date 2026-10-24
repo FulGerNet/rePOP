@@ -1,10 +1,22 @@
 # Regression tests
 
+## Eye-plane depth reconstruction
+
+The native GPU suite (`ctest --test-dir build/tests/native-gpu -C Release
+--output-on-failure`) compares a triangle crossing the eye in homogeneous
+clip space with the same triangle reconstructed through production
+`vs_finish`. Coverage must match exactly and interpolated depth must agree
+within one color quantization step on Vulkan and D3D12. This catches the
+per-vertex depth clamp that made the demo bridge appear transparent.
+The test shaders contain only synthetic geometry, and are excluded from
+production shader bundles.
+
 ## Android contextual overlay
 
 Run `python tools/test-touch-overlay.py` with a JDK on PATH. This exercises
 the app's production visibility/fade policy: automatic hiding, transparent
-toggle reactivation, menu/cinematic overrides, Back/Confirm visibility,
+toggle reactivation, visible-pad toggle persistence, hidden FPS artwork,
+menu/cinematic overrides, Back/Confirm visibility,
 restoration of saved gameplay preferences, and layout editing. It uses no
 game files or Android device and writes classes under ignored
 `build/touch-overlay-tests/`. Canvas rendering, touch hit testing and JNI

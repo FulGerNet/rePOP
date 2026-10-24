@@ -38,6 +38,7 @@
 #include <string.h>
 #include <wchar.h>
 #include "launcher.h"
+#include "../../game/resot_version.h"
 
 #if !defined(RESOT_DEMO_XBE_SHA256) || !defined(RESOT_RETAIL_XBE_SHA256)
 #error "CMakeLists.txt passes both targets' XBE hashes (source/<target>/target.h)"
@@ -58,7 +59,7 @@
 #define SUB_Y 248             /* THE SANDS OF TIME, its centre line */
 #define BADGE_Y 266
 #define BADGE_H 26
-#define BADGE_TEXT L"RECOMPILED FOR WINDOWS"
+#define BADGE_TEXT L"The Sands of Time"
 #define HEAD_RULE_Y 320
 #define HEAD_Y 336            /* INSTALLED GAMES */
 #define BTN_W 300
@@ -881,7 +882,10 @@ static void render(void)
     }
 
     SetBkMode(L.dc, TRANSPARENT);
-    caps_at(L.f_sub, 4, RGB(236, 216, 164), L"THE SANDS OF TIME", 0, SUB_Y - 15, WIN_W, 30);
+    caps_at(L.f_sub, 0, RGB(236, 216, 164), L"Prince of Persia", 0, SUB_Y - 20, WIN_W, 40);
+    plate_fill(24,20,108,28,7,badge_top,badge_bottom,1);
+    plate_edge(24,20,108,28,7,1,255,240,196,1);
+    caps_at(L.f_label,1,RGB(22,30,50),L"v" RESOT_VERSION_W,24,20,108,28);
     caps_at(L.f_badge, 2, RGB(22, 30, 50), BADGE_TEXT, 0, BADGE_Y, WIN_W, BADGE_H);
     if (L.extracting) {
         LONG64 done = L.done_bytes, total = L.total_bytes;
@@ -1009,17 +1013,17 @@ static void load_fonts(void)
     if (ttf) L.font_mem = AddFontMemResourceEx((void *)ttf, size, NULL, &count);
     L.atlantis = L.font_mem && count;
     display = L.atlantis ? L"Atlantis MF" : serif;
-    L.f_sub = make_font(serif, 20, FW_SEMIBOLD, 0, CLEARTYPE_QUALITY);
+    L.f_sub = make_font(display, L.atlantis ? 30 : 26, FW_NORMAL, 0, ANTIALIASED_QUALITY);
     L.f_text = make_font(L"Segoe UI", 18, FW_NORMAL, 0, CLEARTYPE_QUALITY);
     L.f_small = make_font(L"Segoe UI", 14, FW_NORMAL, 0, CLEARTYPE_QUALITY);
     L.f_label = make_font(L"Segoe UI", 13, FW_SEMIBOLD, 0, CLEARTYPE_QUALITY);
     L.f_badge = make_font(serif, 14, FW_BOLD, 0, CLEARTYPE_QUALITY);
-    L.sub_w = caps_width(L.f_sub, 4, L"THE SANDS OF TIME");
+    L.sub_w = caps_width(L.f_sub, 0, L"Prince of Persia");
     L.head_w = caps_width(L.f_label, 3, L"INSTALLED GAMES");
     L.badge_w = caps_width(L.f_badge, 2, BADGE_TEXT) + 48;
     title = make_font(display, L.atlantis ? 66 : 56, L.atlantis ? FW_NORMAL : FW_BOLD, 0, ANTIALIASED_QUALITY);
     button = make_font(display, L.atlantis ? 28 : 24, L.atlantis ? FW_NORMAL : FW_SEMIBOLD, 0, ANTIALIASED_QUALITY);
-    L.title = glow_text(title, L"Prince of Persia", WIN_W, TITLE_H, 6);
+    L.title = glow_text(title, L"reSOT", WIN_W, TITLE_H, 6);
     L.label_demo = glow_text(button, L"Start Demo", BTN_W, BTN_H, 4);
     L.label_game = glow_text(button, L"Start Game", BTN_W, BTN_H, 4);
     L.label_cancel = glow_text(button, L"Cancel", CANCEL_W, BTN_H, 4);

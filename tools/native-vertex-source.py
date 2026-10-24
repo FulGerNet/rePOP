@@ -17,6 +17,9 @@ def header(check, text):
                               "#define VSH_INF uintBitsToFloat(0x7F800000u)")
     helpers = helpers.replace("(uint)fogp.z", "uint(fogp.z)")
     glsl = "#version 450\n"
+    # RE-SoT: match native HLSL's precise position path for multipass depth
+    # comparisons. Keep position invariant across translated programs too.
+    glsl += "invariant gl_Position;\nprecise gl_Position;\n"
     glsl += "layout(std140,set=1,binding=0) uniform Header { vec4 vp, fogp, ws, vpad; };\n"
     glsl += "layout(std140,set=1,binding=1) uniform Constants { vec4 c[192]; };\n"
     glsl += "float saturate(float x) { return clamp(x,0.0,1.0); }\n"

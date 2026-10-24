@@ -1,6 +1,6 @@
 package com.fulger.resot;
 
-/** Visibility policy and toggle-only fade, independent of Android drawing. */
+/** Visibility policy and hidden-overlay fade, independent of Android drawing. */
 final class TouchOverlayState {
     static final long FADE_MS = 450;
     private boolean gameplayVisible, sceneOverride;
@@ -9,7 +9,7 @@ final class TouchOverlayState {
 
     TouchOverlayState(boolean visible, long now) {
         gameplayVisible = visible;
-        fadeStarted = now;
+        fadeStarted = controlsVisible() ? -1 : now;
     }
 
     boolean gameplayVisible() { return gameplayVisible; }
@@ -25,7 +25,7 @@ final class TouchOverlayState {
     void toggle(long now) {
         if (scene == 0) gameplayVisible = !gameplayVisible;
         else sceneOverride = !sceneOverride;
-        fadeStarted = now;
+        fadeStarted = controlsVisible() ? -1 : now;
     }
 
     void setGameplayVisible(boolean visible, long now) {
@@ -41,9 +41,11 @@ final class TouchOverlayState {
     }
 
     float toggleAlpha(long now) {
-        return fadeStarted < 0 ? 1f
+        return controlsVisible() || fadeStarted < 0 ? 1f
             : Math.max(0f, 1f - Math.max(0, now - fadeStarted) / (float) FADE_MS);
     }
 
-    boolean fading(long now) { return fadeStarted >= 0 && now - fadeStarted < FADE_MS; }
+    boolean fpsButtonVisible(boolean panelVisible) { return controlsVisible() && !panelVisible; }
+
+    boolean fading(long now) { return !controlsVisible() && fadeStarted >= 0 && now - fadeStarted < FADE_MS; }
 }

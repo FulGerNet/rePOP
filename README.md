@@ -10,7 +10,7 @@
 
 **Prince of Persia: The Sands of Time, recompiled from Xbox to native Windows and Android.**
 
-**Current version: v0.3.0.** reSOT is an advanced, playable recompilation and
+**Current version: v0.3.1.** reSOT is an advanced, playable recompilation and
 port of the original Xbox retail game and E3 2003 demo. Both games now run
 well on Windows and Android in the configurations tested by the user, with
 working gameplay, menus, movies, audio and controller support. The project
@@ -48,7 +48,19 @@ letterboxed cutscene frames. These are gameplay examples, not a full-game test.*
 
 *Windows demo captures from a scripted 185-second run, 2026-10-14, at 16:9 Hor+.*
 
-## What's included in v0.3.0
+## What's included in v0.3.1
+
+- **HUD and menu touch fixes.** The upgraded retail health-bar outline stays
+  aligned with its fill. Native literal-text choices, including Yes/No,
+  are clickable; the retail save carousel's arrows send left/right input.
+- **Bridge and light corrections.** Correct homogeneous depth reconstruction
+  resolves the demo bridge defect confirmed on Android. The traced LowerBath
+  halo variant now receives the same correction, also confirmed by the user.
+- **Launcher refresh.** Both launchers show the app version in the upper left,
+  with reSOT and Prince of Persia in Atlantis and The Sands of Time in the
+  normal badge font.
+
+The release also retains the v0.3.0 features below.
 
 - **Retail music restoration.** Restores the original synchronous streaming
   completion path. Music is audible again in the Windows retail main menu,
@@ -64,10 +76,10 @@ letterboxed cutscene frames. These are gameplay examples, not a full-game test.*
   right or use Android Back to go back. Keyboard and controller remain available.
 - **Automatic Android control visibility.** The touch pad hides in menus,
   Bink movies and camera scenes with cinematic bars, then restores the
-  player's visibility preference in gameplay. The FPS button remains available
-  when the pad is hidden; it becomes invisible while its panel is open, with
-  the same touch area available to close the panel. The
-  overlay toggle fades to invisible but keeps its touch area active, allowing
+  player's visibility preference in gameplay. The FPS button becomes invisible
+  when the pad is hidden or its panel is open; its touch area stays active.
+  The overlay toggle stays visible with the pad and fades to invisible only
+  when the pad is hidden, keeping its touch area active and allowing
   the full pad to be reopened in menus and cutscenes. With the pad hidden,
   styled Back and Confirm buttons appear at the bottom corners. Tapping a
   Bink movie or pressing Confirm skips it.
@@ -85,11 +97,12 @@ letterboxed cutscene frames. These are gameplay examples, not a full-game test.*
   HUD clearance, repaired log-source selection, and retained the shared
   graphics, input and diagnostic options.
 
-Both Windows targets and the Android release APK build as **0.3.0**;
-Android uses **versionCode 5**. Shader compilation, pointer, audio and GPU
-regressions passed in the recorded release checks. The latest APK's new
-touch-menu and overlay transitions have not yet been tested on a connected
-device. See [VALIDATION.md](docs/VALIDATION.md) for commands and observations.
+Both Windows targets and the Android release APK build as **0.3.1**;
+Android uses **versionCode 6**. Shader compilation, pointer, touch and GPU
+regressions passed in the recorded release checks. The user confirms the
+extended health-bar alignment, popup/save-carousel touch changes and launcher
+presentation on the Android test phone. See [VALIDATION.md](docs/VALIDATION.md)
+for commands, observations and remaining device coverage.
 
 ## Features and current status
 
@@ -110,8 +123,8 @@ every level, device or exact console accuracy.
 | Keyboard and physical controllers | 🟢 | 🟢 |
 | Android gameplay touch controls | 🟢 Custom layout, vibration and approved visual design | 🟢 Same shared controls |
 | Native menu navigation and pause | 🟢 Includes Load Map and reSOT Options | 🟢 Includes reSOT Options; Xbox Live entries hidden |
-| Mouse/touch selection of menu rows | 🟡 Shared bridge and synthetic tests pass; broader interaction checks pending | 🟡 Shared bridge and synthetic tests pass; Android device checks pending |
-| Automatic Android overlay hiding | 🟡 Implemented for menus, Bink and letterboxed camera scenes; device checks pending | 🟡 Same shared implementation and validation limit |
+| Mouse/touch selection of menu rows | 🟡 Text and literal-text choices covered; synthetic tests pass; broader interaction checks pending | 🟢 Yes/No choices and save-carousel arrows confirmed on the Android test phone; synthetic tests pass |
+| Automatic Android overlay hiding | 🟡 Toggle stays visible with pad; hidden toggle/FPS remain touchable. Policy tests pass; device checks pending | 🟡 Same shared implementation and validation limit |
 | Native Vulkan renderer | 🟢 Windows and Android runs; shader/GPU comparisons pass | 🟢 Windows and Android runs; gameplay and GPU comparisons recorded |
 | Native Direct3D 11 renderer | 🟢 Windows default | 🟢 Windows default |
 | Native Direct3D 12 renderer | 🟡 Optional Windows backend; startup and GPU tests pass | 🟡 Optional Windows backend; broader gameplay checks pending |
@@ -121,7 +134,7 @@ every level, device or exact console accuracy.
 | Launcher, game-folder selection and ISO installation | 🟢 Available on both hosts; demo ISO installation used by the user | 🟢 Available on both hosts; separate retail game detection |
 | FPS panel, diagnostics and input rebinding | 🟢 | 🟢 |
 | Save/load and memory units | 🟡 Save crash resolved; complete persistence checks pending | 🟡 Save crash resolved; Android save/relaunch/load checks pending |
-| Shadows, stencil and remaining effects | 🟡 Projected shadows implemented; some effects and scene defects remain | 🟡 Rendering corrections included; shadow appearance and stencil remain incomplete |
+| Shadows, stencil and remaining effects | 🟡 Eye-plane depth reconstruction corrected; Sand Birds bridge fix confirmed on Android; reported device corruption still needs checks | 🟡 LowerBath lights fix confirmed on Android; shared depth correction included; Hourglass Room still needs a check; stencil effects remain incomplete |
 | Full-game completion and console comparison | ⚪ Not yet established | ⚪ Not yet established |
 
 The current focus is longer playthroughs, remaining scene-specific crashes
@@ -237,7 +250,7 @@ It is regenerated from the user's own checked XBE and is never edited by hand.
 | `Assets/`, `research/`, `bin/`, `build*/`, `logs/` | Private game files, analysis or local outputs; ignored |
 
 - [Validation and observed results](docs/VALIDATION.md)
-- [v0.3.0 release notes](docs/releases/v0.3.0.md)
+- [v0.3.1 release notes](docs/releases/v0.3.1.md)
 - [Recompilation pipeline and target evidence](docs/RECOMP.md)
 - [Windows/Android parity](docs/PLATFORM-PARITY.md)
 - [Vulkan performance and rendering studies](docs/VULKAN-PERFORMANCE.md)

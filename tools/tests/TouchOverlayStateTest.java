@@ -16,9 +16,13 @@ public final class TouchOverlayStateTest {
         state.toggle(1500); // The same toggle remains actionable at alpha zero.
         check(state.controlsVisible() && !state.navigationVisible(), "invisible toggle reopens cinematic pad");
         check(state.gameplayVisible(), "cinematic toggle preserves gameplay preference");
-        check(state.toggleAlpha(1950) == 0 && state.controlsVisible(), "fade affects icon only");
+        check(state.toggleAlpha(1950) == 1 && !state.fading(1950), "reopened pad keeps toggle visible");
+        check(state.fpsButtonVisible(false), "visible pad shows FPS button");
+        check(!state.fpsButtonVisible(true), "FPS button does not obscure open panel");
         state.toggle(2000);
         check(!state.controlsVisible() && state.navigationVisible(), "hide restores corner navigation");
+        check(!state.fpsButtonVisible(false), "hidden pad hides FPS button even with panel closed");
+        check(state.toggleAlpha(2450) == 0, "hidden pad fades toggle");
 
         state.sceneChanged(1, 2500);
         check(!state.controlsVisible() && state.navigationVisible(), "new menu hides pad");

@@ -1,5 +1,188 @@
 # Validation log
 
+## 2026-10-24: v0.3.1 device acceptance and final packages
+
+The user confirms the new launcher, Yes/No popup touch and save-carousel
+arrow interactions: si e perfetto, then requests definitive builds, commit
+and push on reSOT. The extended health bar was separately confirmed earlier.
+Final commands: tools/recomp.ps1 -Target xbox-demo -BuildOnly and retail
+equivalent, tools/build-android.ps1. Output logs: logs/v031-final-*-build.txt.
+Packages: bin/sot-xbox-demo.exe, bin/sot-xbox-retail.exe and
+bin/reSOT-android.apk, version 0.3.1 (Android versionCode 6). Diagnostic
+frame/menu opt-in files were removed from the phone after acceptance.
+The last verified tests remain 14/14 native GPU, both pointer layouts and
+the touch policy; source behavior is unchanged in the final builds.
+Windows builds and resource versions are verified; these specific Windows
+mouse interactions, other GPUs and full-game completion remain unverified.
+
+
+## 2026-10-24: v0.3.1 health outline, literal choices, carousel and launcher
+
+The user reports the upgraded retail health outline returning to its old
+position, unclickable Yes/No choices and unclickable save-carousel arrows.
+The phone capture logs/v031-health-trace.txt shows separate 64x32 ARGB
+health-outline/fade batches at y=36.531..68.531; upgrades extend through
+the screen centre, defeating the previous side-only HUD classifier. The
+new retail strip predicate anchors every matching piece left. The user
+confirms the extended life bar is now correct on the Android test APK.
+Other HUD graphics keep the existing classification and effect policy.
+
+logs/v031-menu-live.txt records the retail Yes/No popup with zero recognized
+rows: its literal-text actions use vtable 0x0041F818, constructed by XBE
+0x00038780. The demo's independent literal-text constructor 0x00060230 sets
+vtable 0x00323800. Both carry x/y at +0x1C/+0x20. The pointer bridge now
+recognizes both literal and reference-text actions. Same-height choices
+have separate horizontal hit areas. Controller input retains priority.
+
+The retail save carousel has one enabled choice with four literal labels:
+description (.5,.72), slots (.275,.59)/(.5,.59)/(.725,.59). A phone screenshot
+logs/v031-menu.png establishes arrow centres (.125,.5)/(.875,.5) after
+mapping back to the centred 4:3 UI. Only this exact live group enables
+arrow hit areas. A tap emits one D-pad left/right press then release;
+it emits neither A nor X. Demo carousel support is not inferred.
+
+Both launchers now show their version in a gold plate at the upper left:
+Windows shares its version header with the executable resources; Android
+reads versionName from its package. Title reSOT and subtitle Prince of Persia
+use Atlantis; The Sands of Time retains the normal badge font. The Windows
+executables report 0.3.1 in FileVersion/ProductVersion, and adb dumpsys
+confirms Android versionName=0.3.1/versionCode=6. The APK was installed
+successfully for live verification; save files were retained.
+
+Checks:
+- python tools/check-hlsl.py: all ten embedded shader entries pass.
+- python tools/test-menu-pointer.py: both independent layouts pass, including
+  literal popup actions, horizontal hit separation, carousel arrows, release,
+  ultrawide mapping and rejection of unrelated four-label groups.
+- cmake --build build/tests/native-gpu --config Release succeeds;
+  RESOT_GPU_BINDINGS_SMOKE=1 ctest --test-dir build/tests/native-gpu -C Release
+  --output-on-failure passes 14/14 in 9.81 s, including upgraded health-strip
+  classification and the prior eye-plane GPU regression.
+- python tools/test-touch-overlay.py passes.
+- tools/recomp.ps1 -Target xbox-demo -BuildOnly, retail equivalent and
+  tools/build-android.ps1 succeed; logs/v031-*-build.txt records output.
+
+Pending at this entry: live popup/carousel and launcher presentation checks;
+Windows mouse behavior in these particular menus, other GPUs and full-game
+rendering. Opt-in menu-pointer-trace-enable activates structure diagnostics
+on Android; it is a development file, not a packaged default.
+
+## 2026-10-24: updated phone LowerBath confirmation
+
+After the demo bridge confirmation, the user revisited retail LowerBath
+with the same updated APK and reported risolto in response to checking the
+white lights, occlusion and flashing. The user confirms both reported scene
+defects resolved on this phone. logs/lights-walls-retail-after.txt records
+1544 then 4009 depth-tested halo draws, compared with zero before the fix.
+The frame-trace.flag and frame-trace-enable diagnostic files were removed
+from the phone after the checks. Other devices, retail Hourglass Room and
+full-game visual accuracy remain unverified; Windows builds passed but
+these exact Windows gameplay viewpoints were not revisited.
+
+
+## 2026-10-24: updated phone bridge confirmation
+
+After installing the follow-up APK, the user revisited the demo bridge and
+reported: ponte risolto. The Android bridge defect is therefore confirmed
+fixed by the user. This does not validate LowerBath lights, retail Hourglass
+Room, other GPUs or full-game rendering. Before/after captures are under
+logs/bridge-diagnostic.png and logs/bridge-diagnostic-after.png (ignored).
+
+
+## 2026-10-24: follow-up, eye-plane depth and LowerBath material
+
+The user confirms both defects persist in the 11:19 APK. ADB captures from
+that phone reproduce the demo bridge view and retail LowerBath lights;
+the user also reports a halo flashing white/cyan. Evidence (ignored):
+logs/lights-walls-bridge-trace.txt, bridge-diagnostic.png,
+lights-walls-lowerbath-trace.txt, lights-walls-lowerbath-flash-trace.txt,
+and light-diagnostic.png. These are actual phone captures, not mockups.
+
+- The previous retail halo counter stays at zero in the affected session.
+  LowerBath submits the same additive one-stage final material and query
+  pairs with ARGB8888 64x64, rather than the earlier DXT1 128x128. Extend
+  the exact retail texture variants, retaining every other material guard
+  and the exclusion of active visibility probes. No demo inference.
+- Shared vs_finish clamped post-divide depth per vertex before reconstructing
+  homogeneous positions. That bends depth planes for triangles crossing the
+  eye. Remove this clamp and let GPU homogeneous clipping operate on the
+  reconstructed depth. This changes reference, interpreter and translated
+  paths on both hosts. It is a concrete renderer defect; its responsibility
+  for the reported bridge must still be checked in the updated phone build.
+- New test_depth_clip.inc compares coverage/interpolated depth against an
+  independently specified homogeneous triangle crossing the eye. Before:
+  994 mismatches among 1410 covered pixels on both Vulkan and D3D12. After:
+  zero mismatches on both. Test-only shader entries carry no game data.
+
+Checks: python tools/check-hlsl.py passes ten entries; cmake --build
+build/tests/native-gpu --config Release succeeds. With
+RESOT_GPU_BINDINGS_SMOKE=1, ctest --test-dir build/tests/native-gpu -C Release
+--output-on-failure passes 14/14 in 9.61 s, including the new real GPU check.
+Both tools/recomp.ps1 -Target xbox-demo -BuildOnly and xbox-retail equivalent
+succeed. tools/build-android.ps1 succeeds, followed by adb install -r
+bin/reSOT-android.apk (Success), authorized by the user. Logs:
+logs/lights-walls-*-build.txt and lights-walls-regression.txt.
+MSBuild/Gradle sandbox access failures required escalated retries.
+
+Pending: updated-device bridge, LowerBath intensity/occlusion/flashing,
+retail Hourglass Room, other affected GPUs and performance. A depth test
+passing is not proof that the reported gameplay views are fixed. The frame
+trace opt-in remains enabled on the test phone for this investigation.
+
+## 2026-10-24: device graphics reports, depth clears and touch visibility
+
+User reports triangle-shaped shadow/object flicker on some Android devices,
+colored texture corruption from menus onward on others, and opaque white
+lights through geometry in retail 2401_LowerBath (Android Vulkan screenshot).
+Another screenshot shows corrupt Prince, walls and text in 0101_Porte.
+The user's own device does not reproduce the colored corruption. Geometry
+also shows through bridges in demo Sand Birds and retail Hourglass Room,
+on Windows and Android. These are user reports, not agent reproductions.
+
+Changes:
+- Initialize DXT color table entries before read-modify-write channel assembly,
+  removing undefined C behavior. This is not proof of the device bug's cause.
+- Preserve precise vertex position arithmetic in reference HLSL and native
+  translated GLSL, with invariant translated positions. Geometry caches,
+  guest instructions and normal color arithmetic remain enabled.
+- D3D11 and native encoders now honor partial depth/stencil-clear rectangles.
+  Full-view API/load-op clears previously erased occluders outside the region.
+  Partial clears use a scissored triangle, constant viewport depth, zero color
+  writes and optional stencil replacement. Empty rectangles do nothing;
+  full clears retain their fast path. Reported gameplay views remain untested.
+- Invalidate cached guest fragment constants after host solid fills overwrite
+  the guest uniform buffer/slot: D3D11 partial color clears and SDL solid blits.
+- Retail only: apply the existing traced halo signature/presentation policy
+  to already-LEQUAL finals and quad batches, also on Windows D3D11. Active
+  visibility probes remain excluded. The previous native policy was insufficient
+  according to the Android report. LowerBath improvement is NOT confirmed;
+  other material signatures and the demo retain their existing behavior.
+- Android: eye stays visible with the full pad and fades only with a hidden
+  pad. FPS artwork hides with the pad or an open FPS panel. Both hit areas
+  remain active. Windows guide explains the Android-only floating controls.
+
+Checks:
+- python tools/test-touch-overlay.py: visibility, fades, invisible hit-area
+  policy, scene transitions, restored preferences and editing pass.
+- python tools/check-hlsl.py: all ten reference entries pass.
+- cmake --build build/tests/native-gpu --config Release: succeeds.
+- ctest --test-dir build/tests/native-gpu -C Release --output-on-failure,
+  RESOT_GPU_BINDINGS_SMOKE=1: 14/14 pass in 9.75 seconds. New real GPU
+  readbacks verify that rectangle depth clears preserve outside occluders
+  and color on Vulkan/D3D12. Known DXT1/3/5 blocks check full RGB/alpha,
+  every selector and both endpoint orders. A separate full run also covers
+  the existing optimizer stress; see logs/device-graphics-tests-full.txt.
+- tools/recomp.ps1 -Target xbox-demo -BuildOnly and retail equivalent:
+  both Windows executables build. Logs: logs/device-graphics-*-build.txt.
+- tools/build-android.ps1: release APK with both targets builds, output
+  bin/reSOT-android.apk (27.3 MB). No installation was performed.
+- Sandbox access failures in MSBuild/Gradle required authorized retries.
+
+Not checked: affected remote GPUs, reported gameplay viewpoints, LowerBath
+light appearance/occlusion, touch Canvas/JNI interaction on a phone,
+performance or thermals. Builds/readbacks do not establish that all reported
+visual defects are fixed. Existing legacy byte encoding below is preserved.
+
 ## 2026-10-22: Android FPS button no longer overlaps its panel
 
 User reports that the newly persistent FPS button covers the FPS panel.

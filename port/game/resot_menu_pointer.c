@@ -78,6 +78,7 @@ void resot_menu_pointer_viewport(float aspect)
 #define PAGE_SELECTED 0x90u
 #define PAGE_STATE 0x84u
 #define TEXT_VTABLE 0x0041F838u
+#define LITERAL_VTABLE 0x0041F818u /* literal text: constructor 0x00038780 */
 #define BINK_HANDLE 0x0044AA1Cu /* 0x0001E970 */
 #define SCREEN_MANAGER 0x00758E34u /* 0x000CFC10 */
 #define SCREEN_MODE 0xC8u
@@ -89,6 +90,7 @@ void resot_menu_pointer_viewport(float aspect)
 #define PAGE_SELECTED 0x8Cu
 #define PAGE_STATE 0x80u
 #define TEXT_VTABLE 0x0032380Cu
+#define LITERAL_VTABLE 0x00323800u /* literal text: constructor 0x00060230 */
 #define BINK_HANDLE 0x0034AC34u /* 0x00018EA0 */
 #define SCREEN_MANAGER 0x0064D29Cu /* 0x000EF340 */
 #define SCREEN_MODE 0xC4u
@@ -112,12 +114,33 @@ static int position(uint32_t choice,float *x,float *y)
     if(!text || !it || end<it || end-it>256) return 0;
     for(;it<end;it+=4) {
         uint32_t a=word(it);
-        if(a && word(a)==TEXT_VTABLE) {
+        if(a && (word(a)==TEXT_VTABLE || word(a)==LITERAL_VTABLE)) {
             *x=number(a+0x1C); *y=number(a+0x20);
             return isfinite(*x) && isfinite(*y) && *x>=0 && *x<=1 && *y>=0 && *y<=1;
         }
     }
     return 0;
+}
+/* Retail load/save carousel: v031-menu-live.txt has one choice whose literal
+ * group contains the description at (.5,.72) and three slot labels at
+ * (.275,.59), (.5,.59), (.725,.59). The screenshot places the arrow centres
+ * at (.125,.5)/(.875,.5) in the same 4:3 frame. Require this live structure;
+ * a one-row menu must never acquire invisible left/right targets. */
+static int save_carousel(uint32_t choice)
+{
+#if RESOT_RUNTIME_RETAIL
+    uint32_t text=word(choice+0x9C),v=word(text+0xC),end=word(text+0x10);
+    const float xs[4]={.5f,.275f,.5f,.725f},ys[4]={.72f,.59f,.59f,.59f};
+    if(!v || end-v!=16) return 0;
+    for(int i=0;i<4;i++) {
+        uint32_t a=word(v+i*4);
+        if(word(a)!=LITERAL_VTABLE || fabsf(number(a+0x1C)-xs[i])>.002f ||
+            fabsf(number(a+0x20)-ys[i])>.002f) return 0;
+    }
+    return 1;
+#else
+    (void)choice; return 0; /* The demo's carousel has not been traced. */
+#endif
 }
 void resot_menu_pointer_pad(uint8_t *state)
 {
@@ -161,6 +184,19 @@ void resot_menu_pointer_pad(uint8_t *state)
             fprintf(stderr,"[POINTER] page=%08X stack=%u rows=%d selected=%08X mode=%u ratio=%.4f movie=%d\n",
                 page,count,n,selected,mode,number(mode>0&&mode<7?RATIO_TABLE+mode*4:screen+SCREEN_RATIO),atomic_get(&movie));
             for(i=0;i<n;i++) fprintf(stderr,"[POINTER] row=%d choice=%08X x=%.4f y=%.4f\n",i,choices[i],xs[i],ys[i]);
+            fprintf(stderr,"[POINTER] page-state=%u children=%08X..%08X extra=%08X..%08X\n",
+                word(page+PAGE_STATE),word(page+PAGE_CHILDREN),word(page+PAGE_CHILDREN+4),
+                word(page+PAGE_CHILDREN+16),word(page+PAGE_CHILDREN+20));
+            uint32_t first=word(page+PAGE_CHILDREN),last=word(page+PAGE_CHILDREN+4);
+            if(first && last>=first && last-first<=256) for(uint32_t at=first;at<last;at+=4) {
+                uint32_t c=word(at),text=word(c+0x9C),v=word(text+0xC),ve=word(text+0x10);
+                fprintf(stderr,"[POINTER] child=%08X vt=%08X enabled=%u values=%08X..%08X text=%08X actions=%08X..%08X\n",
+                    c,word(c),word(c+0x98),word(c+0x8C),word(c+0x90),text,v,ve);
+                if(v && ve>=v && ve-v<=256) for(;v<ve;v+=4) {
+                    uint32_t a=word(v);
+                    fprintf(stderr,"[POINTER] action=%08X vt=%08X xy=%.4f,%.4f\n",a,word(a),number(a+0x1C),number(a+0x20));
+                }
+            }
             traced_page=page; traced_count=n; traced_mode=mode;
         }
     }
@@ -191,14 +227,25 @@ void resot_menu_pointer_pad(uint8_t *state)
         y=(y-0.5f)*fmaxf(1,game/aspect)+0.5f;
     }
     if(valid && x>=0 && x<=1 && y>=0 && y<=1) {
+        if((events&1) && n==1 && current==0 && save_carousel(choices[0]) &&
+                fabsf(y-.5f)<.065f &&
+                (fabsf(x-.125f)<.055f || fabsf(x-.875f)<.055f)) {
+            state[4]|=(uint8_t)(x<.5f?4:8);
+            release=1; click_choice=hover_choice=0; return;
+        }
         for(i=0;i<n;i++) {
-            float d=fabsf(ys[i]-y),half=0.035f;
+            float d=fabsf(ys[i]-y),half=0.035f,half_x=0.42f;
             int j;
-            for(j=0;j<n;j++) if(j!=i && fabsf(ys[i]-ys[j])>0.005f)
-                half=fminf(half,fabsf(ys[i]-ys[j])*0.48f);
+            for(j=0;j<n;j++) if(j!=i) {
+                if(fabsf(ys[i]-ys[j])>0.005f)
+                    half=fminf(half,fabsf(ys[i]-ys[j])*0.48f);
+                else if(fabsf(xs[i]-xs[j])>0.005f)
+                    half_x=fminf(half_x,fabsf(xs[i]-xs[j])*0.48f);
+            }
             /* Use the page's actual baseline spacing, with a small allowance
              * above the baseline for glyph ascenders. No hard-coded row count. */
-            if(d<half && d<best && fabsf(x-xs[i])<0.42f) { hit=i; best=d; }
+            float score=d+fabsf(x-xs[i])*0.01f;
+            if(d<half && score<best && fabsf(x-xs[i])<half_x) { hit=i; best=score; }
         }
     }
     if(events&2) { state[7]=255; release=1; click_choice=0; return; }

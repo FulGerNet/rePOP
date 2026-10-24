@@ -28,16 +28,23 @@ remain under validation; see [VALIDATION.md](../../docs/VALIDATION.md).
 
 ## What is in the APK
 
+Version 0.3.1 (versionCode 6) aligns the upgraded retail health-bar outline
+(confirmed by the user), recognizes literal-text popup choices such as
+Yes/No, and supports tapping both retail save-carousel arrows. The launcher
+shows the installed package version at the upper left, reSOT and Prince of
+Persia in Atlantis, and The Sands of Time in the normal badge font. The demo
+bridge and retail LowerBath light corrections are confirmed on the test phone.
+
 Version 0.3.0 (Android versionCode 5) includes the original retail music-stream
 completion path, the demo menu lifecycle correction and removal of retail's
 pause Xbox Live entry. Tap native menu rows directly; swipe right to go back
 or use Android Back. The pad overlay hides automatically in menus, Bink movies
 and camera scenes with cinematic bars, then restores the player's gameplay
-visibility preference. The FPS button stays visible when the gameplay pad
-is hidden, including in menus/cinematics. While the FPS panel is open, the
-button becomes invisible so it cannot cover the text; its usual touch area
-remains active to close the panel. The top-centre eye toggle fades to zero opacity over 450 ms after
-a tap or automatic hiding; its hit area stays active. Tap that same spot
+visibility preference. The FPS button is visible with the pad while its panel
+is closed. It becomes invisible when the pad is hidden or the panel is open;
+its usual touch area remains active to open/close the panel. The top-centre
+eye toggle stays visible with the pad and fades to zero opacity over 450 ms
+only when the pad is hidden; its hit area stays active. Tap that same spot
 to reopen the full pad, including during menus or cutscenes. This override
 lasts until the next scene-context change and does not replace the saved
 gameplay preference.
@@ -253,8 +260,9 @@ after the one-frame responsiveness experiment. Windows does not need Android's
 thread-priority normalization or mobile memory budget.
 
 Tap **FPS** at the top left to show the panel. Its button becomes invisible
-while the panel is open; tapping the same spot closes the panel and restores
-the button. The invisible touch area remains active. Windows uses F5 and
+while the panel is open or the touch pad is hidden; tapping the same spot
+still opens/closes the panel. The icon returns when the pad is visible and
+the panel is closed. Windows uses F5 and
 has no corresponding touch button.
 **Look sensitivity** is in **reSOT Options → Controls** in both games:
 25–200% in steps of 25, default 200%, with 100% retaining the original speed. It applies

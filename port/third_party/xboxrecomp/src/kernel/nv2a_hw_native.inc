@@ -66,6 +66,7 @@ typedef struct {
     uint32_t shader, mask, blend, src, dst, op, depth, write, cmp, cull, ccw;
     uint32_t vertex_stride; /* RE-SoT: compact native program inputs, zero for HwVertex. */
     uint32_t small_vsh; /* RE-SoT: no reads of temporary registers R4..R11. */
+    uint32_t clear_stencil; /* RE-SoT: scissored depth/stencil clears preserve other pixels. */
     NgTranslatedFragment *specialized_ps; /* RE-SoT: stable program identity. */
     NgTranslatedVertex *translated_vs; /* RE-SoT: direct Vulkan vertex program. */
     SDL_GPUTextureFormat format;
@@ -961,6 +962,16 @@ static SDL_GPUGraphicsPipeline *ng_pipeline_build(const NgPipelineKey *key, int 
     ci.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
     ci.depth_stencil_state.enable_depth_test = (key->depth & 1) != 0;
     ci.depth_stencil_state.enable_depth_write = key->write != 0;
+    /* RE-SoT: only the explicit rectangle-clear pipeline replaces stencil. */
+    if (key->clear_stencil) {
+        ci.depth_stencil_state.enable_stencil_test = true;
+        ci.depth_stencil_state.compare_mask = ci.depth_stencil_state.write_mask = 255;
+        ci.depth_stencil_state.front_stencil_state.compare_op = SDL_GPU_COMPAREOP_ALWAYS;
+        ci.depth_stencil_state.front_stencil_state.fail_op = SDL_GPU_STENCILOP_KEEP;
+        ci.depth_stencil_state.front_stencil_state.depth_fail_op = SDL_GPU_STENCILOP_KEEP;
+        ci.depth_stencil_state.front_stencil_state.pass_op = SDL_GPU_STENCILOP_REPLACE;
+        ci.depth_stencil_state.back_stencil_state = ci.depth_stencil_state.front_stencil_state;
+    }
     /* NV compare encodings: NEVER=0x200, LESS=0x201, ..., ALWAYS=0x207. */
     ci.depth_stencil_state.compare_op = (SDL_GPUCompareOp)(SDL_GPU_COMPAREOP_NEVER + (key->cmp&7));
     color.format = key->format;
@@ -1462,17 +1473,9 @@ static void ng_draw_state(NgSurface *s, SDL_GPUTexture *depth, NgDraw *out)
      * particles, alpha writes, HUD, or fullscreen effect consumers. This is
      * an intentional halo presentation correction, not Xbox behavior inferred
      * from the demo. No texture heap address is used as material identity. */
-    if (s->w == 640 && s->h == 480 && depth && key.depth == 3 && !key.write &&
-        key.cmp == 0x207 && key.mask == 7 && !key.cull &&
-        key.blend && key.src == 1 && key.dst == 1 && key.op == 0x8006 &&
-        !s_ng_visibility.enabled && !s_gpu.alpha_test &&
-        s_gpu.prim == NV_PRIM_QUADS && s_gpu.idx_count == 4 &&
-        s_gpu.texs[0].valid && !s_gpu.texs[0].cube &&
-        s_gpu.texs[0].color == 0x0C && s_gpu.texs[0].width == 128 && s_gpu.texs[0].height == 128 &&
-        s_gpu.rc.control == 1 && s_gpu.rc.stage_program == 1 &&
-        s_gpu.rc.color_icw[0] == 0x08010000 && s_gpu.rc.alpha_icw[0] == 0x18140000 &&
-        s_gpu.rc.color_ocw[0] == 0x00010C00 && s_gpu.rc.alpha_ocw[0] == 0x00000C00 &&
-        s_gpu.rc.final0 == 0x0000000C && s_gpu.rc.final1 == 0x00001C80) {
+    /* RE-SoT: already-LEQUAL and batched final halos still need attenuation;
+     * their query probes remain excluded by the shared retail predicate. */
+    if (hw_retail_halo(s->w,s->h,depth != NULL,s_ng_visibility.enabled)) {
         key.cmp = 0x203; s_ng.flare_depth_draws++;
         /* RE-SoT: the captured DXT1 image has a soft star-shaped falloff.
          * This material doubles RGB (OCW 0x00010C00) before ONE/ONE and
@@ -1807,6 +1810,8 @@ static void ng_blit(SDL_GPUTexture *target_image, SDL_GPUTextureFormat format,
         HwPsConst pc = {0};
         memcpy(pc.finc0, solid, 16);
         SDL_PushGPUFragmentUniformData(s_ng.cmd, 0, &pc, sizeof pc);
+        /* RE-SoT: host fills replaced slot zero outside the guest cache. */
+        s_ng.pc_valid = 0;
     } else SDL_BindGPUFragmentSamplers(pass, 0, &tex, 1);
     SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
     if (shader != 2) s_ng.command_samplers++;
@@ -1825,7 +1830,7 @@ static void ng_clear(uint32_t param)
         if (cx0 > x0) x0 = cx0; if (cy0 > y0) y0 = cy0;
         if (cx1 < x1) x1 = cx1; if (cy1 < y1) y1 = cy1;
     }
-    if ((param&3) && ng_depth(s)) {
+    if ((param&3) && x1 > x0 && y1 > y0 && ng_depth(s)) {
         SDL_GPUDepthStencilTargetInfo ds = {0};
         SDL_GPURenderPass *pass;
         ds.texture = s->depth;
@@ -1834,9 +1839,36 @@ static void ng_clear(uint32_t param)
         ds.store_op = ds.stencil_store_op = SDL_GPU_STOREOP_STORE;
         ds.clear_depth = (float)(hw_zmax_bits() == 65535 ? s_gpu.zstencil_clear&65535 : s_gpu.zstencil_clear>>8)/hw_zmax_bits();
         ds.clear_stencil = s_gpu.zstencil_clear&255;
-        pass = SDL_BeginGPURenderPass(ng_cmd(), NULL, 0, &ds);
-        if (!pass) ng_fail("clear depth");
-        SDL_EndGPURenderPass(pass);
+        if (x0 == 0 && y0 == 0 && x1 >= s->w && y1 >= s->h) {
+            pass = SDL_BeginGPURenderPass(ng_cmd(), NULL, 0, &ds);
+            if (!pass) ng_fail("clear depth");
+            SDL_EndGPURenderPass(pass);
+        } else {
+            /* RE-SoT: load-op CLEAR ignores scissor. Draw a depth-only
+             * fullscreen triangle through the requested rectangle instead.
+             * A constant viewport depth supplies the exact clear value. */
+            NgPipelineKey key = {0};
+            SDL_GPUColorTargetInfo ct = {0};
+            SDL_GPUViewport vp = {0,0,(float)ng_px(s->w,s->sc),(float)ng_py(s->h,s->sc),ds.clear_depth,ds.clear_depth};
+            SDL_Rect sc = {(int)ng_px(x0,s->sc),(int)ng_py(y0,s->sc),
+                (int)(ng_px(x1,s->sc)-ng_px(x0,s->sc)),(int)(ng_py(y1,s->sc)-ng_py(y0,s->sc))};
+            HwPsConst pc = {0};
+            key.shader = 2; key.format = SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM;
+            key.depth = 2 | ((param&1) != 0); key.write = (param&1) != 0;
+            key.cmp = 0x207; key.clear_stencil = (param&2) != 0;
+            ct.texture = s->color; ct.load_op = SDL_GPU_LOADOP_LOAD; ct.store_op = SDL_GPU_STOREOP_STORE;
+            ds.load_op = ds.stencil_load_op = SDL_GPU_LOADOP_LOAD;
+            SDL_GPUGraphicsPipeline *pipeline = ng_pipeline(&key,0);
+            pass = SDL_BeginGPURenderPass(ng_cmd(),&ct,1,&ds);
+            if (!pass) ng_fail("rectangle depth clear");
+            SDL_BindGPUGraphicsPipeline(pass,pipeline);
+            SDL_SetGPUViewport(pass,&vp); SDL_SetGPUScissor(pass,&sc);
+            SDL_SetGPUStencilReference(pass,ds.clear_stencil);
+            SDL_PushGPUFragmentUniformData(s_ng.cmd,0,&pc,sizeof pc);
+            s_ng.pc_valid = 0;
+            SDL_DrawGPUPrimitives(pass,3,1,0,0);
+            SDL_EndGPURenderPass(pass);
+        }
     }
     if ((param&0xF0) && x1 > x0 && y1 > y0) {
         float color[4];

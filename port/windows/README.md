@@ -1,5 +1,12 @@
 # reSOT on Windows
 
+Version 0.3.1 adds the extended retail health-bar alignment, literal-text
+popup selection and mouse input for retail save-carousel arrows. The launcher
+shows its current version at the upper left: reSOT and Prince of Persia use
+Atlantis, and The Sands of Time keeps the normal badge font. The shared
+renderer also includes the confirmed Android bridge/LowerBath corrections;
+these exact Windows scene viewpoints have not been revisited.
+
 Version 0.3.0 restores retail menu music (confirmed by the user), rebuilds the
 demo's custom menu entries on returning to the title, and hides retail Xbox
 Live in pause Options. Point at a native menu row with the mouse; left-click
@@ -75,10 +82,11 @@ original skip permission is disabled. F5 opens/closes the compact translucent to
 with game FPS, `Current WOW` (the loaded BF world's own name, `None`
 when no world is loaded), and `Renderer:` showing the active Direct3D 11,
 Direct3D 12, Vulkan or software renderer. F11 changes window mode; Alt+F4 exits.
-Android keeps its FPS touch button available when the gameplay overlay is
-hidden. Opening the FPS panel hides the button artwork, while its usual
-touch area remains active to close the panel. Its overlay toggle can fade out while retaining its hit
-area, with contextual Back/Confirm buttons in menus and cutscenes. These
+Android keeps its FPS touch area available when the gameplay overlay is
+hidden, but hides the artwork until the pad is visible and the FPS panel is
+closed. The overlay toggle stays visible with the pad and fades out only
+when the pad is hidden, retaining its hit area. Contextual Back/Confirm
+buttons appear in menus and cutscenes. These
 floating controls are Android-specific; Windows uses F5 for FPS, mouse or
 controller menu input and right-click Back.
 F6 opens the translucent diagnostics panel. Like F5 it leaves the game

@@ -338,7 +338,9 @@ static void hw_visibility_method(uint32_t method, uint32_t value, uint64_t stamp
 static const char s_hw_hlsl_vs_common[] =
 "cbuffer VSC : register(b0) { float4 vp; float4 fogp; float4 ws; float4 vpad; float4 cur[16];\n"
 "                             float4 c[192]; };\n"
-"struct VO { float4 pos:SV_Position; float4 d0:COLOR0; float4 d1:COLOR1; float4 fog:FOG;\n"
+/* RE-SoT: multipass depth comparisons need consistent position arithmetic
+ * across vertex programs and host compilers; colors retain normal math. */
+"struct VO { precise float4 pos:SV_Position; float4 d0:COLOR0; float4 d1:COLOR1; float4 fog:FOG;\n"
 "            float4 t0:TEXCOORD0; float4 t1:TEXCOORD1; float4 t2:TEXCOORD2; float4 t3:TEXCOORD3; };\n"
 "VO vs_finish(float4 p, float4 d0, float4 d1, float fog, float4 t0, float4 t1, float4 t2, float4 t3) {\n"
 "  VO o; float w = p.w; float x = p.x, y = p.y;\n"
@@ -349,8 +351,12 @@ static const char s_hw_hlsl_vs_common[] =
  * it towards its side of the screen (hw_hud_shift); ws.w is zero for other
  * batches. */
 "  if (flat) x += ws.w;\n"
+/* RE-SoT: reconstruct the homogeneous depth plane before GPU clipping.
+ * Clamping screen z per vertex bends triangles crossing the eye/near plane,
+ * so geometry behind the camera can occlude floors and walls in front.
+ * The rasterizer clips z against 0..w after interpolation on both hosts. */
 "  o.pos = float4((x * vp.x - 1.0) * w, (1.0 - y * vp.y) * w,\n"
-"                 saturate(p.z * vp.z) * w, w);\n"
+"                 (p.z * vp.z) * w, w);\n"
 "  o.d0 = saturate(d0); o.d1 = saturate(d1); o.fog = float4(fog, 0, 0, 0);\n"
 "  o.t0 = t0; o.t1 = t1; o.t2 = t2; o.t3 = t3; return o; }\n";
 
@@ -1250,6 +1256,36 @@ static uint32_t hw_zmax_bits(void)
     return ((s_gpu.format >> 4) & 0xF) == 1 ? 0xFFFFu : 0xFFFFFFu;
 }
 
+/* RE-SoT: retail-light-query.txt and lights-walls-lowerbath-trace.txt
+ * independently identify the final halo material and its query probes.
+ * LowerBath uses ARGB8888 64x64, not the earlier DXT1 128x128 image;
+ * the old predicate matched zero draws in the affected phone session.
+ * Keep these exact variants retail-only and exclude probes.
+ * LEQUAL finals need the same emission correction as ALWAYS finals; quad
+ * batching does not change the material. Shared by Windows D3D11 and SDL. */
+static int hw_retail_halo(uint32_t w, uint32_t h, int depth, int querying)
+{
+#if RESOT_RUNTIME_RETAIL
+    const Texture *t = &s_gpu.texs[0];
+    return w == 640 && h == 480 && depth && s_gpu.depth_test && !s_gpu.depth_mask &&
+        (s_gpu.depth_func == 0x207 || s_gpu.depth_func == 0x203) &&
+        s_gpu.color_mask == 0x00010101 && !querying && !s_gpu.alpha_test &&
+        s_gpu.blend_enable && s_gpu.blend_sfactor == 1 && s_gpu.blend_dfactor == 1 &&
+        s_gpu.blend_equation == 0x8006 && s_gpu.prim == NV_PRIM_QUADS &&
+        s_gpu.idx_count >= 4 && (s_gpu.idx_count & 3) == 0 &&
+        t->valid && !t->cube &&
+        ((t->color == 0x0C && t->width == 128 && t->height == 128) ||
+         (t->color == 0x06 && t->width == 64 && t->height == 64)) &&
+        s_gpu.rc.control == 1 && s_gpu.rc.stage_program == 1 &&
+        s_gpu.rc.color_icw[0] == 0x08010000 && s_gpu.rc.alpha_icw[0] == 0x18140000 &&
+        s_gpu.rc.color_ocw[0] == 0x00010C00 && s_gpu.rc.alpha_ocw[0] == 0x00000C00 &&
+        s_gpu.rc.final0 == 0x0000000C && s_gpu.rc.final1 == 0x00001C80;
+#else
+    (void)w; (void)h; (void)depth; (void)querying;
+    return 0;
+#endif
+}
+
 #if RESOT_HW_D3D11
 /* The colour surface the title is drawing into. */
 static HwSurface *hw_surface(void)
@@ -1652,11 +1688,13 @@ static ID3D11BlendState *hw_blend_state(void)
     return s_hw.blend[i].st;
 }
 
-static ID3D11DepthStencilState *hw_depth_state(int have_depth)
+static ID3D11DepthStencilState *hw_depth_state(int have_depth, int halo)
 {
     uint32_t test = have_depth && s_gpu.depth_test;
     uint32_t write = test && s_gpu.depth_mask;
-    uint32_t key = test | (write << 1) | ((s_gpu.depth_func & 7) << 2);
+    /* RE-SoT: same final-halo occlusion policy as native Vulkan/D3D12. */
+    uint32_t func = halo ? 0x203 : s_gpu.depth_func;
+    uint32_t key = test | (write << 1) | ((func & 7) << 2);
     D3D11_DEPTH_STENCIL_DESC dd;
     int i;
 
@@ -1670,7 +1708,7 @@ static ID3D11DepthStencilState *hw_depth_state(int have_depth)
      * silhouette (z about 0.97), even though the game disabled depth testing. */
     dd.DepthEnable = test;
     dd.DepthWriteMask = write ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
-    dd.DepthFunc = test ? (D3D11_COMPARISON_FUNC)((s_gpu.depth_func & 7) + 1)
+    dd.DepthFunc = test ? (D3D11_COMPARISON_FUNC)((func & 7) + 1)
                         : D3D11_COMPARISON_ALWAYS;
     i = s_hw.nds < 32 ? s_hw.nds++ : 0;
     if (s_hw.ds[i].st)
@@ -1706,13 +1744,18 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     /* The header (vp, fogp, ws, pad) and then cur[]: everything in HwVsConst
      * before the program constants. */
     float hdr[16 + NV_VERTEX_ATTRS * 4], bf[4];
-    int st, i;
+    int st, i, halo;
     UINT stride = sizeof(HwVertex), zero = 0;
     uint32_t area;
 
     if (!s)
         return NULL;
     d = hw_depth(s);
+#if RESOT_RUNTIME_RETAIL
+    halo = hw_retail_halo(s->w,s->h,d != NULL,s_hw_visibility.enabled);
+#else
+    halo = 0; /* RE-SoT: this material was traced only in retail. */
+#endif
     ID3D11DeviceContext_OMSetRenderTargets(s_hw.ctx, 1, &s->rtv, d ? d->dsv : NULL);
     vp.TopLeftX = 0; vp.TopLeftY = 0;
     vp.Width = (float)hw_px(s->w, s->sc);
@@ -1734,7 +1777,7 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     }
     hw_color4(s_gpu.blend_color, bf);
     ID3D11DeviceContext_OMSetBlendState(s_hw.ctx, hw_blend_state(), bf, 0xFFFFFFFFu);
-    ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx, hw_depth_state(d != NULL), 0);
+    ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx, hw_depth_state(d != NULL,halo), 0);
 
     memset(&pc, 0, sizeof pc);
     for (i = 0; i < 8; i++) {
@@ -1782,6 +1825,8 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
         }
         smp[st] = hw_sampler(t);
     }
+    /* RE-SoT: match native halo attenuation without changing alpha/probes. */
+    if (halo) for (i=0;i<3;i++) pc.fac0[0][i] *= 0.25f;
     /* Consecutive batches mostly share their combiner set-up. */
     if (!s_hw.ps_last_valid || memcmp(&pc, &s_hw.ps_last, sizeof pc)) {
         if (SUCCEEDED(ID3D11DeviceContext_Map(s_hw.ctx, (ID3D11Resource *)s_hw.ps_cb, 0,
@@ -2337,6 +2382,13 @@ static void hw_classify_screen(float left, float right, float top, float bottom)
 #endif
             ))
         s_hw.batch_hud = right < 320.0f ? -1 : left > 320.0f ? 1 : 0;
+#if RESOT_RUNTIME_RETAIL
+    /* RE-SoT: life upgrades extend the outline through the screen centre;
+     * it still belongs to the left HUD, including separate right end caps. */
+    if(projected_ui && !s_gpu.depth_test && nv_hw_retail_health_frame(
+        s_hw.widen,left,right,top,bottom,s_gpu.texs[0].width,
+        s_gpu.texs[0].height,s_gpu.texs[0].color)) s_hw.batch_hud=-1;
+#endif
     /* RE-SoT: retail only. Its title logo is flat 2D drawn through the
      * narrowed projection (vsh FE9274D1, x=92.531..476.531 y=48.531..168.531
      * at 16:9, a 512-wide 4:3 quad at x=16.7..528.7), so it already has its
@@ -3064,14 +3116,53 @@ static void hw_clear(uint32_t param)
         if (cy1 < y1) y1 = cy1;
     }
     d = hw_depth(s);
-    if ((param & 0x03) && d) {
+    if ((param & 0x03) && d && x1 > x0 && y1 > y0) {
         float z = (float)(hw_zmax_bits() == 0xFFFFu ? (s_gpu.zstencil_clear & 0xFFFF)
                                                     : (s_gpu.zstencil_clear >> 8))
                 / (float)hw_zmax_bits();
+        if (x0 == 0 && y0 == 0 && x1 >= s->w && y1 >= s->h) {
         ID3D11DeviceContext_ClearDepthStencilView(
             s_hw.ctx, d->dsv,
             ((param & 1) ? D3D11_CLEAR_DEPTH : 0) | ((param & 2) ? D3D11_CLEAR_STENCIL : 0),
             z, (UINT8)(s_gpu.zstencil_clear & 0xFF));
+        } else {
+            /* RE-SoT: ClearDepthStencilView ignores scissor. A rectangle
+             * clear must preserve the scene depth outside its footprint. */
+            D3D11_DEPTH_STENCIL_DESC dd = {0};
+            D3D11_BLEND_DESC bd = {0};
+            ID3D11DepthStencilState *ds = NULL;
+            ID3D11BlendState *bs = NULL;
+            D3D11_VIEWPORT vp = {0,0,(float)hw_px(s->w,s->sc),(float)hw_py(s->h,s->sc),z,z};
+            D3D11_RECT sc = {(LONG)hw_px(x0,s->sc),(LONG)hw_py(y0,s->sc),
+                (LONG)hw_px(x1,s->sc),(LONG)hw_py(y1,s->sc)};
+            dd.DepthEnable = (param&1) != 0;
+            dd.DepthWriteMask = (param&1) ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
+            dd.DepthFunc = D3D11_COMPARISON_ALWAYS;
+            dd.StencilEnable = (param&2) != 0;
+            dd.StencilReadMask = dd.StencilWriteMask = 255;
+            dd.FrontFace.StencilFunc = D3D11_COMPARISON_ALWAYS;
+            dd.FrontFace.StencilFailOp = dd.FrontFace.StencilDepthFailOp = D3D11_STENCIL_OP_KEEP;
+            dd.FrontFace.StencilPassOp = D3D11_STENCIL_OP_REPLACE;
+            dd.BackFace = dd.FrontFace;
+            if (FAILED(ID3D11Device_CreateDepthStencilState(s_hw.dev,&dd,&ds)) ||
+                FAILED(ID3D11Device_CreateBlendState(s_hw.dev,&bd,&bs))) {
+                fprintf(stderr,"[HW] rectangle depth clear state creation failed\n");
+                abort(); /* RE-SoT: never replace a failed partial clear with a full clear. */
+            }
+            ID3D11DeviceContext_OMSetRenderTargets(s_hw.ctx,1,&s->rtv,d->dsv);
+            ID3D11DeviceContext_OMSetBlendState(s_hw.ctx,bs,NULL,0xFFFFFFFFu);
+            ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx,ds,s_gpu.zstencil_clear&255);
+            ID3D11DeviceContext_RSSetState(s_hw.ctx,s_hw.rs[0]);
+            ID3D11DeviceContext_RSSetViewports(s_hw.ctx,1,&vp);
+            ID3D11DeviceContext_RSSetScissorRects(s_hw.ctx,1,&sc);
+            ID3D11DeviceContext_IASetInputLayout(s_hw.ctx,NULL);
+            ID3D11DeviceContext_IASetPrimitiveTopology(s_hw.ctx,D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            ID3D11DeviceContext_VSSetShader(s_hw.ctx,s_hw.vs_blit,NULL,0);
+            ID3D11DeviceContext_PSSetShader(s_hw.ctx,s_hw.ps_solid,NULL,0);
+            ID3D11DeviceContext_PSSetConstantBuffers(s_hw.ctx,0,1,&s_hw.ps_cb);
+            ID3D11DeviceContext_Draw(s_hw.ctx,3,0);
+            ID3D11DepthStencilState_Release(ds); ID3D11BlendState_Release(bs);
+        }
     }
     if (param & NV097_CLEAR_COLOR_MASK) {
         float c[4];
@@ -3095,6 +3186,8 @@ static void hw_clear(uint32_t param)
                                                   0, D3D11_MAP_WRITE_DISCARD, 0, &map))) {
                 memcpy(map.pData, &pc, sizeof pc);
                 ID3D11DeviceContext_Unmap(s_hw.ctx, (ID3D11Resource *)s_hw.ps_cb, 0);
+                /* RE-SoT: the clear payload replaced the cached guest constants. */
+                s_hw.ps_last_valid = 0;
             }
             memset(&bd, 0, sizeof bd);
             /* CLEAR_SURFACE bits: 0x10 R, 0x20 G, 0x40 B, 0x80 A. */
@@ -3117,7 +3210,7 @@ static void hw_clear(uint32_t param)
             ID3D11DeviceContext_RSSetScissorRects(s_hw.ctx, 1, &sc);
             ID3D11DeviceContext_RSSetState(s_hw.ctx, s_hw.rs[0]);
             ID3D11DeviceContext_OMSetBlendState(s_hw.ctx, bs, bf, 0xFFFFFFFFu);
-            ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx, hw_depth_state(0), 0);
+            ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx, hw_depth_state(0,0), 0);
             ID3D11DeviceContext_IASetInputLayout(s_hw.ctx, NULL);
             ID3D11DeviceContext_IASetPrimitiveTopology(s_hw.ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             ID3D11DeviceContext_VSSetShader(s_hw.ctx, s_hw.vs_blit, NULL, 0);
@@ -3168,7 +3261,7 @@ static void hw_compose_locked(void) /* RE-SoT: snapshot before post-flip fences.
     ID3D11DeviceContext_RSSetViewports(s_hw.ctx, 1, &vp);
     ID3D11DeviceContext_RSSetState(s_hw.ctx, s_hw.rs_blit);
     ID3D11DeviceContext_OMSetBlendState(s_hw.ctx, NULL, bf, 0xFFFFFFFFu);
-    ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx, hw_depth_state(0), 0);
+    ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx, hw_depth_state(0,0), 0);
     ID3D11DeviceContext_IASetInputLayout(s_hw.ctx, NULL);
     ID3D11DeviceContext_IASetPrimitiveTopology(s_hw.ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ID3D11DeviceContext_VSSetShader(s_hw.ctx, s_hw.vs_blit, NULL, 0);
