@@ -45,6 +45,15 @@ if ($code) { throw "Gradle $task failed (exit $code)." }
 
 $variant = if ($Debug) { 'debug' } else { 'release' }
 $apk = Join-Path $project "app/build/outputs/apk/$variant/app-$variant.apk"
+# Fail packaging rather than ship an APK its own startup check would reject.
+# The pin is public; private signing material is never read or printed here.
+$trustSource = Get-Content -LiteralPath (Join-Path $project 'app/src/main/java/com/fulger/resot/ReleaseTrust.java') -Raw
+$pin = [regex]::Match($trustSource, 'CERT_SHA256\s*=\s*"([a-f0-9]{64})"').Groups[1].Value
+$signature = & (Join-Path $sdk 'build-tools/36.0.0/apksigner.bat') verify --verbose --print-certs $apk
+if ($LASTEXITCODE -or -not $pin -or -not ($signature -match "Signer #1 certificate SHA-256 digest: $pin") -or
+    -not ($signature -match 'Verified using v[23] scheme.*true')) {
+    throw 'APK signature is invalid or does not match ReleaseTrust.CERT_SHA256. Use the existing publisher signing key, or explicitly configure the public pin for your source fork.'
+}
 $bin = Join-Path $root 'bin'
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
 $out = Join-Path $bin $(if ($Debug) { 'reSOT-android-debug.apk' } else { 'reSOT-android.apk' })

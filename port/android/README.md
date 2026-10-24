@@ -1,5 +1,12 @@
 # reSOT for Android
 
+Version 0.3.2 adds Reduced/Standard/Full graphics presets and a background
+stable-release check with optional Update / Close buttons styled like the
+launcher. The displayed version is 0.3.2. Offline/rate-limit errors are ignored.
+No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
+request and reSOT version in its User-Agent. Update opens the official release
+page, without downloading/installing an executable automatically.
+
 One app, **com.fulger.resot**, for both Xbox builds of Prince of Persia: The
 Sands of Time: the E3 2003 demo and the NTSC retail game. arm64-v8a, Android
 10 (API 29) or later, a Vulkan 1.0 GPU. Rendering is the native SDL GPU
@@ -407,19 +414,23 @@ were corrected for Android retail. Host regression tests pass; save/create,
 close-app, reopen and load must still be checked on the phone. The demo's
 storage path has not received this retail-specific change.
 
-### Post processing quality and texture glow
+### Graphics preset (v0.3.2)
 
-`Texture glow effect` uses `[Graphics] TextureGlowEffect=0` by default.
-`Post processing` is separate: `PostProcessingQuality=0/1/2/3` selects
-Off/Low/Mid/High (Android default Off). Low and Mid now budget auxiliary buffers,
-including projected-shadow maps, at 50% and 75% width/height. High retains
-original effect resolution. Off omits recognized blur/bloom chains, their
-fullscreen consumers, the final glow composite and recognized projected
-shadows; other auxiliary buffers use 25% while retaining their materials.
-Display/history buffers and tiny bloom levels are protected. The user confirms
-the option works (2026-10-20). The same policy serves demo and retail on both
-hosts; see the [effect study](../../docs/POST-PROCESSING.md) for exact coverage
-and the remaining water/motion-blur identification work.
+`[Graphics] GraphicsPreset=0/1/2/3` selects debug Off / Reduced / Standard /
+Full. New installations default to Standard. Reduced uses 50% auxiliary-effect
+width/height and skips independently recognized shadow casters and their
+receivers; Standard uses the former High quality without final texture glow;
+Full adds that glow. Display/history buffers, tiny bloom levels, HUD, scene
+depth and game timing remain protected. Reduced does not promise an FPS gain
+on CPU-bound scenes. Unknown effects/materials are not arbitrarily removed.
+
+The normal in-game menu cycles Reduced, Standard, Full. Debug Off is retained
+only through `GraphicsPreset=0` and Windows F7. If loaded, the normal menu
+shows Debug Off until the user changes the preset. The separate Texture glow
+effect option is gone. Legacy PostProcessingQuality High/Mid migrate to
+Standard, Low to Reduced, Off stays Off; a legacy enabled glow selects Full
+unless Off was explicitly selected. New GraphicsPreset values take priority.
+Saving removes the obsolete keys. See [effect coverage](../../docs/POST-PROCESSING.md).
 
 ### On-screen console logs
 
@@ -436,10 +447,6 @@ The overlay reads `logs/xbox-demo-err.txt` and `logs/xbox-demo-out.txt`, or
 the retail equivalents, inside the same app files folder. Errors are red,
 warnings yellow; recent rows scroll and fade. Normal file logging is retained.
 
-The in-game reSOT Options post-processing selector offers Low/Mid/High.
-Off remains available through `[Graphics] PostProcessingQuality=0` in the INI
-and, on Windows, through F7. An existing Off setting is shown as Custom in
-the in-game menu and is preserved until the quality selector is changed.
 
 Vulkan uses dedicated translated vertex programs and optimized complex fragment
 programs for demo and retail. The host compiler (glslang/SPIRV-Tools) is built
@@ -493,6 +500,94 @@ RGB565 targets sample with implicit alpha one and known projected receivers
 are bounded to the shadow footprint. Shared Windows/Android builds compile;
 visual correctness remains for the user's gameplay check.
 
+Graphics test build (2026-10-24): the shared shadow footprint filter now
+honors the sampler's affine Q=0 convention. Synthetic GPU readbacks pass;
+visible character shadows still need confirmation in demo and retail.
+Vulkan initialization requests only features actually used by reSOT. Retail
+also accepts ordinary hardware occlusion counts when precise counts are
+unavailable; light intensity can differ on these devices.
+
+Adreno 640 and Mali/Immortalis provisionally compute Xbox vertex programs on
+the CPU while retaining Vulkan rasterization and compact fragment shaders.
+New Samsung logs show compact shaders compile and submit, then report
+VK_ERROR_DEVICE_LOST. New Poco logs confirm reference-only shaders did not
+fix the colored corruption and ran slowly. The subsequent CPU-vertex test
+also leaves the Poco corruption present; Samsung confirmation is pending.
+CPU vertex execution may reduce performance. Raw-geometry reuse applies to the GPU-vertex path, which
+remains unchanged on other GPUs (including the user's working Adreno 735).
+The reduced Vulkan feature contract and shadow/scene-depth fixes remain.
+Logs print the GPU, policy, first-frame resource stages, pipeline start/end
+and pending waits. For developer A/B checks, place an ASCII `gpu-compatibility` file in
+the app's data folder (`Android/data/com.fulger.resot/files/` with the normal
+launcher): `1` forces reference shaders, `0` restores optimized shaders;
+remove it to restore automatic selection. Restart the game after changes.
+The shared Windows Vulkan encoder supports the same selection through
+`RESOT_NATIVE_COMPAT=1` or `0`.
+Developer override `RESOT_NATIVE_CPU_VSH=0` restores GPU vertices, and `1`
+forces CPU vertices. Full reference-shader mode is now explicit-only, rather
+than a device default. Logs additionally report driver name/version/info and
+the physical-device Vulkan API version when available.
+
+Shadow regression follow-up: the user still reports absent Vulkan/D3D12
+shadows and angle-dependent D3D11 shadows. Commit `afc13cc` removed the
+screen-depth clamp globally. Both games' traced depthless shadow casters
+declare Z16 yet emit depth far outside its range, so hardware clipping erased
+the silhouettes. The old clamp is restored only for the known RGB565 256x256
+caster passes without a depth buffer/test or blending. Scene and receiver
+depth remain unchanged, retaining the fix for geometry showing through.
+GPU readbacks reproduce an empty map before and restored coverage after;
+the eye-crossing scene regression still passes. Gameplay confirmation pending.
+
+The user subsequently confirms the shadow problem resolved. On the reported
+Samsung SM-A175F (MediaTek MT6789, Mali-G57 MC2, Android 16), the earlier
+archive showed movies followed by a loading stall without a recorded crash.
+The subsequent compact-shader test completes guest pipeline compilation and
+submission, then reports Vulkan device loss and aborts. The current
+CPU-vertex candidate still needs device confirmation; updated Samsung retail
+behavior has not been established.
+
+### Sharing diagnostics
+
+Prior Poco X3 Pro isolation logs showed corruption with CPU vertex execution,
+so that isolation did not resolve the issue. They identify Adreno 640 driver
+512.502.0, build date 2021-11-18, Vulkan API 1.1.128. A separate reproducible
+SDL 3.4.18 defect has now been corrected: rectangular mip dimensions became
+zero instead of remaining one. The updated APK passes desktop Vulkan/D3D12
+texture readback tests; Poco and Samsung acceptance remains unverified.
+Shadow caster and scene depth behavior are unchanged by this correction.
+
+Developer override RESOT_TEXTURE_PROBE=1 logs bounded `[TEXCHECK]`
+comparisons of decoded pixels against uploaded GPU textures and generated
+mips: at most twelve 2D images, two per format, capped at one million base
+pixels. Only hashes and error counts are logged. Enabling this adds startup
+GPU waits. The release defaults to no readbacks; `RESOT_TEXTURE_PROBE=0` disables them. Normal
+rendering still uses the original texture contents and sampling.
+
+Tap the version badge at the launcher's upper left. reSOT prepares a ZIP in
+the background and opens Android's native share menu. It includes retained
+current demo/retail stdout/stderr, the kernel log, up to two historical logs
+per target/stream, options, device/SoC/RAM/Android information, installed APK
+fingerprint, app-UID logcat and recent exit/ANR/native-crash records when the
+OS makes them available. Native tombstones retain their protobuf format.
+No game files, saves, driver binaries or shader caches are collected. Log
+text may contain local paths. Large text files keep their beginning and end;
+report.txt records truncation and collection failures.
+
+Normal logging and original files are unchanged. The ZIP is created only
+on request, under private cache, and exposed through a read-only content URI
+with temporary permission. It is deleted 30 seconds after returning to the
+launcher, after either sharing or cancelling; the delay lets a receiving app
+open the file. Android does not reliably report actual send completion.
+An expiry job removes abandoned exports after 15 minutes when Android allows
+the job to run (deadline requested at 30 minutes); reopening the launcher
+also clears leftovers. An open file descriptor remains readable after the
+temporary path is removed. A recipient's own copy is controlled by that app.
+
+Pure Java archive/expiry tests and the release APK build pass. A valid
+Samsung archive was subsequently received from the user. Cancellation and
+real lifecycle cleanup timing still need device verification; no Android
+device was connected to the development machine for these checks.
+
 Touch pictograms now show an eye for first-person look, a camera for overhead
 view, a runner/wall action for RT, and a jumping figure with motion marks for A.
 Bindings and saved control placement are preserved.
@@ -505,3 +600,28 @@ also recovers stale queues after a backlog/stall and uses a smaller prime.
 The retail APU scheduler now tolerates short Android scheduling delays without
 immediately discarding elapsed audio time. Cutscene sync and thermal benefit
 await user testing; the APK was installed without launching it.
+
+### APK publisher integrity (v0.3.2, versionCode 7)
+
+Before launcher initialization and before loading game libraries after task
+restoration, the maintained Android apksig verifier validates the installed
+APK v2/v3 contents and requires the current publisher certificate. The pin
+matches the existing APK signing key, preserving normal in-place updates.
+Offline operation, installer, phone/GPU, settings, saves and custom GPU drivers
+are irrelevant to verification. I/O errors offer Retry and Close; modified or
+re-signed APKs cannot start the game and link to official GitHub releases.
+No debuggable-flag bypass or server availability dependency is used.
+
+The signing identity remains the existing local Android debug keystore, to
+preserve upgrade compatibility. Keep this key private and backed up. The build
+script validates its public fingerprint before copying the APK; accidental
+key regeneration fails packaging. Independent source forks must explicitly
+set their public certificate pin in ReleaseTrust.java. APK self-verification
+can itself be patched by a repackager; it is not a malware scanner or a
+guarantee against an attacker controlling the OS/checker.
+
+The user confirms the previous mip-fix APK resolves both Poco texture
+corruption and operation on the tested MediaTek/Samsung device. The 0.3.2
+release keeps that fix and its CPU-vertex profile. TEXCHECK GPU readbacks are
+now opt-in via RESOT_TEXTURE_PROBE=1, avoiding diagnostic startup waits.
+Actual 0.3.2 popup/preset behavior still needs handset validation.

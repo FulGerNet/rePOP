@@ -1,5 +1,16 @@
 # Regression tests
 
+## Android diagnostic archive and expiry
+
+Run `python tools/test-diagnostic-archive.py` with a JDK on PATH. It uses the
+production Java packager and expiry code with synthetic files: both targets,
+two latest histories per stream, duplicate roots, bounded head/tail capture,
+truncation reporting, empty installations, symlink exclusion, preservation
+of original logs, and deletion of expired ZIPs/interrupted workspaces.
+Fixtures and classes stay in ignored build/diagnostic-archive-tests/.
+It does not exercise Android URI grants, sharesheet UI, JobScheduler timing,
+actual logcat permissions or Activity lifecycle; those require a device.
+
 ## Eye-plane depth reconstruction
 
 The native GPU suite (`ctest --test-dir build/tests/native-gpu -C Release
@@ -10,6 +21,21 @@ within one color quantization step on Vulkan and D3D12. This catches the
 per-vertex depth clamp that made the demo bridge appear transparent.
 The test shaders contain only synthetic geometry, and are excluded from
 production shader bundles.
+
+The same suite exercises the production shadow footprint helper with affine
+Q=0, positive/negative homogeneous representations, small nonzero Q and
+outside-map coordinates. It checks actual GPU color/coverage readbacks on
+Vulkan and D3D12. The device uses production's minimal feature contract.
+Set `RESOT_GPU_NONPRECISE_QUERIES=1` and run the `native_vulkan` test to check
+ordinary query begin/end/readback and ordering without the precise flag.
+These local tests do not establish rendering correctness on an affected phone.
+
+The depthless Z16 caster regression compares independent clip-space coverage,
+the unflagged `afc13cc` path, and the corrected production caster policy.
+Synthetic screen Z exceeds 65535: reference and corrected coverage must match
+exactly, while the regression path must render zero pixels. The existing
+eye-crossing test remains active with normal scene depth, so restoring the
+global clamp instead of the narrow caster policy fails the suite.
 
 ## Android contextual overlay
 
@@ -91,6 +117,37 @@ This validates the host API conventions used by both renderers; it does not
 execute their guest texture decoder, validate guest face strides, render-to-cube
 updates, authored mip chains or the game's reflections. Run
 `python tools/check-hlsl.py` separately to compile both production shaders.
+
+## Release integrity, versions and launcher notices
+
+`python tools/test-release-trust.py` uses the production Java verifier on the
+actual release APK and two negative fixtures: changed DEX bytes and a complete
+APK signed with a disposable unrelated test key. It checks API 29-36 policies,
+missing-file Retry status and stable-version ordering, including existing
+reSOTv tags. Test keys/artifacts remain in ignored build/release-trust-tests.
+This runs on the JVM, not an Android phone.
+
+`python tools/test-release-update.py` compiles the production Windows parser
+and checks nested/body decoys, draft/prerelease flags, truncation, duplicate
+fields, malformed responses and numeric version ordering.
+`python tools/test-launcher-update.py` renders the actual Windows popup to
+build/launcher-update-tests/launcher-update.bmp without showing a window or
+loading game files. It tests hit areas, Enter default Close and Escape.
+`--live` additionally exercises the production WinHTTP request to GitHub.
+The test-only newer tag in the preview does not represent a published release.
+The existing look-sensitivity test now covers preset migration, normal-menu
+cycles excluding Off, INI writes and the four-item layout on both hosts/titles.
+
+## Native texture upload and mip readback
+
+The native GPU suite also uploads synthetic BGRA textures and compares every
+generated mip against independent CPU filtering, through the production
+`nv2a_texture_probe.h` readback checker. Cases are 64x32, 32x64, 64x64, 1x64
+and 64x1, on Vulkan and D3D12. Base upload must match exactly; mip level L
+allows L channel quantization steps. A deliberately wrong expected base pixel
+must report exactly one mismatch. The rectangular case failed at its last mip
+before the SDL extent correction; all 14 suite tests pass afterward. This
+contains no game textures and does not establish handset rendering correctness.
 
 ## Retail extended-VA audio DMA
 

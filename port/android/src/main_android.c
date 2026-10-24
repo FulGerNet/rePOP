@@ -482,6 +482,17 @@ int SDL_main(int argc, char **argv)
         set_default("RESOT_NATIVE_GEOMETRY_CONTROL", "geometry-cache-control");
     /* Opt-in developer frame capture: avoid a per-frame filesystem probe
      * in ordinary runs. The second file triggers the existing one-frame trace. */
+    /* RE-SoT: optional per-game A/B override of automatic driver workarounds.
+     * A file containing 0 or 1 is read only at boot; no persistent setting
+     * or saved preference is rewritten. Windows uses the same environment. */
+    {
+        FILE *mode = fopen("gpu-compatibility", "rb");
+        if (mode) {
+            int c = fgetc(mode);
+            fclose(mode);
+            if (c == '0' || c == '1') set_default("RESOT_NATIVE_COMPAT", c == '1' ? "1" : "0");
+        }
+    }
     if (access("frame-trace-enable", F_OK) == 0)
         set_default("RECOMP_FRAME_TRACE", "frame-trace.flag");
     if (access("menu-pointer-trace-enable", F_OK) == 0)

@@ -17,13 +17,20 @@ int resot_diag_panel(const uint32_t **pixels, uint32_t *width, uint32_t *height)
 int resot_diag_event(void *window, unsigned message, uintptr_t wp, intptr_t lp);
 
 /* The same settings for the game's own menu pages (target_hooks.c). Pages:
- * Graphics (items 0-4: FPS limit, VSync, texture glow, resolution, post processing quality) and
+ * Graphics (items 0-3: FPS limit, VSync, resolution, graphics preset) and
  * Controls (item 0: Look sensitivity), and the keyboard and joystick
  * bindings (item = action, 0-24). Activating a setting cycles it; a binding waits for the next key or
  * joystick input. Everything is saved to resot-options.ini at once. */
 enum { RESOT_NATIVE_GRAPHICS, RESOT_NATIVE_KEYS, RESOT_NATIVE_JOY, RESOT_NATIVE_CONTROLS };
-#define RESOT_NATIVE_GRAPHICS_ITEMS 5
+#define RESOT_NATIVE_GRAPHICS_ITEMS 4
 #define RESOT_NATIVE_ACTIONS 25
+/* v0.3.2 migration: old High/Mid become Standard; glow becomes Full.
+ * Off is retained for debugging, and is excluded from the in-game cycle. */
+static inline int resot_graphics_preset(int configured,int legacy,int glow)
+{
+    if(configured==-1)configured=legacy==0?0:glow?3:legacy==1?1:2;
+    return configured<0 || configured>3 ? 2 : configured;
+}
 /* Shared by the hosts and target hooks. Apply sensitivity to normalized
  * camera floats, after the title's deadzone, so 200% also speeds full-stick
  * and digital keyboard look without overflowing the Xbox int16 input. */

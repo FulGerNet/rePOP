@@ -31,6 +31,12 @@ under ignored `build/deps/` and `bin/`; no SDL binaries are committed.
 the binary as modified, including its source archive hash and patch location.
 The native renderer uses SDL GPU directly, without D3D11 translation.
 
+**Android apksig 9.0.1** (`com.android.tools.build:apksig`, Android Open Source
+Project) verifies installed APK signatures under Apache-2.0. The unchanged
+upstream copyright and licence are in `port/third_party/apksig/LICENSE` and
+packaged in the APK as `licenses/LICENSE-apksig.txt`. The jar is resolved by
+Gradle from Google's Maven repository; binary caches are not committed.
+
 **Android (`port/android`).** The APK carries the same altered SDL3 3.4.18,
 built from the checked source archive by `tools/setup-android.ps1` (the same
 `port/third_party/sdl-gpu-query/` additions, and the Vulkan query function

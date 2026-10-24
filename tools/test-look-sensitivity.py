@@ -68,23 +68,27 @@ int main(void) {
     assert(axes[0]==0.25f && axes[1]==0);
     s_look_sensitivity=100;axes[0]=0.5f;axes[1]=-1;resot_scale_look(axes);
     assert(axes[0]==0.5f && axes[1]==-1);
-    assert(s_texture_glow==0);
-    resot_native_label(RESOT_NATIVE_GRAPHICS,2,text,sizeof text);
-    assert(!strcmp(text,"Texture glow effect: Off"));
-    resot_native_activate(RESOT_NATIVE_GRAPHICS,2); assert(test_glow==1);
-    resot_native_activate(RESOT_NATIVE_GRAPHICS,2); assert(test_glow==0);
-    assert(GetPrivateProfileIntA("Graphics","TextureGlowEffect",99,s_path)==0);
-    s_post_quality=3; /* Exercise the full cycle independently of platform defaults. */
-    for(int i=0;i<4;i++) {
-        resot_native_activate(RESOT_NATIVE_GRAPHICS,4);
-        assert(test_quality==i);
-        assert(GetPrivateProfileIntA("Graphics","PostProcessingQuality",99,s_path)==i);
-        resot_native_label(RESOT_NATIVE_GRAPHICS,4,text,sizeof text);
-        assert(strstr(text,s_quality_names[i]));
+    assert(resot_graphics_preset(-1,3,0)==2);
+    assert(resot_graphics_preset(-1,2,0)==2);
+    assert(resot_graphics_preset(-1,1,0)==1);
+    assert(resot_graphics_preset(-1,3,1)==3);
+    assert(resot_graphics_preset(-1,0,1)==0);
+    assert(resot_graphics_preset(99,3,1)==2);
+    assert(resot_graphics_preset(2,1,1)==2);
+    s_post_quality=0; /* Off can be read but normal menu cycles never select it. */
+    for(int i=0;i<9;i++) {
+        int expected=i%3+1;
+        resot_native_activate(RESOT_NATIVE_GRAPHICS,3);
+        assert(test_quality==expected);
+        assert(s_texture_glow==(expected==3));
+        assert(GetPrivateProfileIntA("Graphics","GraphicsPreset",99,s_path)==expected);
+        assert(GetPrivateProfileIntA("Graphics","TextureGlowEffect",99,s_path)==99);
+        resot_native_label(RESOT_NATIVE_GRAPHICS,3,text,sizeof text);
+        assert(strstr(text,s_quality_names[expected]));
     }
     native_layout();
-    assert(s_pages[P_GFX].n==5);
-    assert(s_pages[P_GFX].c[4].arg==MSG_ID(P_GFX,4));
+    assert(s_pages[P_GFX].n==4);
+    assert(s_pages[P_GFX].c[3].arg==MSG_ID(P_GFX,3));
     assert(s_pages[P_CTRL].n==8);
     assert(s_pages[P_CTRL].c[0].text==T_LOOK);
     assert(s_pages[P_CTRL].c[0].arg==MSG_ID(P_CTRL,0));

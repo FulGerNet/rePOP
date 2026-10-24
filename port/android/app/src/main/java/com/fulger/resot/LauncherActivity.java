@@ -51,9 +51,23 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
     private volatile boolean cancelRequested;
     private Thread worker;
     private boolean askedForIso;
+    private LogShare logShare;
+    private Runnable pendingUpdate;
+
+    void offerUpdate(Runnable show) { pendingUpdate=show; showPendingUpdate(); }
+    private void showPendingUpdate() {
+        if(pendingUpdate!=null && view!=null && hasWindowFocus() && !view.state.extracting
+                && !isFinishing() && !isDestroyed()) {
+            Runnable show=pendingUpdate;pendingUpdate=null;show.run();
+        }
+    }
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        AppIntegrity.check(this, () -> initializeLauncher(state));
+    }
+
+    private void initializeLauncher(Bundle state) {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         // The whole screen, under a cutout too: LauncherView widens its plane
         // to the screen's shape and keeps its links clear of the cutout.
@@ -62,11 +76,14 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
         base = getExternalFilesDir(null);
         if (base == null) base = getFilesDir();
         DefaultOptions.ensure(this);
+        logShare = new LogShare(this);
         view = new LauncherView(this, this);
         setContentView(view);
         view.requestFocus();
         immersive();
         if (state != null) askedForIso = state.getBoolean("asked", false);
+        resumeLauncher();
+        UpdateCheck.start(this);
     }
 
     /** No status or navigation bar; a swipe from an edge shows them for a while. */
@@ -90,6 +107,7 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
     @Override public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) immersive();   // after a dialog or the file picker
+        if (hasFocus) showPendingUpdate();
     }
 
     @Override protected void onSaveInstanceState(Bundle out) {
@@ -99,12 +117,22 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
 
     @Override protected void onResume() {
         super.onResume();
+        if(view != null) resumeLauncher();
+    }
+
+    private void resumeLauncher() {
+        if (logShare != null) logShare.resume();
         refresh();
         // As on Windows: with no game installed, ask for the ISO at once.
         if (!askedForIso && !view.state.extracting && !view.state.installed[0] && !view.state.installed[1]) {
             askedForIso = true;
             pickIso();
         }
+    }
+
+    @Override protected void onPause() {
+        if (logShare != null) logShare.pause();
+        super.onPause();
     }
 
     // ── installed games ──────────────────────────────────────
@@ -153,6 +181,7 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
         case LauncherView.BTN_GAME: start(1); break;
         case LauncherView.BTN_ISO: pickIso(); break;
         case LauncherView.BTN_DRIVER: GpuDrivers.show(this); break;
+        case LauncherView.BTN_LOGS: logShare.share(); break;
         case LauncherView.BTN_GITHUB:
             try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_URL))); }
             catch (ActivityNotFoundException ignored) {}
@@ -166,7 +195,7 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
 
     @SuppressWarnings("deprecation")
     @Override public void onBackPressed() {
-        if (view.state.extracting) cancelInstall(); else super.onBackPressed();
+        if (view != null && view.state.extracting) cancelInstall(); else super.onBackPressed();
     }
 
     private void start(int kind) {
@@ -200,6 +229,7 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == LogShare.REQUEST) { logShare.result(); return; }
         if (request==GpuDrivers.PICK_DRIVER && result==RESULT_OK && data!=null && data.getData()!=null) {
             GpuDrivers.install(this,data.getData()); return;
         }

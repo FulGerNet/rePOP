@@ -351,12 +351,18 @@ static const char s_hw_hlsl_vs_common[] =
  * it towards its side of the screen (hw_hud_shift); ws.w is zero for other
  * batches. */
 "  if (flat) x += ws.w;\n"
+/* RE-SoT: afc13cc removed the global clamp to fix eye-crossing scene
+ * triangles. Depthless RGB565 shadow casters still need the old clamp:
+ * both XBEs declare Z16 there but emit screen Z outside 0..65535. These
+ * passes have no depth surface/test; clipping their Z erases silhouettes.
+ * vp.w is set only for the independently traced caster state below. */
+"  float z = p.z * vp.z; if (vp.w > 0.5) z = saturate(z);\n"
 /* RE-SoT: reconstruct the homogeneous depth plane before GPU clipping.
  * Clamping screen z per vertex bends triangles crossing the eye/near plane,
  * so geometry behind the camera can occlude floors and walls in front.
  * The rasterizer clips z against 0..w after interpolation on both hosts. */
 "  o.pos = float4((x * vp.x - 1.0) * w, (1.0 - y * vp.y) * w,\n"
-"                 (p.z * vp.z) * w, w);\n"
+"                 z * w, w);\n"
 "  o.d0 = saturate(d0); o.d1 = saturate(d1); o.fog = float4(fog, 0, 0, 0);\n"
 "  o.t0 = t0; o.t1 = t1; o.t2 = t2; o.t3 = t3; return o; }\n";
 
@@ -568,12 +574,13 @@ static const char s_hw_hlsl[] =
 "    return float4(0, 0, 0, 0); }\n"
 "  return float4(0, 0, 0, 0); }\n"
 "float2 proj_uv(float4 tc, float4 sc) { float q = tc.w != 0.0 ? tc.w : 1.0; return tc.xy / q * sc.xy; }\n"
-/* RE-SoT: a projected shadow has a finite footprint. Behind-projector and
- * out-of-map receivers must not smear the clamp-to-edge texel up a wall.
+/* RE-SoT: a shadow has a finite footprint. Use the sampler's Q convention:
+ * Q=0 denotes affine coordinates, not an invisible receiver. Out-of-map
+ * receivers must not smear the clamp-to-edge texel up a wall.
  * Black is neutral for the observed ZERO / ONE_MINUS_SRC_COLOR receivers. */
 "float4 shadow_sample(float4 value, float4 tc, float4 scale) {\n"
 "  float2 uv = proj_uv(tc, scale);\n"
-"  return tc.w > 0.0001 && all(uv >= 0.0) && all(uv <= 1.0) ? value : float4(0,0,0,0); }\n"
+"  return all(uv >= 0.0) && all(uv <= 1.0) ? value : float4(0,0,0,0); }\n"
 /* RE-SoT: retail light maps request white CLAMP_TO_BORDER. A zero border
  * multiplies the underlying surface to black outside the light-map atlas.
  * Both backends sample clamp-to-edge, then blend the guest border per tap
@@ -882,14 +889,16 @@ static ID3DBlob *hw_compile(const char *entry, const char *target)
 #include "nv2a_native_scale.h" /* RE-SoT: tested fractional rounding on both hosts. */
 #include "resot_effect_quality.h" /* RE-SoT: shared auxiliary-effect quality budget. */
 static volatile LONG s_render_percent;
-/* RE-SoT: quality of screen effects and auxiliary render targets, independently
- * from the final texture-glow switch. Guest timings are unchanged. */
-static volatile LONG s_post_quality=3;
+/* RE-SoT: shared graphics preset controls auxiliary quality, character shadows
+ * and final texture glow together. Guest timings are unchanged. */
+static volatile LONG s_post_quality=2;
+extern void xbox_SetPostProcessing(int enabled); /* RE-SoT: integrated Full preset glow. */
 void xbox_SetPostProcessingQuality(int quality)
 {
-    if(quality<0 || quality>3)quality=3;
+    if(quality<0 || quality>3)quality=2;
+    xbox_SetPostProcessing(resot_preset_glow(quality)); /* RE-SoT: one preset owns the complete effect policy. */
     if(InterlockedExchange(&s_post_quality,quality)!=quality)
-        fprintf(stderr,"[VIDEO] post processing quality %d (0 off, 1 low, 2 mid, 3 high)\n",quality);
+        fprintf(stderr,"[VIDEO] graphics preset %d (0 debug off, 1 reduced, 2 standard, 3 full)\n",quality);
 }
 static int hw_post_quality(void) { return (int)InterlockedCompareExchange(&s_post_quality,0,0); }
 /* RE-SoT: only proven fullscreen chains may be omitted as screen effects.
@@ -1254,6 +1263,15 @@ static int hw_active(void)
 static uint32_t hw_zmax_bits(void)
 {
     return ((s_gpu.format >> 4) & 0xF) == 1 ? 0xFFFFu : 0xFFFFFFu;
+}
+
+/* RE-SoT: demo demo-hud-after-err and retail retail-hud-after-err each
+ * record format 08080113, pitch 512, 256x256, zeta=0 and depth disabled.
+ * This is render state, not a target-specific XBE address or heap address. */
+static int hw_depthless_shadow(void)
+{
+    return resot_shadow_target(s_gpu.format,s_gpu.pitch,s_gpu.clip_x,s_gpu.clip_y,
+        s_gpu.clip_w,s_gpu.clip_h,s_gpu.zeta_offset,s_gpu.depth_test,s_gpu.blend_enable);
 }
 
 /* RE-SoT: retail-light-query.txt and lights-walls-lowerbath-trace.txt
@@ -1840,6 +1858,7 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     memset(hdr, 0, sizeof hdr);
     hdr[0] = 2.0f / (float)s->w; hdr[1] = 2.0f / (float)s->h;
     hdr[2] = 1.0f / (float)hw_zmax_bits();
+    hdr[3] = (float)hw_depthless_shadow(); /* RE-SoT: retain pre-afc13cc depthless caster coverage. */
     hdr[4] = s_gpu.fog_param[0]; hdr[5] = s_gpu.fog_param[1];
     hdr[6] = (float)s_gpu.fog_mode; hdr[7] = s_gpu.fog_enable ? 1.0f : 0.0f;
     {
@@ -2497,12 +2516,12 @@ static int hw_postprocess_candidate(uint32_t n)
  * are allocations, not XBE constants. Current-frame provenance prevents a
  * reused/static RGB565 texture from suppressing unrelated geometry. */
 static struct { uint32_t offset,frame; int valid; } s_shadow_targets[32];
+static int hw_shadow_receiver(const Texture *t); /* RE-SoT: same provenance for admission and skipping. */
 static int hw_skip_shadow(void)
 {
     unsigned i,best=0;
     const Texture *t=&s_gpu.texs[0];
-    if (resot_shadow_target(s_gpu.format,s_gpu.pitch,s_gpu.clip_x,s_gpu.clip_y,
-            s_gpu.clip_w,s_gpu.clip_h,s_gpu.zeta_offset,s_gpu.depth_test,s_gpu.blend_enable)) {
+    if (hw_depthless_shadow()) { /* RE-SoT: same caster admission as the vertex depth policy. */
         uint32_t offset=dma_resolve(s_gpu.color_offset);
         for(i=0;i<32;i++) {
             if(s_shadow_targets[i].valid && s_shadow_targets[i].offset==offset) { best=i;break; }
@@ -2511,9 +2530,10 @@ static int hw_skip_shadow(void)
         s_shadow_targets[best].offset=offset;s_shadow_targets[best].frame=s_hw.frame;
         s_shadow_targets[best].valid=1;
     }
-    /* RE-SoT: retain character shadows even when screen post-processing is
-     * Off. Its resolution budget still applies; provenance feeds clipping. */
-    (void)t;
+    /* RE-SoT: Reduced omits both the proven caster and its current-frame
+     * receivers. Preserve provenance so switching presets cannot sample stale
+     * or uninitialized shadow maps; all ordinary scene depth stays intact. */
+    if(!resot_preset_shadows(hw_post_quality()) && (hw_depthless_shadow() || hw_shadow_receiver(t)))return 1;
     return 0;
 }
 static int hw_shadow_receiver(const Texture *t)

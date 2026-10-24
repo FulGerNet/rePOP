@@ -1,5 +1,473 @@
 # Validation log
 
+## 2026-10-24: v0.3.2 presets, APK integrity and launcher updates
+
+User acceptance: the last mip-fix APK resolves the Poco colored-pixel issue
+and restores operation on the tested MediaTek/Samsung device. The previous
+shadow correction was also confirmed. This is the user's device report;
+independent checks on every game/level/GPU have not been performed locally.
+
+Version: shared header and Windows version resources 0.3.2; Android
+versionName 0.3.2, versionCode 7. Both hosts/titles now expose four Graphics
+menu rows and one Graphics preset. Reduced halves protected auxiliary effect
+dimensions and omits independently identified character-shadow caster and
+proven receiver draws. Standard uses former High resolution without texture
+glow; Full adds glow. Standard is the bundled default. Off remains INI/F7
+only and cannot be selected by cycling the normal menu. Legacy quality/glow
+settings migrate; explicit GraphicsPreset values win; obsolete keys are
+removed on save. HUD/display/history, tiny bloom levels, scene depth,
+shader coefficients and game timing are preserved. No FPS gain is claimed.
+The confirmed mobile CPU-vertex profile remains; diagnostic TEXCHECK GPU
+readbacks now require RESOT_TEXTURE_PROBE=1 instead of running by default.
+
+Android verifies complete installed APK v2/v3 contents through apksig 9.0.1
+and pins the CURRENT certificate (not signing history) before launcher
+initialization and before SDL loads a restored game's libraries. No network,
+installer, GPU, root heuristic, settings or custom-driver check is involved.
+Read errors offer Retry, not a tampering accusation. No debuggable bypass.
+The existing signing identity is retained for upgrade compatibility, public
+SHA-256 certificate d96fbfb5607a0fa189f1422d061d071e050910b7c478c5bf4ebd98cae6d92bb4.
+Build packaging verifies this identity to avoid shipping self-rejected APKs.
+The local debug keystore remains the existing publisher key; do not silently
+regenerate it. Private material is neither printed nor committed. Source
+forks using other keys explicitly configure their own public pin. A local
+check can itself be patched by an attacker; this is not an absolute anti-mod
+guarantee. apksig's complete upstream Apache-2.0 notice is in the APK.
+
+Windows WinHTTP and Android HTTPS checks run asynchronously against
+api.github.com/repos/FulGerNet/rePOP/releases/latest. They bound response size
+and timeouts, validate stable semantic versions and open a constructed known
+GitHub release URL. Update/Close popups use launcher colors/display font;
+Close is the default Windows action. Offline/rate-limit/malformed replies do
+not block launching. No game files/logs/settings are uploaded. Existing live
+GitHub tags use reSOTv0.3.1; both parsers accept reSOTv, v and numeric prefixes.
+Windows defers notices during extraction; Android defers until launcher focus
+returns and extraction is inactive. Android INTERNET permission added, cleartext
+disabled. Windows APK certificate checks are intentionally not applicable.
+
+Executed:
+- python tools/check-hlsl.py: all shaders pass (logs/032-shaders.txt).
+- tools/recomp.ps1 -Target xbox-demo -BuildOnly and xbox-retail -BuildOnly:
+  successful; FileVersion confirmed 0.3.2 (logs/032-{demo,retail}-build.txt).
+- tools/build-android.ps1: successful release and publisher-pin packaging check
+  (logs/032-android-build.txt).
+- python tools/test-look-sensitivity.py: four host/target tests pass, including
+  preset migration/cycling/INI removal/layout and existing input regressions
+  (logs/032-options-tests.txt). Actual F7 panel rendered and visually inspected.
+- python tools/run-build-tool.py cmake --build build/tests/native-gpu --config
+  Release --parallel 6; RESOT_GPU_BINDINGS_SMOKE=1 and ctest --test-dir
+  build/tests/native-gpu -C Release --output-on-failure: 14/14 in 8.96 seconds
+  (logs/032-gpu-tests.txt). Includes mip chains, shadow/eye-plane regressions
+  and shared preset quality/glow/shadow policy assertions.
+- python tools/test-release-trust.py: actual official APK accepted on API
+  29-36 verifier policies; protected DEX byte mutation and re-signing with an
+  unrelated disposable key rejected on all eight. Missing file classified as
+  unavailable; version ordering checks pass (logs/032-release-trust-tests.txt).
+  These are JVM verifier checks, not an Android-device execution test.
+- python tools/test-release-update.py: stable versions, body/nested decoys,
+  duplicate fields, prereleases and truncated/invalid replies pass
+  (logs/032-update-tests.txt).
+- python tools/test-launcher-update.py --live: real Windows popup rendered
+  offscreen and visually inspected; hit areas, Enter default Close and Escape
+  pass. Production WinHTTP fetch returns reSOTv0.3.1, correctly newer=0
+  (logs/032-popup-tests.txt). Preview uses synthetic v0.3.3, not a release.
+- adb devices: no connected handset. Android popup rendering, startup on real
+  API-29 devices and new preset gameplay still need user testing. No fresh
+  gameplay/FPS comparison or exhaustive GPU/level validation is claimed.
+
+Prepared local artifacts under bin/releases/v0.3.2 (not published):
+reSOT-Android-v0.3.2.apk: 29,078,025 bytes, SHA-256
+8DBA7693F4BA480584D833442895E7F68A970B7DC839A4A5F756A72DF116900C.
+reSOT-Windows-v0.3.2.zip: 36,420,984 bytes, SHA-256
+045DCA82CF6E57D9D6E58A81786805042C04B00F6BF6FE54BBCC9A10729986D2.
+ZIP checked: 13 allowlisted entries, both executables, SDL and licence/notices;
+no extracted game folders or diagnostics. APK includes apksig notice.
+SHA256SUMS.txt and RELEASE-NOTES.md accompany the packages. git diff --check
+passes. Generated game C, seeds and XBE addresses were not changed.
+
+## 2026-10-24: Poco CPU-vertex result and rectangular SDL mip correction
+
+The replacement logs glitch/xbox-retail-err.txt and user screenshot still
+show colored/black texture blocks with CPU vertex execution active. The log
+identifies Adreno 640, Qualcomm driver 512.502.0, driver build date 2021-11-18,
+and Vulkan API 1.1.128. Thus the earlier vertex isolation did not fix Poco.
+
+Independent synthetic GPU upload/readback of a 64x32 BGRA texture reproduces
+corrupt final-mip contents on both desktop Vulkan and D3D12 before this fix
+(logs/poco-texture-probe-gpu-tests.txt: 2 failures). SDL 3.4.18 shifts mip
+width/height without clamping to one: Vulkan emits zero-sized blits; both
+backends compute zero-sized mip render targets; common blit UV calculation
+can divide by zero. tools/patch-sdl-gpu-query.py now clamps these dimensions.
+The generated/downloaded SDL files remain ignored; the patch is published.
+
+After rebuilding SDL and replacing the test DLL, the native GPU suite passes
+14/14 in 7.96 seconds, including full mip comparisons for 64x32, 32x64, 64x64,
+1x64 and 64x1, on both backends, plus intentional one-pixel error detection.
+Commands: python tools/run-build-tool.py cmake --build build/tests/native-gpu
+--config Release --parallel 6; RESOT_GPU_BINDINGS_SMOKE=1 with ctest --test-dir
+build/tests/native-gpu -C Release --output-on-failure. Result retained in
+logs/poco-mip-fix-gpu-tests.txt. python tools/check-hlsl.py passes.
+
+Adreno 640 now also checks at most twelve uploaded 2D textures (two per
+format, <=1M pixels) against CPU decoded pixels and filtered mips. TEXCHECK
+logs hashes/counts only; no asset data exported. Base upload is exact; mip L
+allows L quantization steps. This diagnostic adds startup GPU synchronization
+and can be disabled with RESOT_TEXTURE_PROBE=0. No sampler, texture content,
+shadow caster or scene depth change accompanies the mip extent correction.
+The existing CPU-vertex profile remains for a controlled handset comparison.
+
+Commands tools/build-android.ps1 and tools/recomp.ps1 -Target xbox-demo
+-BuildOnly / -Target xbox-retail -BuildOnly succeeded. Candidate:
+bin/reSOT-android-mipmap-fix.apk, 28,672,769 bytes, SHA-256
+1A29B249CC9F265F5CC43104F7ED11AAE48C14BA41A241CA6921491D3F38A65E.
+Build logs: logs/poco-mip-fix-{android,demo,retail}-build.txt.
+This proves a shared SDL defect and local GPU regression correction, not
+that it explains Poco corruption or Samsung device loss. Both handset tests
+remain pending; no Android device was connected locally.
+
+## 2026-10-24: Samsung device-loss crash and persistent Poco corruption
+
+Updated Samsung archive in logs glitch/nuovo log samsung identifies the
+2001A63E... candidate. Three fresh demo runs record SIGABRT/native crashes;
+this is different from the previous manually terminated loading stall.
+Native startup checkpoints reach resources, completed guest pipelines,
+uploaded geometry, encoded draws and completed command submission. Pipelines
+continue compiling in tens/hundreds of milliseconds. Fatal errors are:
+- fatal create image: vkQueueSubmit VK_ERROR_DEVICE_LOST (two histories)
+- fatal acquire swapchain: vkWaitForFences VK_ERROR_DEVICE_LOST (current)
+Android tombstones show abort() through reSOT's fatal renderer error path,
+not a native driver stack proving which GPU task failed. The popup reported
+by the user agrees with these recorded crashes. The completed shaders and
+submissions refute a compiler-only explanation for these new sessions.
+The point reporting asynchronous device loss is not necessarily its cause.
+
+User also supplies Downloads/xbox-retail-{err,out}.txt from Poco X3 Pro.
+The renderer identifies Adreno (TM) 640 and reference compatibility on.
+All simple/specialized/direct vertex counts are zero, yet user confirms
+colored pixels persist. This rejects reference-only mode as a sufficient fix.
+The log reports about 6.1 FPS, 61,451 submitted draws and an active raw-input
+geometry cache; no DEVICE_LOST crash is recorded. This new run uses system
+Vulkan. Exact APK identity is unavailable in these two standalone logs.
+
+Candidate: isolate GPU vertex-program execution on the affected device
+families, without changing guest functions or shader/depth math:
+- Mali/Immortalis and Adreno 640 default to the existing CPU vertex transform
+  path, with compact/simple/specialized pixel shaders and Vulkan rasterization.
+  Android's existing CPU interpreter defaults to zero worker threads, avoiding
+  the earlier worker-pool stall. CPU transforms can reduce performance; raw
+  geometry-cache reuse applies to GPU vertices, not the expanded CPU path.
+- Reference-only mode is now an explicit RESOT_NATIVE_COMPAT=1 override.
+  It no longer forces Poco onto the slow full combiner by default.
+  RESOT_NATIVE_CPU_VSH=0/1 explicitly selects GPU/CPU vertices for developer
+  comparisons. Other GPUs retain the existing GPU/geometry-cache path.
+  The user's working Adreno 735 is explicitly checked to remain excluded.
+- Log SDL driver name/version/info and the physical-device Vulkan API
+  version. The published SDL patch exposes the latter as a numeric property.
+  The supplied logs do not yet contain this driver revision; DEVICE_LOST
+  alone is not evidence of an outdated or unsupported Vulkan version.
+- Keep the compact-pipeline wait policy, new startup diagnostics, reduced
+  optional-feature requirements, confirmed shadow correction and scene-depth
+  correction. Do not suppress device-loss errors or substitute blank draws.
+
+Checks:
+- python tools/check-hlsl.py: all ten embedded entries pass.
+- Published SDL patch and Windows SDL rebuild succeed. Both target Windows
+  builds and tools/build-android.ps1 succeed. Logs:
+  logs/mobile-cpu-vertex-{android,demo,retail}-build.txt.
+- cmake --build build/tests/native-gpu --config Release --parallel 6 via
+  run-build-tool.py succeeds. RESOT_GPU_BINDINGS_SMOKE=1 ctest passes 14/14
+  in 8.04 s. Log: logs/mobile-cpu-vertex-gpu-tests.txt. This includes synthetic
+  CPU/GPU vertex comparisons, caster coverage and eye-crossing depth checks;
+  it does not execute the affected drivers or the complete CPU game path.
+- Added explicit Adreno 735 exclusion; rebuilding effect_quality_smoke and
+  ctest -R '^shared_effect_quality$' passes. No production change followed
+  the final game builds. The full fragment optimizer stress passed in the
+  immediately preceding step; fragment math is unchanged here.
+- Candidate: bin/reSOT-android-mobile-vertex-test.apk, 28,666,565 bytes,
+  SHA-256 A0E46B3E6B22B16F2FE4EF2CE10567CF9B580CBB422AD39E893DD7ED4C9CC630.
+  Version remains 0.3.1 / versionCode 6. No installation on a phone performed.
+
+Pending: Samsung no-crash startup/rendering, Poco pixel corruption and speed,
+new actual driver/API metadata and follow-up snapshots if either persists.
+This is a scoped vertex-execution isolation candidate, not a confirmed fix
+or proof that a GPU vendor driver is responsible. A device comparison is
+required before claiming support for either affected configuration.
+
+
+## 2026-10-24: Samsung SM-A175F / Mali-G57 loading-stall evidence and candidate
+
+User supplies the extracted archive in the surrounding ignored directory
+logs glitch/nuovo log samsung. report.txt identifies samsung SM-A175F,
+MediaTek MT6789, Mali-G57 MC2 (confirmed by the native renderer logs),
+Android 16 / SDK 36 and 8,023,851,008 bytes total RAM. No custom Vulkan
+driver is enabled. The sharing APK fingerprint matches the delivered
+A7B19433... build. The archived game sessions precede that APK's update time;
+the sharing APK identity does not establish the exact binary of older runs.
+
+Observed in the current demo log and two historical logs:
+- Vulkan initializes, the reference-shader compatibility profile is on,
+  pipeline IDs 1..3 complete with shader 1/2 (movie blit/solid), and movies
+  compose at about 35..43 Hz. Native menu objects are subsequently built.
+- No completed guest-scene pipeline is logged. The game log stops advancing
+  apart from audio/background/resume messages. One early report has zero
+  guest draws. This narrows the boundary but does not prove a driver/compiler
+  hang: old logging only described completed compilations and could not
+  distinguish entry into compilation from an earlier resource/thread stall.
+- Exit records describe manual task removal, not a recorded native crash,
+  ANR or out-of-memory kill. The available logcat covers the later launcher
+  export, not the old game process, and cannot supply its missing stack.
+- Failed sound/english opens are followed by successful fallback reads;
+  those lines alone do not establish missing game files.
+- A valid archive with device metadata, current/history files and logcat
+  was received through the new export workflow. This validates useful
+  receipt, not the unobserved cancellation/cleanup timing.
+
+Candidate change, not device-confirmed resolution:
+- Remove Mali/Immortalis from the provisional reference-only default.
+  Preserve the reduced Vulkan feature requirements, geometry cache, and
+  Adreno 640's existing workaround. Explicit RESOT_NATIVE_COMPAT=1 still
+  forces the reference profile; the existing Android file override remains.
+- Mali now prefers existing compact translated/specialized shaders. Cold
+  draws wait on their original pipeline key rather than additionally queuing
+  and waiting on a large generic reference PSO. Retain all guest draws and
+  render/depth state. Translation failures retain the existing fallback.
+- Log pipeline entry, translator/driver boundary and correlated completion.
+  Pending waits emit a diagnostic after a five-second condition timeout,
+  without cancelling the job, changing frames or dropping draws. One-time
+  Mali first-frame checkpoints cover resource preparation, queue flush,
+  ready pipelines, uploaded geometry, encoded draw and command submission.
+  They will identify a different stall if the compiler hypothesis is wrong.
+- No shadow, scene-depth, halo, guest address, generated source or input/
+  launcher behavior changed in this step. Both target libraries receive
+  the same backend policy, but only demo evidence was supplied for Samsung.
+
+Checks:
+- python tools/check-hlsl.py: all ten embedded entries pass.
+- python tools/run-build-tool.py cmake --build build/tests/native-gpu
+  --config Release --parallel 6 succeeds. With RESOT_GPU_BINDINGS_SMOKE=1,
+  ctest --test-dir build/tests/native-gpu -C Release --output-on-failure:
+  14/14 pass in 8.04 s. Log: logs/samsung-mali-gpu-tests.txt.
+- Without that smoke environment variable, ctest with -R '^native_vulkan$'
+  passes the complete optimizer/reference stress in 112.38 s. Log:
+  logs/samsung-mali-optimizer-tests.txt. These are local desktop GPU tests,
+  not a test on a Mali driver or of this phone's loading scene.
+- tools/build-android.ps1 succeeds (19 s); tools/recomp.ps1 -Target
+  xbox-demo -BuildOnly and the xbox-retail equivalent succeed. Logs:
+  logs/samsung-mali-{android,demo,retail}-build.txt. Candidate:
+  bin/reSOT-android-samsung-test.apk (28,669,757 bytes), SHA-256
+  2001A63ED931ECF6E8671A107427B55D08DDC9747FFEDF5E9FF698CE285BE4A1.
+  Package remains 0.3.1 / versionCode 6. No device installation performed.
+
+Pending: updated Samsung demo startup/loading/menu/gameplay, new checkpoint
+log if still stuck, Samsung retail, driver-specific shader correctness and
+performance. No claim that this candidate fixes the Samsung loading stall
+or the original Poco colored corruption until those devices are checked.
+
+
+## 2026-10-24: on-demand Android diagnostic ZIP sharing
+
+User confirms shadows are resolved with the caster fix. The Samsung that
+previously displayed a black game frame now reaches demo movies, then
+stalls at loading. Exact Samsung model and logs are still pending; no
+updated Samsung retail run is claimed. User requests native Android sharing
+by tapping the launcher's top-left version badge, with normal logs unchanged
+and temporary ZIP deletion after sharing or cancellation.
+
+Implementation:
+- Version badge now uses the same layout rectangle for drawing and touch hit
+  testing, including display-cutout offsets. It is also reachable by keyboard
+  or controller, including during installation. Repeat taps while preparing
+  are ignored. Collection/compression runs off the UI thread.
+- A ZIP is created only on request in private cache/log-share. ACTION_SEND
+  application/zip opens Android's chooser with EXTRA_STREAM, ClipData and a
+  temporary read-only URI grant. The non-exported LogShareProvider exposes
+  only strictly named generated ZIPs, rejects other paths and write modes.
+  No broad storage or log-reading permission was added.
+- Collect current demo/retail stderr/stdout, kernel log, options and small
+  diagnostic controls from external/internal app data. Include up to two
+  recent histories for each target/stream. No game/save/driver/shader-cache
+  traversal. Snapshot source files read-only; normal native logging,
+  rotation and retained originals are unchanged.
+- report.txt includes model/manufacturer/SoC/ABI/Android/RAM, version/build,
+  installed APK SHA-256, selected driver metadata, archive index, truncation
+  and collection errors. Include app-UID logcat with a bounded collection
+  time, six recent process-exit summaries and up to two OS-provided traces.
+  Native tombstones on Android 12+ retain .pb format and are omitted if too
+  large rather than exporting a corrupted partial protobuf. Text ANR traces
+  are bounded. OS data can be unavailable; native log files still export.
+- Captured file contents are bounded to 4 MiB each and 32 MiB total, plus
+  markers/report/ZIP overhead. Large text logs retain head and tail.
+- On returning to the launcher, after success or cancellation, delete cached
+  exports after a 30-second reader grace period. Android does not reliably
+  report actual message-send completion. Cleanup pauses while the launcher
+  is backgrounded. An already opened descriptor survives unlinking.
+  A JobScheduler fallback expires abandoned files after 15 minutes, requesting
+  a deadline at 30 minutes; execution depends on the OS. A subsequent launcher
+  resume also removes leftovers, including interrupted collection workspaces.
+  The receiver's own copy is outside reSOT's control.
+- Windows README explains this is an Android sharesheet/lifecycle feature;
+  Windows retains its existing log capture workflow and display-only badge.
+
+Checks:
+- python tools/test-diagnostic-archive.py passes against production packager
+  and expiry code: both targets, newest histories, duplicate roots, empty
+  logs, bounded head/tail and total budget, archive exclusions, symlink
+  rejection, untouched original logs, old/new export expiry and interrupted
+  scratch cleanup. Log: logs/log-sharing-archive-tests.txt. Fixtures contain
+  no game files. Initial Java API compile errors were corrected before final
+  build; no Android runtime acceptance is inferred from compilation.
+- tools/build-android.ps1 succeeds (19 s final run). Log:
+  logs/log-sharing-android-build.txt. APK: bin/reSOT-android-log-share.apk,
+  28,660,481 bytes, SHA-256
+  A7B19433A48EF0B6A6CC22EF7A73FF60DC54406132AA8A7C653EE464A5E1AF67.
+  Both target libraries and the previous shadow/compatibility changes remain
+  included. Package version is still 0.3.1 / versionCode 6.
+- Merged release manifest confirms com.fulger.resot.logs, exported=false,
+  grantUriPermissions=true and the BIND_JOB_SERVICE-protected expiry service.
+- adb devices returns no attached devices. No APK installation, real chooser
+  interaction, recipient read, lifecycle timing or JobScheduler run was
+  performed. Nothing was sent to another app/account by the agent.
+
+Pending: real-device tap/share/cancel/cleanup (including recipient read
+permissions), Samsung loading logs, device-specific logcat/exit record
+availability. Packaging tests do not establish that the Samsung load stall
+or the remote Poco corruption is resolved. This change adds diagnostics;
+no renderer or game behavior was changed in this step.
+
+
+## 2026-10-24: afc13cc shadow-caster regression isolated
+
+User rejects the previous shadow candidate: D3D11 shows shadows only at
+certain angles; Vulkan/D3D12 show none. Requests inspection of recent commits
+and explicitly requires preservation of the fix for objects showing through
+in both demo and retail. The preceding Q=0 helper test was insufficient to
+validate the complete caster/receiver path; it did not establish the cause.
+
+History comparison:
+- 89dd7be introduced auxiliary target scaling and shadow suppression at Off;
+  7938478 later removed that suppression and added footprint/alpha handling.
+- afc13cc (v0.3.1) changed common vs_finish from
+  saturate(p.z * vp.z) * w to (p.z * vp.z) * w for all draws. That fixes
+  eye-crossing scene triangles, but also started clipping depthless shadow
+  casters against a depth format which they do not actually use.
+- Independent existing evidence: logs/demo-hud-after-err.txt declares a
+  256x256 RGB565 map, format 08080113, pitch 512, zeta=0; its caster bbox
+  has Z about 15,938,400 with W=1. logs/retail-hud-after-err.txt declares
+  the same state and caster Z 4,382,000..6,644,900, W=1. In each executable
+  the map declares Z16 (maximum 65535) with depth disabled. Normalization
+  produces Z much greater than W, so the new hardware clip removes it.
+  These are separate target traces, not an address inferred across XBEs.
+
+Correction: reuse the existing independently traced caster-state predicate
+(RGB565, pitch 512, 256x256, origin zero, no zeta, depth test or blending).
+Set unused vertex-header vp.w only for that state in D3D11 and the shared
+native encoder. vs_finish restores the old saturate only when this flag is
+set. Ordinary scene geometry and shadow receivers retain the homogeneous
+unclamped depth correction. There is no global revert, added depth bias,
+ALWAYS override, arbitrary XBE address or generated-source edit.
+
+Validation:
+- python tools/check-hlsl.py: ten entries pass.
+- python tools/run-build-tool.py cmake --build build/tests/native-gpu
+  --config Release --parallel 6: succeeds.
+- RESOT_GPU_BINDINGS_SMOKE=1 ctest --test-dir build/tests/native-gpu
+  -C Release --output-on-failure: 14/14 pass in 9.12 s. Log:
+  logs/shadow-caster-regression-tests.txt. Actual GPU readbacks on Vulkan
+  and D3D12 each report reference 5202 pixels, afc13cc path zero pixels,
+  corrected caster 5202 pixels. Scene eye-crossing remains 1410 covered
+  pixels with zero depth/coverage mismatches. This reproduces and fixes
+  a concrete regression without restoring the broken global clamp.
+
+Builds: tools/build-android.ps1 and tools/recomp.ps1 -Target xbox-demo
+-BuildOnly plus xbox-retail equivalent all succeed. Logs:
+logs/shadow-caster-android-build.txt, logs/shadow-caster-demo-build.txt,
+logs/shadow-caster-retail-build.txt. Candidate:
+bin/reSOT-android-shadow-fix.apk (28,642,657 bytes), SHA-256
+25C59142CA079E695F287D51876FDBFC8D187A838C1D029FAD5FF96E36D18F5D.
+The prior graphics-test APK alias was refreshed to the same candidate.
+
+Important backend distinction: D3D11 rasterizers already set
+DepthClipEnable=FALSE, whereas native pipelines enable depth clipping.
+The reproduced empty-caster regression explains the native failure; it
+alone does NOT establish the cause of D3D11 angle-dependent receivers.
+No receiver depth-test override was introduced. No new actual-game camera
+comparison or phone installation was performed. D3D11 camera angles,
+updated Vulkan/D3D12 shadows, and previously accepted scene viewpoints
+still require gameplay confirmation.
+
+
+## 2026-10-24: character shadows and remote mobile compatibility candidate
+
+User reports missing player/character shadows in both targets, persistent
+colored-block corruption on Poco X3 Pro (8 GB, Snapdragon 860 / Adreno 640),
+and audio with black frames on non-Adreno Samsung/Mali/MediaTek devices in
+both games. Exact non-Adreno models/logs were not supplied. The screenshot
+shows scene/menu corruption with clean Android overlay buttons. Supplied
+logs in the surrounding ignored logs glitch directory show submitted Vulkan
+guest draws with system and custom drivers; they do not isolate the cause.
+
+Changes and limits:
+- shadow_sample rejected Q=0 despite proj_uv treating it as affine. Remove
+  the inconsistent Q sign/magnitude gate, retaining UV footprint bounds and
+  neutral black outside. Equivalent signed/scaled projections agree. This
+  fixes a shader contract defect; responsibility for missing in-game shadows
+  remains unconfirmed. No XBE address or depth bias was introduced.
+- Shared native device initialization requests only used Vulkan features.
+  A reSOT-only SDL property also avoids independentBlend, sampleRateShading
+  and imageCubeArray requirements. The renderer uses one color attachment,
+  single samples and ordinary cubes. Homogeneous depth clipping stays on.
+  Other SDL callers retain defaults. Local GPU tests use this same contract.
+- Retail Vulkan uses actual ordinary hardware query results when optional
+  occlusionQueryPrecise is absent, instead of rejecting initialization.
+  Reset/begin/end/fences/readback remain ordered; nonzero counts may be
+  conservative and light intensity may differ. The ABI is unchanged.
+- Provisional driver workaround: Vulkan devices named Adreno 640, Mali or
+  Immortalis use existing reference GPU shaders, bypassing direct vertex
+  translations, specialized combiners and simple shaders. Geometry reuse,
+  native GPU execution and guest draws remain enabled. This has NOT been
+  shown to fix the reported corruption or black frames; performance may
+  decrease. Other GPUs retain optimized shaders. Logs identify GPU/mode.
+  RESOT_NATIVE_COMPAT=0/1 overrides selection on both hosts; Android reads
+  an optional gpu-compatibility ASCII 0/1 file in the app data folder at boot.
+
+Checks:
+- python tools/check-hlsl.py: all ten embedded entries pass.
+- python tools/patch-sdl-gpu-query.py build/deps/sdl-source/SDL3-3.4.18;
+  python tools/run-build-tool.py cmake --build build/deps/sdl-query-build
+  --config Release --parallel 6: patched Windows SDL builds.
+- python tools/run-build-tool.py cmake --build build/tests/native-gpu
+  --config Release --parallel 6: succeeds. With RESOT_GPU_BINDINGS_SMOKE=1,
+  ctest --test-dir build/tests/native-gpu -C Release --output-on-failure:
+  14/14 pass in 8.73 seconds. New actual GPU shadow cases cover Q=0, signed
+  and scaled projection, small Q and outside pixels on Vulkan/D3D12. The
+  eye-plane test retains zero depth/coverage mismatches. Log:
+  logs/graphics-compat-gpu-tests.txt.
+- Also set RESOT_GPU_NONPRECISE_QUERIES=1 and use -R '^native_vulkan$':
+  1/1 passes in 0.67 seconds. This forces ordinary query flags on the local
+  GPU, not on Mali hardware. Log: logs/graphics-compat-conservative-query-test.txt.
+- Initial tests caught depth-clamp defaults in synthetic test pipelines;
+  explicit clipping now matches production. The shadow readback allows one
+  UNORM color quantization step, with exact alpha/coverage. Recorded passing
+  results follow those corrections.
+- tools/recomp.ps1 -Target xbox-demo -BuildOnly and xbox-retail equivalent:
+  both Windows executables build. Logs: logs/graphics-compat-demo-build.txt
+  and logs/graphics-compat-retail-build.txt.
+- tools/build-android.ps1: both targets build. Log:
+  logs/graphics-compat-android-build.txt. Candidate copy:
+  bin/reSOT-android-graphics-test.apk (28,644,389 bytes), SHA-256
+  A51A7AC70A229542FB86E8EB2E42E97DD2039B571097B8C31F8F77BBF4DAFDBD.
+  Package stays 0.3.1 / versionCode 6; development candidate, not a release.
+  No installation or gameplay on a phone was performed.
+- MSBuild/Gradle sandbox access failures required escalated retries.
+
+Pending: visible character shadows in both games, same-menu/scene Poco
+before/after with both drivers, exact non-Adreno models and startup logs,
+black-frame resolution, fallback performance and conservative light counts.
+Previously accepted bridge, LowerBath and HUD changes remain in source;
+those views were not replayed on a phone here. Builds and local readbacks
+do not establish remote-device acceptance.
+
+
 ## 2026-10-24: v0.3.1 device acceptance and final packages
 
 The user confirms the new launcher, Yes/No popup touch and save-carousel

@@ -50,6 +50,14 @@ public class GameActivity extends SDLActivity {
     }
 
     @Override protected String[] getLibraries() {
+        // Task restoration can enter this process without recreating the
+        // launcher. Verify before SDL loads either native game library too.
+        ReleaseTrust.Status trust=ReleaseTrust.verify(
+            new java.io.File(getApplicationInfo().sourceDir),android.os.Build.VERSION.SDK_INT);
+        if(trust!=ReleaseTrust.Status.TRUSTED)
+            throw new SecurityException(trust==ReleaseTrust.Status.MODIFIED
+                ? "reSOT APK integrity check failed. Download the official GitHub release."
+                : "reSOT APK verification unavailable. Please restart and retry.");
         return new String[] { "SDL3", retail() ? "resot_retail" : "resot_demo" };
     }
 

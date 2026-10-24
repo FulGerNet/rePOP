@@ -824,6 +824,8 @@ static void link_at(int id, const wchar_t *text, UINT align)
             r.right - r.left, r.bottom - r.top, align | DT_VCENTER | DT_SINGLELINE);
 }
 
+#include "launcher_update.inc"
+
 static void render(void)
 {
     static const int title_top[3] = {255, 242, 200}, title_bottom[3] = {184, 136, 60};
@@ -929,6 +931,7 @@ static void render(void)
         BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
         AlphaBlend(L.dc, (WIN_W - L.logo_w) / 2, LOGO_Y, L.logo_w, L.logo_h, L.logo_dc, 0, 0, L.logo_w, L.logo_h, bf);
     }
+    launcher_update_draw();
 }
 
 /* ── resources ─────────────────────────────────────────────── */
@@ -1387,6 +1390,8 @@ static void move_focus(int step)
 
 static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
 {
+    LRESULT update_result;
+    if(launcher_update_input(hwnd,message,wp,lp,&update_result))return update_result;
     switch (message) {
     case WM_NCHITTEST: {
         POINT p = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
@@ -1429,6 +1434,9 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wp, LPARAM l
         else if (wp == VK_RIGHT || wp == VK_TAB) move_focus(1);
         return 0;
     case WM_TIMER: {
+        if(!L.extracting && InterlockedCompareExchange(&s_update.ready,0,1)==1) {
+            s_update.visible=1;s_update.focus=1;s_update.pressed=-1;ReleaseCapture();
+        }
         ULONGLONG now = GetTickCount64();
         float dt = (float)(now - L.last_tick) / 1000.0f;
         L.last_tick = now;
@@ -1580,6 +1588,7 @@ int resot_launcher_run(const char *target_id, char *game_dir, size_t game_dir_si
     refresh();
     ShowWindow(L.hwnd, SW_SHOW);
     SetForegroundWindow(L.hwnd);
+    launcher_update_start();
     if ((!L.inst[GAME_DEMO].dir[0] && !L.inst[GAME_RETAIL].dir[0]) || (flags & RESOT_LAUNCHER_ASK_ISO))
         PostMessageW(L.hwnd, WM_APP_ASK_ISO, 0, 0);
     L.running = 1;

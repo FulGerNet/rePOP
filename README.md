@@ -10,7 +10,7 @@
 
 **Prince of Persia: The Sands of Time, recompiled from Xbox to native Windows and Android.**
 
-**Current version: v0.3.1.** reSOT is an advanced, playable recompilation and
+**Current version: v0.3.2.** reSOT is an advanced, playable recompilation and
 port of the original Xbox retail game and E3 2003 demo. Both games now run
 well on Windows and Android in the configurations tested by the user, with
 working gameplay, menus, movies, audio and controller support. The project
@@ -47,6 +47,26 @@ letterboxed cutscene frames. These are gameplay examples, not a full-game test.*
 <img src="docs/media/gameplay-xbox-demo.jpg" alt="Xbox demo running in reSOT: main menu, intro, ramparts and level transitions">
 
 *Windows demo captures from a scripted 185-second run, 2026-10-14, at 16:9 Hor+.*
+
+## What's included in v0.3.2
+
+- **Android GPU compatibility.** Corrected zero-sized rectangular mip levels
+  in SDL. The user confirms Poco colored-pixel corruption is resolved and
+  operation is restored on the tested MediaTek/Samsung device. Other devices
+  still need individual validation.
+- **Character shadows restored.** Confirmed by the user, while preserving the
+  scene-depth correction for objects showing through.
+- **Graphics preset.** Reduced halves auxiliary-effect dimensions and disables
+  recognized character shadows; Standard keeps the former High quality without
+  texture glow; Full adds texture glow. Both games and hosts share this policy.
+  Debug Off remains only in the INI and Windows F7. Old settings migrate.
+- **Android diagnostics.** Tap the launcher version to create and share a
+  temporary ZIP with retained demo and retail diagnostic logs.
+- **Integrity and updates.** Android verifies the installed APK signature and
+  current publisher certificate offline. Both launchers check stable GitHub
+  releases in the background and offer Update / Close in launcher-styled
+  popups. Updating is optional and network failures do not block startup.
+  A local APK self-check cannot guarantee resistance to a rewritten verifier.
 
 ## What's included in v0.3.1
 
@@ -97,8 +117,8 @@ The release also retains the v0.3.0 features below.
   HUD clearance, repaired log-source selection, and retained the shared
   graphics, input and diagnostic options.
 
-Both Windows targets and the Android release APK build as **0.3.1**;
-Android uses **versionCode 6**. Shader compilation, pointer, touch and GPU
+Both Windows targets and the Android release APK build as **0.3.2**;
+Android uses **versionCode 7**. Shader compilation, pointer, touch and GPU
 regressions passed in the recorded release checks. The user confirms the
 extended health-bar alignment, popup/save-carousel touch changes and launcher
 presentation on the Android test phone. See [VALIDATION.md](docs/VALIDATION.md)
@@ -118,6 +138,9 @@ every level, device or exact console accuracy.
 | In-level gameplay and rendering | 🟢 Played through multiple demo levels; remaining visual edge cases tracked | 🟢 Substantial gameplay reported; remaining scene-specific issues tracked |
 | Windows play | 🟢 Keyboard/mouse or controller; high frame rates reported | 🟢 Corrected timing; high frame rates reported |
 | Android play with native Vulkan | 🟢 Runs well in user-tested configurations | 🟢 Runs well in user-tested configurations; caching improvements confirmed |
+| Adreno 640 / MediaTek/Samsung compatibility | 🟢 User confirms operation restored on the tested MediaTek/Samsung device after SDL mip correction | 🟢 User confirms Poco colored-pixel corruption resolved; broader GPU coverage remains open |
+| Graphics presets | 🟡 Reduced/Standard/Full menu and policy tests pass; new preset gameplay checks pending | 🟡 Same shared policy and verification limits |
+| Android diagnostic sharing | 🟡 On-demand ZIP implemented; Samsung archive received; cancellation/cleanup timing needs device checks | 🟡 Same shared exporter |
 | Bink movies and video skipping | 🟢 Audio/video confirmed | 🟢 Audio/video confirmed |
 | Game audio and effects | 🟢 Audio and earlier stutter/crash fixes confirmed | 🟢 Audio and earlier movie-return fix confirmed; Windows menu music restored in v0.3.0 |
 | Keyboard and physical controllers | 🟢 | 🟢 |
@@ -129,12 +152,12 @@ every level, device or exact console accuracy.
 | Native Direct3D 11 renderer | 🟢 Windows default | 🟢 Windows default |
 | Native Direct3D 12 renderer | 🟡 Optional Windows backend; startup and GPU tests pass | 🟡 Optional Windows backend; broader gameplay checks pending |
 | Widescreen Hor+ and HUD layout | 🟢 Widened view with preserved HUD proportions; artwork edges remain limited | 🟢 Widened view; ultrawide sand-tank alignment confirmed; some dialog layout limits remain |
-| Graphics options and effect-quality selector | 🟢 Shared options; selector confirmed by the user | 🟢 Shared options; broader effect accuracy remains under study |
+
 | Vulkan shader/material/geometry caches | 🟢 Shared optimizations and regression checks | 🟢 Gameplay geometry reuse observed; user reports improved performance |
 | Launcher, game-folder selection and ISO installation | 🟢 Available on both hosts; demo ISO installation used by the user | 🟢 Available on both hosts; separate retail game detection |
 | FPS panel, diagnostics and input rebinding | 🟢 | 🟢 |
 | Save/load and memory units | 🟡 Save crash resolved; complete persistence checks pending | 🟡 Save crash resolved; Android save/relaunch/load checks pending |
-| Shadows, stencil and remaining effects | 🟡 Eye-plane depth reconstruction corrected; Sand Birds bridge fix confirmed on Android; reported device corruption still needs checks | 🟡 LowerBath lights fix confirmed on Android; shared depth correction included; Hourglass Room still needs a check; stencil effects remain incomplete |
+| Shadows, stencil and remaining effects | 🟢 User confirms character shadows restored; scene-depth correction retained; remaining stencil/effect coverage open | 🟢 Same shared shadow fix confirmed by the user; broader scene coverage remains open |
 | Full-game completion and console comparison | ⚪ Not yet established | ⚪ Not yet established |
 
 The current focus is longer playthroughs, remaining scene-specific crashes
@@ -166,7 +189,7 @@ manual visibility control. Compatible Adreno devices can also select a
 user-supplied custom Vulkan driver from the launcher; no custom driver is bundled.
 
 Both hosts save preferences in `resot-options.ini`. Current bundled defaults
-are unlimited FPS, VSync/glow/logs off, post-processing Low and 200% look
+are unlimited FPS, VSync/logs off, Graphics preset Standard and 200% look
 sensitivity. Windows defaults to D3D11 at 720p (150%); Android defaults to
 Vulkan at 480p (100%). Existing preferences survive upgrades. Resolution,
 frame limit, VSync and effect quality can be adjusted for the device.
@@ -250,6 +273,7 @@ It is regenerated from the user's own checked XBE and is never edited by hand.
 | `Assets/`, `research/`, `bin/`, `build*/`, `logs/` | Private game files, analysis or local outputs; ignored |
 
 - [Validation and observed results](docs/VALIDATION.md)
+- [v0.3.2 release notes](docs/releases/v0.3.2.md)
 - [v0.3.1 release notes](docs/releases/v0.3.1.md)
 - [Recompilation pipeline and target evidence](docs/RECOMP.md)
 - [Windows/Android parity](docs/PLATFORM-PARITY.md)

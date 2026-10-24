@@ -158,6 +158,67 @@ def patch_vulkan_selective_bind(text):
     return text.replace(include, "")
 
 
+def patch_vulkan_minimal_features(text):
+    """RE-SoT uses one color target, single samples and ordinary cube maps."""
+    marker = '    /* RE-SoT: optional features unused by the native renderer. */'
+    if marker in text:
+        return text
+    anchor = '    features->desiredVulkan10DeviceFeatures.imageCubeArray = VK_TRUE;'
+    assert text.count(anchor) == 1
+    return text.replace(anchor, anchor + '\n' + marker + '''
+    if (SDL_GetBooleanProperty(props, "resot.gpu.minimal_features", false)) {
+        features->desiredVulkan10DeviceFeatures.independentBlend = VK_FALSE;
+        features->desiredVulkan10DeviceFeatures.sampleRateShading = VK_FALSE;
+        features->desiredVulkan10DeviceFeatures.imageCubeArray = VK_FALSE;
+    }
+''')
+
+
+def patch_vulkan_device_version(text):
+    """RE-SoT: publish the physical API version beside SDL's driver strings."""
+    marker = '    /* RE-SoT: diagnostic physical-device API version. */'
+    if marker in text:
+        return text
+    anchor = '    // Record device name'
+    assert text.count(anchor) == 1
+    return text.replace(anchor, marker + '''
+    SDL_SetNumberProperty(renderer->props, "resot.vulkan.api_version",
+        renderer->physicalDeviceProperties.properties.apiVersion);
+
+''' + anchor)
+
+
+def patch_mip_extents(text, backend):
+    """RE-SoT: rectangular mips reach 1xN/Nx1 before reaching 1x1."""
+    marker = "RE-SoT: clamp rectangular mip extents"
+    if marker in text:
+        return text
+    container = "textureContainer" if backend == "vulkan" else "container"
+    expressions = [f"{container}->header.info.{axis} >> {target}"
+                   for axis in ("width", "height")
+                   for target in ("colorTargetInfos[i].mip_level", "depthStencilTargetInfo->mip_level")]
+    if backend == "vulkan":
+        expressions += [f"container->header.info.{axis} >> {level}"
+                        for axis in ("width", "height") for level in ("(level - 1)", "level")]
+    for expression in expressions:
+        old = "= " + expression + ";"
+        assert text.count(old) == 1, (backend, expression)
+        text = text.replace(old, "= SDL_max(" + expression + ", 1); /* " + marker + ". */")
+    return text
+
+
+def patch_blit_mip_dimensions(text):
+    """RE-SoT: avoid division by zero when sampling a thin mip in D3D12 blits."""
+    marker = "RE-SoT: nonzero source mip dimensions"
+    if marker in text:
+        return text
+    for axis in ("width", "height"):
+        old = f"(src_header->info.{axis} >> info->source.mip_level)"
+        assert text.count(old) == 2, axis
+        text = text.replace(old, f"SDL_max(src_header->info.{axis} >> info->source.mip_level, 1) /* {marker}. */")
+    return text
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=Path)
@@ -165,6 +226,7 @@ def main():
     for backend in ("d3d12", "vulkan"):
         path = args.source / f"src/gpu/{backend}/SDL_gpu_{backend}.c"
         text = path.read_text(encoding="utf-8")
+        text = patch_mip_extents(text, backend)
         marker = f"#endif // SDL_GPU_{backend.upper()}"
         include = f'#include "{(EXTENSION / f"resot_query_{backend}.inc").as_posix()}"'
         if include not in text:
@@ -174,7 +236,7 @@ def main():
             marker = "    VkPhysicalDeviceFeatures2 featureList;"
             assert text.count(marker) == 1
             text = text.replace(marker, """    /* RE-SoT: enable precise hardware occlusion when supported. The native
-     * query extension refuses devices without it instead of returning booleans. */
+     * query extension uses conservative hardware counts when unavailable. */
     VkPhysicalDeviceFeatures resotQueryFeatures;
     renderer->vkGetPhysicalDeviceFeatures(renderer->physicalDevice, &resotQueryFeatures);
     features->desiredVulkan10DeviceFeatures.occlusionQueryPrecise = resotQueryFeatures.occlusionQueryPrecise;
@@ -192,10 +254,15 @@ def main():
             assert text.count(call) == 1, path
             text = text.replace(call, call.replace("VK_NULL_HANDLE,", "resot_pipeline_cache(renderer),"))
         if backend == "vulkan":
+            text = patch_vulkan_device_version(text)
+            text = patch_vulkan_minimal_features(text)
             text = patch_vulkan_bindings(text)
             text = patch_vulkan_material_cache(text)
             text = patch_vulkan_selective_bind(text)
         path.write_text(text, encoding="utf-8")
+    common = args.source / "src/gpu/SDL_gpu.c"
+    text = common.read_text(encoding="utf-8")
+    common.write_text(patch_blit_mip_dimensions(text), encoding="utf-8")
     # Linux/Android link SDL with a version script that exports only SDL's own
     # API; the Vulkan query table must be exported too (Windows uses
     # __declspec(dllexport), the .sym file is not used there).

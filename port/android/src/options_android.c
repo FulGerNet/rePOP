@@ -70,8 +70,8 @@ extern void xbox_SetFrameLimit(int);
 extern void xbox_SetVSync(int);
 extern void xbox_SetPostProcessing(int);
 extern void xbox_SetPostProcessingQuality(int);
-static int s_post_quality=1;
-static const char *const s_quality_names[]={"Off","Low","Mid","High"};
+static int s_post_quality=2;
+static const char *const s_quality_names[]={"Off","Reduced","Standard","Full"};
 extern void xbox_SetRenderScalePercent(int);
 extern void xbox_InputSetHostFilter(void (*)(void *, unsigned));
 extern const char *resot_android_data_dir(void);
@@ -82,9 +82,9 @@ long resot_native_revision(void) { return InterlockedCompareExchange(&s_revision
 void resot_options_summary(char *out, unsigned size)
 {
     AcquireSRWLockShared(&s_lock);
-    snprintf(out, size, "FPS limit %s, VSync %s, texture glow %s, internal resolution %s",
+    snprintf(out, size, "FPS limit %s, VSync %s, graphics preset %s, internal resolution %s",
              s_cap_names[s_fps == 30 ? 0 : s_fps == 60 ? 1 : s_fps == 120 ? 2 : 3],
-             s_vsync ? "on" : "off", s_texture_glow ? "on" : "off",s_render_names[s_resolution]);
+             s_vsync ? "on" : "off", s_quality_names[s_post_quality],s_render_names[s_resolution]);
     ReleaseSRWLockShared(&s_lock);
 }
 
@@ -136,9 +136,9 @@ static int save_config(void)
         mark_dirty();
         return 0;
     }
-    fprintf(f, "[Graphics]\nRenderer=vulkan\nFPSLimit=%d\nVSync=%d\nTextureGlowEffect=%d\nInternalResolutionPercent=%d\n",
-            s_fps, s_vsync, s_texture_glow,s_render_scales[s_resolution]);
-    fprintf(f,"PostProcessingQuality=%d\n",s_post_quality);
+    fprintf(f, "[Graphics]\nRenderer=vulkan\nFPSLimit=%d\nVSync=%d\nInternalResolutionPercent=%d\n",
+            s_fps, s_vsync,s_render_scales[s_resolution]);
+    fprintf(f,"GraphicsPreset=%d\n",s_post_quality);
     fprintf(f,"[Diagnostics]\nConsoleLogs=%d\n",s_console_logs);
     fprintf(f, "[Controls]\nLookSensitivityPercent=%d\n",s_look_sensitivity);
     fprintf(f, "[Keyboard]\n");
@@ -310,8 +310,7 @@ void resot_native_label(int page, int item, char *out, unsigned size)
         switch (item) {
         case 0: snprintf(out, size, "FPS limit: %s", s_cap_names[s_fps == 30 ? 0 : s_fps == 60 ? 1 : s_fps == 120 ? 2 : 3]); break;
         case 1: snprintf(out, size, "VSync: %s", s_vsync ? "On" : "Off"); break;
-        case 2: snprintf(out, size, "Texture glow effect: %s", s_texture_glow ? "On" : "Off"); break;
-        case 4: snprintf(out,size,"Post processing: %s",s_post_quality?s_quality_names[s_post_quality]:"Custom"); break;
+        case 3: snprintf(out,size,"Graphics preset: %s",s_post_quality?s_quality_names[s_post_quality]:"Debug Off"); break;
         default: snprintf(out, size, "Internal resolution: %s",s_render_names[s_resolution]); break;
         }
     } else if (page == RESOT_NATIVE_CONTROLS && item == 0) {
@@ -338,10 +337,10 @@ void resot_native_activate(int page, int item)
         switch (item) {
         case 0: s_fps = s_fps == 30 ? 60 : s_fps == 60 ? 120 : s_fps == 120 ? 0 : 30; xbox_SetFrameLimit(s_fps); break;
         case 1: s_vsync = !s_vsync; xbox_SetVSync(s_vsync); break;
-        case 2: s_texture_glow = !s_texture_glow; xbox_SetPostProcessing(s_texture_glow); break;
-        case 4: s_post_quality=s_post_quality>=3?1:s_post_quality+1; xbox_SetPostProcessingQuality(s_post_quality); break;
-        case 3: s_resolution=(s_resolution+1)%6; xbox_SetRenderScalePercent(s_render_scales[s_resolution]); break;
-        default: break;
+        case 3: s_post_quality=s_post_quality>=3?1:s_post_quality+1;
+            s_texture_glow=s_post_quality==3; xbox_SetPostProcessingQuality(s_post_quality); break;
+        case 2: s_resolution=(s_resolution+1)%6; xbox_SetRenderScalePercent(s_render_scales[s_resolution]); break;
+
         }
         save_config();
     } else if (page == RESOT_NATIVE_CONTROLS && item == 0) {
@@ -384,10 +383,15 @@ void resot_options_init(void)
     if (s_fps != 0 && s_fps != 30 && s_fps != 60 && s_fps != 120) s_fps = 0;
     env = getenv("RECOMP_HW_VSYNC");
     s_vsync = ini_get("Graphics", "VSync", env && *env != '0') != 0;
-    s_post_quality=ini_get("Graphics","PostProcessingQuality",1);
-    if(s_post_quality<0 || s_post_quality>3)s_post_quality=1;
+    s_post_quality=ini_get("Graphics","GraphicsPreset",-1);
+    if(s_post_quality==-1) {
+        int old=ini_get("Graphics","PostProcessingQuality",3);
+        int glow=ini_get("Graphics","TextureGlowEffect",0)!=0;
+        s_post_quality=resot_graphics_preset(-1,old,glow);
+    }
+    s_post_quality=resot_graphics_preset(s_post_quality,3,0);
+    s_texture_glow=s_post_quality==3;
     xbox_SetPostProcessingQuality(s_post_quality);
-    s_texture_glow = ini_get("Graphics", "TextureGlowEffect", 0) != 0;
     {
         int percent=ini_get("Graphics","InternalResolutionPercent",100);
         s_resolution=2;
@@ -403,7 +407,6 @@ void resot_options_init(void)
     }
     xbox_SetFrameLimit(s_fps);
     xbox_SetVSync(s_vsync);
-    xbox_SetPostProcessing(s_texture_glow);
     s_console_logs=ini_get("Diagnostics","ConsoleLogs",0)!=0;
     if(s_console_logs)fprintf(stderr,"[CONSOLE] On-screen logs enabled (logs/%s-err.txt and -out.txt)\n",RESOT_TARGET_ID);
     xbox_FramebufferSetOptionsCallbacks(resot_console_panel,NULL);

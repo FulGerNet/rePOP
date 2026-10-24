@@ -107,7 +107,7 @@ function(resot_add_target id exe_name)
         ${gen})
     target_link_libraries(${exe_name} PRIVATE
         xboxrecomp d3d11 dxgi dxguid xinput winmm dbghelp bcrypt ole32 shell32 uuid
-        msimg32 windowscodecs)
+        msimg32 windowscodecs winhttp)
     # The launcher tells the demo from the retail game in any folder: it
     # needs both targets' default.xbe hashes, from their target.h.
     foreach(other xbox-demo xbox-retail)

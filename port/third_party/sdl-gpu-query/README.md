@@ -47,11 +47,32 @@ The exports `RESOT_GetD3D12QueryAPI(1)` and `RESOT_GetVulkanQueryAPI(1)` return
 the table in `resot_gpu_query.h`. A mismatched ABI is rejected. D3D12 uses
 `ID3D12QueryHeap` and `ResolveQueryData` into readback memory. Vulkan uses
 precise `VkQueryPool` occlusion counters; the patch enables
-`occlusionQueryPrecise` when supported, and rejects unavailable capability.
+`occlusionQueryPrecise` when supported. Without it, queries use ordinary
+hardware occlusion counts, whose nonzero values may be conservative; light
+intensity may differ. No synthetic visible-pixel count is substituted.
+`RESOT_GPU_NONPRECISE_QUERIES=1` forces this path for developer checks.
 No D3D11 object is involved. Reset/resolve occur outside render passes,
 begin/end inside one render pass. The caller owns lifetime and must retain
 queries through the SDL GPU submission fence before reading or destroying
 them. The driver additions do not wait, submit, or fabricate results.
+
+The reSOT device property `resot.gpu.minimal_features` opts out of SDL's
+otherwise mandatory independent blending, sample-rate shading and cube-array
+features. reSOT uses one color attachment, single samples and ordinary cube
+maps. The production device helper also disables SDL's optional depth clamp,
+clip distances, anisotropy and indirect-first-instance requirements, while
+keeping homogeneous depth clipping enabled. Other SDL callers retain defaults.
+
+The patch also publishes `resot.vulkan.api_version` from the selected physical
+device's properties. The host records it beside SDL's driver name/version/info
+to distinguish API support from a driver revision in remote crash reports.
+
+Rectangular mip chains must keep each dimension at least one. The patch clamps
+Vulkan mip-generation blit extents, Vulkan/D3D12 render-target extents and
+common blit source dimensions. SDL 3.4.18 otherwise reaches zero on thin mips,
+causing invalid Vulkan blits or division by zero in common blit UV calculation.
+Real GPU upload/readback tests reproduced the final-mip corruption before the
+patch on Vulkan and D3D12 and pass afterward, including 1x64 and 64x1 textures.
 
 `nv2a_hw_native_visibility.inc` implements retail's counter/report lifetime,
 supersampling normalization, asynchronous polling, FIFO immutable snapshots,

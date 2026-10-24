@@ -46,7 +46,7 @@ import java.util.Random;
  * belongs in launcher.c too, and the reverse.
  */
 final class LauncherView extends View {
-    static final int BTN_DEMO = 0, BTN_GAME = 1, BTN_ISO = 2, BTN_GITHUB = 3, BTN_CLOSE = 4, BTN_CANCEL = 5, BTN_DRIVER = 6, BTN_COUNT = 7;
+    static final int BTN_DEMO = 0, BTN_GAME = 1, BTN_ISO = 2, BTN_GITHUB = 3, BTN_CLOSE = 4, BTN_CANCEL = 5, BTN_DRIVER = 6, BTN_LOGS = 7, BTN_COUNT = 8;
     // launcher.c's layout, on its 1000 x 640 plane
     private static final float BASE_W = 1000, BASE_H = 640;
     private static final float LOGO_Y = 22, LOGO_SIZE = 132, TEAL_X = 150, TITLE_Y = 150, TITLE_H = 84, SUB_Y = 248,
@@ -149,12 +149,13 @@ final class LauncherView extends View {
         buttons[BTN_DRIVER].set(cx - 120, H - 62, cx + 120, H - 34);
         buttons[BTN_CLOSE].set(W - 58 - insetRight, 18, W - 24 - insetRight, 52);
         buttons[BTN_CANCEL].set(cx - CANCEL_W / 2, top + CANCEL_Y, cx + CANCEL_W / 2, top + CANCEL_Y + BTN_H);
+        buttons[BTN_LOGS].set(insetLeft+24,20,insetLeft+132,48);
     }
 
     // ── state ────────────────────────────────────────────────
 
     private boolean visible(int id) {
-        return id == BTN_CLOSE || (id == BTN_CANCEL) == state.extracting;
+        return id == BTN_CLOSE || id == BTN_LOGS || (id == BTN_CANCEL) == state.extracting;
     }
 
     void refresh() {
@@ -162,6 +163,7 @@ final class LauncherView extends View {
         enabled[BTN_GAME] = state.installed[1];
         enabled[BTN_ISO] = enabled[BTN_GITHUB] = enabled[BTN_CLOSE] = enabled[BTN_CANCEL] = true;
         enabled[BTN_DRIVER] = true;
+        enabled[BTN_LOGS] = true;
         if (!enabled[focus] || !visible(focus))
             focus = state.extracting ? BTN_CANCEL : enabled[BTN_DEMO] ? BTN_DEMO : enabled[BTN_GAME] ? BTN_GAME : BTN_ISO;
         invalidate();
@@ -552,9 +554,9 @@ final class LauncherView extends View {
         plateEdge(canvas, bx, by, bw, BADGE_H, 9, 1, 0xFFF0C4, 1);
         plateEdge(canvas, bx + 3, by + 3, bw - 6, BADGE_H - 6, 7.6f, 1, 0x785824, 0.8f);
         caps(canvas, BADGE_TEXT, cx, by + BADGE_H / 2, serifBold, 14, 2, 0xFF161E32);
-        float vx = insetLeft + 24;
+        float vx = buttons[BTN_LOGS].left;
         plateFill(canvas, vx, 20, 108, 28, 7, 0xFAE8B0, 0xB0843E, 1);
-        plateEdge(canvas, vx, 20, 108, 28, 7, 1, 0xFFF0C4, 1);
+        plateEdge(canvas, vx, 20, 108, 28, 7, focus == BTN_LOGS || hover == BTN_LOGS ? 2 : 1, 0xFFF0C4, 1);
         caps(canvas, versionLabel, vx + 54, 34, sansBold, 13, 1, 0xFF161E32);
 
         if (state.extracting) {
@@ -633,7 +635,7 @@ final class LauncherView extends View {
     @Override public boolean performClick() { super.performClick(); return true; }
 
     private void moveFocus(int step) {
-        int[] order = state.extracting ? new int[] { BTN_CANCEL } : new int[] { BTN_DEMO, BTN_GAME, BTN_ISO, BTN_DRIVER, BTN_GITHUB };
+        int[] order = state.extracting ? new int[] { BTN_CANCEL, BTN_LOGS } : new int[] { BTN_DEMO, BTN_GAME, BTN_ISO, BTN_DRIVER, BTN_GITHUB, BTN_LOGS };
         int at = 0;
         for (int i = 0; i < order.length; i++) if (order[i] == focus) at = i;
         for (int i = 1; i <= order.length; i++) {
@@ -648,7 +650,7 @@ final class LauncherView extends View {
         case KeyEvent.KEYCODE_DPAD_RIGHT: case KeyEvent.KEYCODE_DPAD_DOWN: case KeyEvent.KEYCODE_TAB: moveFocus(1); return true;
         case KeyEvent.KEYCODE_DPAD_CENTER: case KeyEvent.KEYCODE_ENTER: case KeyEvent.KEYCODE_BUTTON_A:
         case KeyEvent.KEYCODE_BUTTON_START: case KeyEvent.KEYCODE_SPACE:
-            listener.onActivate(state.extracting ? BTN_CANCEL : focus); return true;
+            listener.onActivate(focus); return true;
         case KeyEvent.KEYCODE_BUTTON_B: case KeyEvent.KEYCODE_ESCAPE:
             listener.onActivate(BTN_CLOSE); return true;
         }

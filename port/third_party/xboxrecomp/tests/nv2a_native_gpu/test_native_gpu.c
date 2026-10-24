@@ -1,3 +1,4 @@
+#include "../../src/kernel/nv2a_native_device.h" /* RE-SoT: same device features as production. */
 /* RE-SoT: exercise embedded NV2A shaders, scissored native GPU draws,
  * command submission, swapchain resize and GPU readback on both APIs.
  * No D3D11 headers/libraries/devices and no game data. */
@@ -134,6 +135,7 @@ static int test_texture_border(SDL_GPUDevice *device, SDL_GPUShader *vs,
     ps=SDL_CreateGPUShader(device,&si); REQUIRE(ps);
     pi.vertex_shader=vs; pi.fragment_shader=ps; pi.primitive_type=SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
     pi.rasterizer_state.fill_mode=SDL_GPU_FILLMODE_FILL; pi.multisample_state.sample_count=SDL_GPU_SAMPLECOUNT_1;
+    pi.rasterizer_state.enable_depth_clip=true; /* RE-SoT: production requires clipping, not optional depth clamp. */
     color.format=SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM;
     pi.target_info.color_target_descriptions=&color; pi.target_info.num_color_targets=1;
     pipeline=SDL_CreateGPUGraphicsPipeline(device,&pi); REQUIRE(pipeline);
@@ -175,6 +177,9 @@ static int test_texture_border(SDL_GPUDevice *device, SDL_GPUShader *vs,
 }
 #include "test_simple_combiner.inc" /* RE-SoT: native shader differential readbacks. */
 #include "test_depth_clip.inc" /* RE-SoT: screen-space depth must survive eye-plane clipping. */
+#include "test_shadow_sample.inc" /* RE-SoT: keep the sampler's affine Q convention. */
+#include "test_shadow_caster.inc" /* RE-SoT: afc13cc must not clip depthless caster maps to empty. */
+#include "test_texture_probe.inc" /* RE-SoT: diagnostic GPU texture readbacks must detect corruption reliably. */
 /* RE-SoT: a rectangle depth clear must not expose geometry outside it.
  * Real GPU readback tests the constant-depth viewport on both encoders. */
 static int test_rectangle_depth_clear(SDL_GPUDevice *device,
@@ -258,11 +263,16 @@ int main(int argc, char **argv)
     REQUIRE(SDL_Init(SDL_INIT_VIDEO));
     window = SDL_CreateWindow("reSOT native GPU test",128,128,SDL_WINDOW_HIDDEN);
     REQUIRE(window);
-    device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_SPIRV,true,backend);
+    device = resot_native_device(backend,1); /* RE-SoT: production minimal feature contract. */
     REQUIRE(device);
     REQUIRE(!strcmp(SDL_GetGPUDeviceDriver(device),backend));
     REQUIRE(!test_vertex_ring(device));
     REQUIRE(!test_texture_cycle(device)); /* RE-SoT: cached image lifetime. */
+    REQUIRE(!test_texture_probe(device,64,32)); /* RE-SoT: production texture/mip diagnostics. */
+    REQUIRE(!test_texture_probe(device,32,64));
+    REQUIRE(!test_texture_probe(device,64,64)); /* RE-SoT: square control. */
+    REQUIRE(!test_texture_probe(device,1,64)); /* RE-SoT: clamp narrow dimensions at every mip. */
+    REQUIRE(!test_texture_probe(device,64,1));
     query_library = SDL_LoadObject("SDL3.dll"); REQUIRE(query_library);
     get_api = (ResotGetGpuQueryAPI)SDL_LoadFunction(query_library,dx ? "RESOT_GetD3D12QueryAPI" : "RESOT_GetVulkanQueryAPI");
     REQUIRE(get_api);
@@ -285,6 +295,7 @@ int main(int argc, char **argv)
     pipeline.vertex_shader = vs; pipeline.fragment_shader = ps;
     pipeline.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
     pipeline.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+    pipeline.rasterizer_state.enable_depth_clip = true; /* RE-SoT: use the production feature contract. */
     pipeline.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
     color.format = SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM;
     pipeline.target_info.color_target_descriptions = &color;
@@ -304,6 +315,8 @@ int main(int argc, char **argv)
     transfer = SDL_CreateGPUTransferBuffer(device,&transfer_info); REQUIRE(transfer);
     REQUIRE(!test_rectangle_depth_clear(device,&pipeline,gpu,target,depth,transfer));
     REQUIRE(!test_depth_clip(device,dx,&pipeline,target,transfer));
+    REQUIRE(!test_shadow_sample(device,dx,&pipeline,target,transfer));
+    REQUIRE(!test_shadow_caster(device,dx,&pipeline,target,transfer));
     REQUIRE(!test_texture_border(device,vs,target,transfer,dx)); /* RE-SoT: actual shader on both GPUs. */
     REQUIRE(!test_simple_combiner(device,target,transfer,dx,0)); /* RE-SoT: specialization matches full interpreter. */
     /* RE-SoT: targeted binding changes can run the real pass/texture/query

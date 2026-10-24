@@ -1,35 +1,25 @@
 # Effect quality
 
-The existing `Graphics/PostProcessingQuality` selector remains Off/Low/Mid/High.
-Release 0.1.2 defaults to Low on Windows and Off on Android, as supplied by
-the user; existing INIs take precedence.
-No new setting was added. The policy is shared by Windows D3D11, Windows native
-D3D12/Vulkan and Android Vulkan, compiled for demo and retail separately.
-The user confirms that it works (2026-10-20); the confirmation did not specify
-a target, backend, scene or individual effect.
+Version 0.3.2 replaces the separate quality/glow controls with one Graphics
+preset, shared by both titles and Windows D3D11/D3D12/Vulkan and Android Vulkan.
+New defaults are Standard on both hosts. The old Low setting brought no FPS
+benefit in the user's test; no speedup is claimed for the replacement presets.
 
-## What the selector controls
-
-| Rendering work | Off | Low | Mid | High |
+| Rendering work | Debug Off | Reduced | Standard | Full |
 | --- | --- | --- | --- | --- |
-| Recognized screen-space blur/bloom chains and their fullscreen composites | Omitted | 50% auxiliary width/height | 75% auxiliary width/height | Original auxiliary resolution |
-| Recognized projected character shadows | 64x64 maps; caster and receiver draws retained | 128×128 maps | 192×192 maps | 256×256 maps |
-| Other auxiliary targets, from 40×30 through 512×512 | 25% width/height; material draws retained | 50% | 75% | Original resolution |
-| Tiny pyramid levels, including retail 20×15 and 10×7 | Recognized chain draws omitted | Original resolution | Original resolution | Original resolution |
-| Full-width display/history buffers, HUD and base scene geometry | Preserved | Preserved | Preserved | Preserved |
+| Recognized screen-space chains | Omitted | 50% auxiliary width/height | Former High resolution | Same as Standard |
+| Recognized projected character shadows | Retained at reduced map resolution | Caster and proven receiver draws omitted | 256x256 maps | 256x256 maps |
+| Other auxiliary targets, 40x30 through 512x512 | 25% dimensions | 50% dimensions | Original resolution | Original resolution |
+| Tiny bloom tail levels | Recognized chain draws omitted | Original resolution | Original resolution | Original resolution |
+| Final texture glow composite | Omitted | Omitted | Omitted | Enabled |
+| Scene depth, HUD, display/history buffers and timing | Preserved | Preserved | Preserved | Preserved |
 
-The last row follows the separate internal-resolution setting. The existing
-texture-glow switch still gates the independently identified final glow
-composite. Guest filter offsets, shader coefficients, animation and game
-timing are preserved. High retains the developer `RECOMP_HW_FX_SCALE` override.
-
-Previously, only targets learned from a recognized fullscreen draw received
-Low/Mid scaling. Shadow maps were excluded. Learning during a draw could
-also recreate a surface after its clear. Auxiliary quality is now chosen at
-the first clear, without waiting for a draw to identify its effect.
-Retail's 40-pixel viewport has a 48-pixel allocation width because of pitch
-padding; the budget uses the viewport dimensions rather than confusing these
-two widths.
+`[Graphics] GraphicsPreset=0/1/2/3` stores Off/Reduced/Standard/Full. Only INI
+and Windows F7 select Off; normal menus cycle 1,2,3. Legacy High/Mid map to
+Standard, Low to Reduced, enabled glow to Full unless Off; explicit new keys
+take priority. The standalone TextureGlowEffect control/key is removed on
+save. Guest filter coefficients and animation are unchanged; the existing
+RECOMP_HW_FX_SCALE developer override still applies at full effect resolution.
 
 ## Evidence and coverage
 

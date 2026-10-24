@@ -1,5 +1,12 @@
 # reSOT on Windows
 
+Version 0.3.2 adds Reduced/Standard/Full graphics presets and a background
+stable-release check with optional Update / Close buttons styled like the
+launcher. The displayed version is 0.3.2. Offline/rate-limit errors are ignored.
+No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
+request and reSOT version in its User-Agent. Update opens the official release
+page, without downloading/installing an executable automatically.
+
 Version 0.3.1 adds the extended retail health-bar alignment, literal-text
 popup selection and mouse input for retail save-carousel arrows. The launcher
 shows its current version at the upper left: reSOT and Prince of Persia use
@@ -289,18 +296,23 @@ rasteriser, for comparison), `-Seconds N`, `-SnapshotEvery S` (frame dumps in
 `-Set @{RECOMP_APU_WAV='out.wav'}` (record the sound). More in
 [docs/RECOMP.md](../../docs/RECOMP.md).
 
-### Post processing quality and texture glow
+### Graphics preset (v0.3.2)
 
-`Texture glow effect` uses `[Graphics] TextureGlowEffect=0` by default.
-`Post processing` is separate: `PostProcessingQuality=0/1/2/3` selects
-Off/Low/Mid/High (Windows default Low). Low and Mid now budget auxiliary buffers,
-including projected-shadow maps, at 50% and 75% width/height. High retains
-original effect resolution. Off omits recognized blur/bloom chains, their
-fullscreen consumers, the final glow composite and recognized projected
-shadows; other auxiliary buffers use 25% while retaining their materials.
-Display/history buffers and tiny bloom levels are protected. The user confirms
-the option works (2026-10-20). See the shared [effect study](../../docs/POST-PROCESSING.md)
-for exact coverage and the remaining water/motion-blur identification work.
+`[Graphics] GraphicsPreset=0/1/2/3` selects debug Off / Reduced / Standard /
+Full. New installations default to Standard. Reduced uses 50% auxiliary-effect
+width/height and skips independently recognized shadow casters and their
+receivers; Standard uses the former High quality without final texture glow;
+Full adds that glow. Display/history buffers, tiny bloom levels, HUD, scene
+depth and game timing remain protected. Reduced does not promise an FPS gain
+on CPU-bound scenes. Unknown effects/materials are not arbitrarily removed.
+
+The normal in-game menu cycles Reduced, Standard, Full. Debug Off is retained
+only through `GraphicsPreset=0` and Windows F7. If loaded, the normal menu
+shows Debug Off until the user changes the preset. The separate Texture glow
+effect option is gone. Legacy PostProcessingQuality High/Mid migrate to
+Standard, Low to Reduced, Off stays Off; a legacy enabled glow selects Full
+unless Off was explicitly selected. New GraphicsPreset values take priority.
+Saving removes the obsolete keys. See [effect coverage](../../docs/POST-PROCESSING.md).
 
 F11 synchronizes the adopted SDL window's border and resize flags with Win32
 when switching native Vulkan/D3D12 between fullscreen and a movable, resizable
@@ -314,10 +326,6 @@ The F7-only `Console logs` switch is saved as `[Diagnostics] ConsoleLogs=1`.
 Error messages are red; warnings are yellow. The original file logs remain
 in `logs/<target>-err.txt` and `logs/<target>-out.txt`.
 
-The in-game reSOT Options post-processing selector offers Low/Mid/High.
-Off remains available through `[Graphics] PostProcessingQuality=0` in the INI
-and, on Windows, through F7. An existing Off setting is shown as Custom in
-the in-game menu and is preserved until the quality selector is changed.
 
 Vulkan uses dedicated translated vertex programs and optimized complex fragment
 programs for demo and retail. The host compiler (glslang/SPIRV-Tools) is built
@@ -374,3 +382,54 @@ visual correctness remains for the user's gameplay check.
 Android-only audio queue recovery and thermal FPS budgeting use SDL audio and
 PowerManager respectively; Windows keeps its XAudio2 queue and user-selected
 frame cap. The Android overlay icon changes do not alter Windows input mappings.
+
+Graphics test build (2026-10-24): Vulkan requests only used device features.
+The shared shadow filter accepts affine Q=0 coordinates; GPU readbacks pass,
+but demo/retail character shadows still need gameplay confirmation. Vulkan
+offers reference GPU shaders as an explicit developer override;
+`RESOT_NATIVE_COMPAT=1` forces that mode and `0` restores optimized shaders.
+Geometry caching remains enabled. Device corruption and black-frame reports
+are still pending phone validation; this fallback may reduce performance.
+Retail devices without precise occlusion use actual conservative hardware
+counts, which can change light intensity. Android uses the same implementation
+and an optional app-data `gpu-compatibility` file for developer A/B checks.
+
+Samsung/Poco follow-up: Mali/Immortalis and Adreno 640 now provisionally use
+CPU vertex transformation with compact fragment pipelines, avoiding duplicate
+large reference compilations. This is shared by Windows Vulkan and Android
+Vulkan. The prior reference-only default did not fix the Poco corruption;
+Samsung's compact GPU shaders compiled but lost the Vulkan device during
+execution. The new candidate is an isolation test, not a confirmed fix.
+RESOT_NATIVE_CPU_VSH=0/1 explicitly selects GPU/CPU vertices. Other GPUs,
+including Adreno 735, retain their existing GPU path and geometry reuse.
+New startup/pipeline diagnostics identify resource, translator, driver and
+submission progress; an affected Mali run is still needed to confirm whether
+this resolves either device report. Logs also identify driver/API versions.
+
+Shadow regression follow-up: commit `afc13cc` removed the depth clamp for
+all draws, including depthless Z16 character-shadow maps. Their traced screen
+depth exceeds the declared Z16 range in both games. Restore the old clamp
+only for known RGB565 256x256 caster passes with no depth buffer/test or
+blending, on D3D11, D3D12 and Vulkan. Scene/receiver depth and the fix for
+objects showing through remain unchanged. GPU caster and eye-crossing tests
+pass; updated gameplay shadows still need confirmation.
+
+The user subsequently confirms the shadow issue resolved. Broader gameplay
+and GPU coverage remain limited to the reported tests.
+
+The shared SDL patch also corrects zero-sized rectangular mip extents in
+Vulkan/D3D12 and common blit source UV dimensions. Synthetic GPU readback
+reproduced corrupt final mip contents before the correction; all tested levels
+now pass on both backends. D3D11's separate mip path is unchanged. Android
+Poco/Samsung validation of this correction is still pending.
+
+The new tap-version-to-share diagnostic ZIP is Android-only: it integrates
+Android's native sharesheet, temporary URI grants and app lifecycle. Windows
+keeps the existing logs/ and logs/history/ files and run.ps1 capture workflow;
+its version badge remains a display label. No Windows launcher layout or
+wording changes accompany this platform-specific sharing action.
+
+The Android publisher-integrity check is APK-specific. Windows has the same
+optional release-notice behavior and launcher styling; it does not compare
+Windows executables against Android signing certificates. Checks run only
+when the launcher is shown, not during launcher-skipping scripted game runs.

@@ -11,17 +11,30 @@
 
     <!-- rumble on the phone when no controller has its own -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
+        android:usesCleartextTraffic="false"
         android:isGame="true"
         android:appCategory="game"
         android:hardwareAccelerated="true"
         android:extractNativeLibs="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
         android:enableOnBackInvokedCallback="false">
+
+        <!-- On-demand diagnostic ZIPs, exposed only through temporary read grants. -->
+        <provider
+            android:name=".LogShareProvider"
+            android:authorities="${applicationId}.logs"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+        <service
+            android:name=".LogShareCleanupService"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="true" />
 
         <!-- the title screen: installed games, Start Demo / Start Game, and the
              installation from an Xbox ISO (port/windows/src/launcher.c on Windows) -->
