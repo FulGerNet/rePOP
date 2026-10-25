@@ -49,11 +49,12 @@
 #define WIN_W 1000
 #define WIN_H 640
 #define RES_FONT 201          /* port/windows/res/resot.rc */
-#define RES_LOGO 202
+#define RES_LOGO 202          /* the logo's letters */
+#define RES_LOGO_SAND 204     /* the sand around them, animated (draw_logo_sand) */
 /* The layout, on the 1000 x 640 plane LauncherView.java shares. */
 #define LOGO_Y 22
 #define LOGO_SIZE 132
-#define TEAL_X 150            /* the teal diamonds, left of the logo */
+#define TEAL_X 182            /* the teal diamonds, left of the logo */
 #define TITLE_Y 150
 #define TITLE_H 84
 #define SUB_Y 248             /* THE SANDS OF TIME, its centre line */
@@ -72,6 +73,8 @@
 #define CANCEL_W 240
 #define CANCEL_Y 498
 #define N_SAND 160
+#define N_EMBER 60            /* grains blown off the logo's sand */
+#define N_EMIT 400            /* where they start: points of that sand */
 #define WM_APP_ASK_ISO   (WM_APP + 1)
 #define WM_APP_EXTRACTED (WM_APP + 2)
 
@@ -89,6 +92,7 @@ typedef struct {
 typedef struct { GameInfo info; char dir[MAX_PATH]; } Install;
 typedef struct { RECT r; int enabled, visible; } Button;
 typedef struct { float x, y, vx, vy, size, alpha, phase; int glint; } Grain;
+typedef struct { float x, y, vx, vy, size, age, life; int glint; } Ember;
 /* Lettering drawn with a glow: its coverage and a blurred copy of it. */
 typedef struct { uint8_t *mask; float *glow; int w, h; } GlowText;
 
@@ -100,6 +104,10 @@ static struct {
     HDC logo_dc;
     HBITMAP logo_bmp;
     int logo_w, logo_h;
+    uint32_t *logo_sand;              /* premultiplied BGRA, logo_w x logo_h */
+    float emit[N_EMIT][2];            /* logo-relative points of that sand */
+    int n_emit;
+    Ember ember[N_EMBER];
     GlowText title, label_demo, label_game, label_cancel;
     HANDLE font_mem;
     int atlantis;
@@ -604,6 +612,96 @@ static void draw_sand(void)
     }
 }
 
+/* ── the logo's sand ───────────────────────────────────────────
+ * The logo comes in two layers: its letters, drawn still, and the sand
+ * streaming round them. The sand is redrawn every frame row by row, each row
+ * pushed sideways by two travelling waves and lit by a third, with a faint
+ * copy drifting up-wind; grains blow off it and fade. LauncherView.java does
+ * the same with the same numbers (in 2-unit strips). Positions are in units
+ * of the 1000 x 640 plane, which on Windows are pixels. */
+static float sand_row_dx(float y, float t)
+{
+    return 1.8f * sinf(y * 0.21f + t * 2.4f) + 0.9f * sinf(y * 0.53f - t * 3.9f);
+}
+
+static float sand_row_alpha(float y, float t)
+{
+    return 0.70f + 0.30f * sinf(y * 0.17f - t * 3.1f + 2.0f * sinf(t * 0.9f));
+}
+
+static void spawn_ember(Ember *e, int anywhere)
+{
+    const float *p = L.emit[rnd() % (unsigned)L.n_emit];
+    e->glint = (rnd() % 5) == 0;
+    e->x = (WIN_W - L.logo_w) / 2.0f + p[0];
+    e->y = LOGO_Y + p[1];
+    e->vx = frand(8.0f, 28.0f);
+    e->vy = frand(-16.0f, -3.0f);
+    e->size = e->glint ? frand(1.0f, 1.6f) : frand(0.6f, 1.2f);
+    e->life = frand(0.7f, 1.8f);
+    e->age = anywhere ? frand(0.0f, e->life) : 0.0f;
+}
+
+static void step_embers(float dt)
+{
+    int i;
+    if (!L.n_emit) return;
+    for (i = 0; i < N_EMBER; ++i) {
+        Ember *e = &L.ember[i];
+        e->x += (e->vx + 5.0f * sinf(L.time * 1.7f + i)) * dt;
+        e->y += e->vy * dt;
+        if ((e->age += dt) >= e->life) spawn_ember(e, 0);
+    }
+}
+
+/* One pass of the sand layer: every row shifted by dx(row) (+ shift_x), the
+ * whole moved up by shift_y rows, at alpha(row) * strength. */
+static void blit_logo_sand(float shift_x, int shift_y, float strength)
+{
+    int x0 = (WIN_W - L.logo_w) / 2, row, x;
+    for (row = 0; row < L.logo_h; ++row) {
+        int y = LOGO_Y + row - shift_y, di;
+        float dx = sand_row_dx((float)row, L.time) + shift_x, f, k = strength * sand_row_alpha((float)row, L.time);
+        const uint32_t *src = L.logo_sand + (size_t)row * L.logo_w;
+        if ((unsigned)y >= WIN_H) continue;
+        di = (int)floorf(dx); f = dx - di;
+        for (x = 0; x < L.logo_w + 3; ++x) {
+            int sx = x - di, dst_x = x0 + x;
+            uint32_t a0 = (unsigned)sx < (unsigned)L.logo_w ? src[sx] : 0;
+            uint32_t a1 = (unsigned)(sx - 1) < (unsigned)L.logo_w ? src[sx - 1] : 0;
+            float sa, sr, sg, sb, keep;
+            uint32_t *p, c;
+            if (!(a0 | a1) || (unsigned)dst_x >= WIN_W) continue;
+            /* the source sample between sx-1 and sx, premultiplied */
+            sa = ((a0 >> 24) * (1 - f) + (a1 >> 24) * f) / 255.0f * k;
+            sr = (((a0 >> 16) & 255) * (1 - f) + ((a1 >> 16) & 255) * f) * k;
+            sg = (((a0 >> 8) & 255) * (1 - f) + ((a1 >> 8) & 255) * f) * k;
+            sb = ((a0 & 255) * (1 - f) + (a1 & 255) * f) * k;
+            p = &L.px[y * WIN_W + dst_x];
+            c = *p;
+            keep = 1.0f - clampf(sa);
+            *p = 0xFF000000u
+                | (uint32_t)clampi((int)(((c >> 16) & 255) * keep + sr)) << 16
+                | (uint32_t)clampi((int)(((c >> 8) & 255) * keep + sg)) << 8
+                | (uint32_t)clampi((int)((c & 255) * keep + sb));
+        }
+    }
+}
+
+static void draw_logo_sand(void)
+{
+    int i;
+    if (!L.logo_sand) return;
+    blit_logo_sand(2.0f + 1.5f * sinf(L.time * 1.3f), 2, 0.25f * (0.5f + 0.5f * sinf(L.time * 2.1f)));
+    blit_logo_sand(0.0f, 0, 1.0f);
+    for (i = 0; i < N_EMBER && L.n_emit; ++i) {
+        const Ember *e = &L.ember[i];
+        float a = sinf(3.14159f * e->age / e->life);
+        if (e->glint) glow(e->x, e->y, e->size * 2.2f, 255, 196, 96, a * 0.85f);
+        else glow(e->x, e->y, e->size + 0.4f, 240, 140, 40, a * 0.8f);
+    }
+}
+
 /* Coverage of a text drawn in white on black (red channel), and its glow:
  * three box blurs of radius `blur`, close to a Gaussian. */
 static GlowText glow_text(HFONT font, const wchar_t *text, int w, int h, int blur)
@@ -836,6 +934,7 @@ static void render(void)
     GdiFlush();
     memcpy(L.px, L.bg, (size_t)WIN_W * WIN_H * 4);
     draw_sand();
+    draw_logo_sand();
     draw_glow_text(&L.title, 0, TITLE_Y, 0.55f, title_halo, title_top, title_bottom, 3, 1);
     /* "THE SANDS OF TIME" between two gold lines ending in open diamonds */
     half = L.sub_w / 2 + 18;
@@ -944,10 +1043,12 @@ static const void *resource(int id, DWORD *size)
     return loaded ? LockResource(loaded) : NULL;
 }
 
-static void load_logo(void)
+/* A PNG resource as premultiplied BGRA, LOGO_SIZE high (the width follows
+ * its shape, or *w when that is already set), into `out` (*w x LOGO_SIZE). */
+static int decode_png(int id, int *w_out, void *out)
 {
     DWORD size;
-    const void *png = resource(RES_LOGO, &size);
+    const void *png = resource(id, &size);
     IWICImagingFactory *factory = NULL;
     IWICStream *stream = NULL;
     IWICBitmapDecoder *decoder = NULL;
@@ -956,7 +1057,7 @@ static void load_logo(void)
     IWICFormatConverter *converter = NULL;
     UINT w = 0, h = 0;
     HRESULT hr;
-    if (!png) return;
+    if (!png) return 0;
     hr = CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,
                           &IID_IWICImagingFactory, (void **)&factory);
     if (SUCCEEDED(hr)) hr = IWICImagingFactory_CreateStream(factory, &stream);
@@ -966,39 +1067,60 @@ static void load_logo(void)
     if (SUCCEEDED(hr)) hr = IWICBitmapDecoder_GetFrame(decoder, 0, &frame_);
     if (SUCCEEDED(hr)) hr = IWICBitmapFrameDecode_GetSize(frame_, &w, &h);
     if (SUCCEEDED(hr) && w && h) {
-        L.logo_h = LOGO_SIZE;
-        L.logo_w = (int)((double)LOGO_SIZE * w / h + 0.5);
-        hr = IWICImagingFactory_CreateBitmapScaler(factory, &scaler);
+        if (!*w_out) *w_out = (int)((double)LOGO_SIZE * w / h + 0.5);
+        hr = out ? IWICImagingFactory_CreateBitmapScaler(factory, &scaler) : E_FAIL;
     } else hr = E_FAIL;
-    if (SUCCEEDED(hr)) hr = IWICBitmapScaler_Initialize(scaler, (IWICBitmapSource *)frame_, L.logo_w, L.logo_h,
+    if (SUCCEEDED(hr)) hr = IWICBitmapScaler_Initialize(scaler, (IWICBitmapSource *)frame_, *w_out, LOGO_SIZE,
                                                         WICBitmapInterpolationModeFant);
     if (SUCCEEDED(hr)) hr = IWICImagingFactory_CreateFormatConverter(factory, &converter);
     if (SUCCEEDED(hr)) hr = IWICFormatConverter_Initialize(converter, (IWICBitmapSource *)scaler,
                                                            &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,
                                                            NULL, 0.0, WICBitmapPaletteTypeCustom);
-    if (SUCCEEDED(hr)) {
-        BITMAPINFO bi = {0};
-        void *bits = NULL;
-        bi.bmiHeader.biSize = sizeof bi.bmiHeader;
-        bi.bmiHeader.biWidth = L.logo_w; bi.bmiHeader.biHeight = -L.logo_h;
-        bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
-        L.logo_dc = CreateCompatibleDC(NULL);
-        L.logo_bmp = CreateDIBSection(L.logo_dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
-        if (L.logo_bmp && SUCCEEDED(IWICFormatConverter_CopyPixels(converter, NULL, L.logo_w * 4,
-                                                                   L.logo_w * L.logo_h * 4, (BYTE *)bits))) {
-            SelectObject(L.logo_dc, L.logo_bmp);
-        } else {
-            if (L.logo_bmp) DeleteObject(L.logo_bmp);
-            DeleteDC(L.logo_dc);
-            L.logo_dc = NULL; L.logo_bmp = NULL;
-        }
-    }
+    if (SUCCEEDED(hr)) hr = IWICFormatConverter_CopyPixels(converter, NULL, *w_out * 4,
+                                                           *w_out * LOGO_SIZE * 4, (BYTE *)out);
     if (converter) IWICFormatConverter_Release(converter);
     if (scaler) IWICBitmapScaler_Release(scaler);
     if (frame_) IWICBitmapFrameDecode_Release(frame_);
     if (decoder) IWICBitmapDecoder_Release(decoder);
     if (stream) IWICStream_Release(stream);
     if (factory) IWICImagingFactory_Release(factory);
+    return SUCCEEDED(hr);
+}
+
+static void load_logo(void)
+{
+    BITMAPINFO bi = {0};
+    void *bits = NULL;
+    int w = 0, i, x, y;
+    decode_png(RES_LOGO, &w, NULL);            /* its width */
+    if (!w) return;
+    L.logo_w = w; L.logo_h = LOGO_SIZE;
+    bi.bmiHeader.biSize = sizeof bi.bmiHeader;
+    bi.bmiHeader.biWidth = L.logo_w; bi.bmiHeader.biHeight = -L.logo_h;
+    bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
+    L.logo_dc = CreateCompatibleDC(NULL);
+    L.logo_bmp = CreateDIBSection(L.logo_dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    if (L.logo_bmp && decode_png(RES_LOGO, &w, bits)) {
+        SelectObject(L.logo_dc, L.logo_bmp);
+    } else {
+        if (L.logo_bmp) DeleteObject(L.logo_bmp);
+        DeleteDC(L.logo_dc);
+        L.logo_dc = NULL; L.logo_bmp = NULL;
+    }
+    /* the sand, at the letters' size, and the points grains blow off from */
+    L.logo_sand = (uint32_t *)calloc((size_t)L.logo_w * L.logo_h, 4);
+    if (L.logo_sand && !decode_png(RES_LOGO_SAND, &w, L.logo_sand)) {
+        free(L.logo_sand);
+        L.logo_sand = NULL;
+    }
+    for (i = 0; L.logo_sand && i < 20000 && L.n_emit < N_EMIT; ++i) {
+        x = (int)(rnd() % (unsigned)L.logo_w); y = (int)(rnd() % (unsigned)L.logo_h);
+        if ((L.logo_sand[y * L.logo_w + x] >> 24) > 150) {
+            L.emit[L.n_emit][0] = x + 0.5f; L.emit[L.n_emit][1] = y + 0.5f;
+            L.n_emit++;
+        }
+    }
+    for (i = 0; i < N_EMBER && L.n_emit; ++i) spawn_ember(&L.ember[i], 1);
 }
 
 static HFONT make_font(const wchar_t *face, int px, int weight, int italic, DWORD quality)
@@ -1443,6 +1565,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wp, LPARAM l
         if (dt > 0.1f) dt = 0.1f;
         L.time += dt;
         step_sand(dt);
+        step_embers(dt);
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     }

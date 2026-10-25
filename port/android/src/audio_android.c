@@ -3,10 +3,14 @@
  * src/apu/apu_xaudio2.h on an SDL3 audio stream (AAudio/OpenSL underneath).
  *
  * One APU monitor frame
- * (256 stereo 16-bit samples at 48 kHz, 5.33 ms) per submission; when the
- * queue runs dry it is primed with two frames of silence. Pending audio is
- * cleared after a submission stall or a twelve-frame backlog, retaining the
- * newest block rather than replaying an old scene. Device latency is separate.
+ * (256 stereo 16-bit samples at 48 kHz, 5.33 ms) per submission. The APU's
+ * clock and the device's drift apart; that drift used to be absorbed by
+ * clearing the whole queue at twelve frames and priming silence when it ran
+ * dry, an audible click each time (2026-10-25 retail log: 23 clears and 30
+ * underruns in one session). The stream's playback rate now follows the queue
+ * depth by at most 0.8% (inaudible), holding it near XA2_QUEUE_TARGET, so
+ * those resets are left for real stalls: a submission gap over 150 ms or a
+ * backlog of XA2_QUEUE_MAX frames. Device latency is separate.
  */
 #include <SDL3/SDL.h>
 #include <stdio.h>
@@ -18,12 +22,26 @@
 #define XA2_CHANNELS    2
 #define XA2_BUF_SAMPLES 256
 #define XA2_FRAME_BYTES (XA2_BUF_SAMPLES * XA2_CHANNELS * 2)
-#define XA2_QUEUE_PRIME 2
-#define XA2_QUEUE_MAX   12
+#define XA2_QUEUE_PRIME  4
+#define XA2_QUEUE_TARGET 6
+#define XA2_QUEUE_MAX    24
 
 static SDL_AudioStream *s_stream;
 static int s_frames_written, s_queued, s_dropped, s_starved;
 static Uint64 s_last_submit;
+static float s_depth = XA2_QUEUE_TARGET, s_ratio = 1.0f;
+
+/* RE-SoT: drift control; the Windows output (apu_xaudio2.c) uses the same. */
+static float xa2_drift_ratio(float *depth, int frames)
+{
+    float error, ratio;
+    *depth += ((float)frames - *depth) * 0.02f;   /* ~50-frame average */
+    error = *depth - XA2_QUEUE_TARGET;
+    ratio = 1.0f + error * 0.0015f;
+    if (ratio > 1.008f) ratio = 1.008f;
+    if (ratio < 0.992f) ratio = 0.992f;
+    return ratio;
+}
 
 int xa2_init(void)
 {
@@ -45,8 +63,9 @@ int xa2_init(void)
     s_frames_written = 0;
     s_last_submit = 0;
     s_queued = s_dropped = s_starved = 0;
-    fprintf(stderr, "[XA2] SDL audio initialized (%d Hz stereo 16-bit, %d-sample frames)\n",
-            XA2_SAMPLE_RATE, XA2_BUF_SAMPLES);
+    s_depth = XA2_QUEUE_TARGET; s_ratio = 1.0f;
+    fprintf(stderr, "[XA2] SDL audio initialized (%d Hz stereo 16-bit, %d-sample frames,"
+            " drift-controlled queue of %d)\n", XA2_SAMPLE_RATE, XA2_BUF_SAMPLES, XA2_QUEUE_TARGET);
     return 1;
 }
 
@@ -87,6 +106,13 @@ int xa2_submit_samples(const int16_t *samples, int num_samples)
     }
     frames = queued < 0 ? 0 : queued / XA2_FRAME_BYTES;
     s_queued = frames;
+    {
+        float ratio = xa2_drift_ratio(&s_depth, frames);
+        if (ratio - s_ratio > 0.0005f || s_ratio - ratio > 0.0005f) {
+            s_ratio = ratio;
+            SDL_SetAudioStreamFrequencyRatio(s_stream, ratio);
+        }
+    }
     if (frames >= XA2_QUEUE_MAX) {
         s_dropped++;
         // Recover toward the current scene instead of discarding only its newest audio.

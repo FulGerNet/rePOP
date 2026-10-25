@@ -31,6 +31,11 @@
 #define RESOT_D3D_DEVICE_GLOBAL  0x0037B648
 #define RESOT_D3D_FENCE_ISSUED   0x2C
 #define RESOT_D3D_FENCE_GPU_PTR  0x30
+/* When the GPU is 0x2400 bytes or more behind the fence, sub_00370140
+ * writes NO_OPERATION 5 after WAIT_FOR_IDLE (0x003701F4-0x00370209) and
+ * waits on the KEVENT at device+0x1DCC (0x00370281-0x0037029B) that the
+ * PGRAPH interrupt for that NOP sets. */
+#define RESOT_D3D_NOTIFY_EVENT   0x1DCC
 
 /* Jade world bookkeeping, for crash reports. sub_0001F7E0 (the demo's
  * 0x00019890) stores the current world at 0x0001F7EE and reads the state

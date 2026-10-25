@@ -27,9 +27,11 @@ BEGIN
     END
 END
 
-// The launcher (src/launcher.c): the logo, and the Atlantis MF face for its
-// title and buttons when the build found res/AtlantisMF.ttf (CMakeLists.txt).
-202 RCDATA "../../../docs/media/reSOT.png"
+// The launcher (src/launcher.c): the logo in two layers (its letters, and the
+// sand around them, which the launcher animates), and the Atlantis MF face for
+// its title and buttons when the build found res/AtlantisMF.ttf (CMakeLists.txt).
+202 RCDATA "../../../docs/media/reSOT_letters.png"
+204 RCDATA "../../../docs/media/reSOT_sand.png"
 203 RCDATA "../default-options.ini"
 #ifdef RESOT_HAVE_LAUNCHER_FONT
 201 RCDATA "AtlantisMF.ttf"

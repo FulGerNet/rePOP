@@ -28,11 +28,17 @@
  * is what the frame thread produces per tick of its own clock. The queue is
  * the only slack between that clock and the sound card's: it is primed with
  * silence when it runs dry and a frame is dropped when it grows past
- * XA2_QUEUE_MAX, so latency stays between about 20 and 85 ms. */
+ * XA2_QUEUE_MAX, so latency stays between about 20 and 85 ms.
+ * RE-SoT: each of those is an audible click, and drift between the two clocks
+ * made them periodic. The source voice's frequency ratio now follows the queue
+ * depth by at most 0.8% (inaudible), holding it near XA2_QUEUE_TARGET; the
+ * prime and the drop are left for real stalls. Same control as the Android
+ * output (port/android/src/audio_android.c). Both targets. */
 #define XA2_BUF_SAMPLES   256
 #define XA2_NUM_BUFS      32
 #define XA2_QUEUE_PRIME   4
-#define XA2_QUEUE_MAX     16
+#define XA2_QUEUE_TARGET  8
+#define XA2_QUEUE_MAX     24
 
 static IXAudio2               *g_xa2 = NULL;
 static IXAudio2MasteringVoice *g_xa2_master = NULL;
@@ -147,6 +153,18 @@ int xa2_submit_samples(const int16_t *samples, int num_samples)
 
     IXAudio2SourceVoice_GetState(g_xa2_source, &state, XAUDIO2_VOICE_NOSAMPLESPLAYED);
     g_xa2_queued = (int)state.BuffersQueued;
+    {
+        static float depth = XA2_QUEUE_TARGET, applied = 1.0f;
+        float ratio;
+        depth += ((float)state.BuffersQueued - depth) * 0.02f;   /* ~50-frame average */
+        ratio = 1.0f + (depth - XA2_QUEUE_TARGET) * 0.0015f;
+        if (ratio > 1.008f) ratio = 1.008f;
+        if (ratio < 0.992f) ratio = 0.992f;
+        if (ratio - applied > 0.0005f || applied - ratio > 0.0005f) {
+            applied = ratio;
+            IXAudio2SourceVoice_SetFrequencyRatio(g_xa2_source, ratio, XAUDIO2_COMMIT_NOW);
+        }
+    }
     if ((int)state.BuffersQueued >= XA2_QUEUE_MAX) {
         g_xa2_dropped++;
         return 0;

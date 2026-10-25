@@ -1,8 +1,10 @@
 # reSOT for Android
 
-Version 0.3.2 adds Reduced/Standard/Full graphics presets and a background
+Version 0.3.3 runs the game and the GPU executor in parallel on retail, fixes
+a retail mid-game freeze, reduces audio crackle and brings the new animated
+logo. Version 0.3.2 added Reduced/Standard/Full graphics presets and a background
 stable-release check with optional Update / Close buttons styled like the
-launcher. The displayed version is 0.3.2. Offline/rate-limit errors are ignored.
+launcher. The displayed version is 0.3.3. Offline/rate-limit errors are ignored.
 No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
 request and reSOT version in its User-Agent. Update opens the official release
 page, without downloading/installing an executable automatically.
@@ -149,7 +151,7 @@ and refuse it unless its SHA-256 is the one in `source/<target>/target.h`.
 The title screen is the Windows launcher's (`port/windows/src/launcher.c`),
 redrawn with Android's canvas in `LauncherView.java`: the same layout, the
 night-blue ground with its rosettes and eight-point stars, gold rules and
-twin diamonds, gold hexagonal buttons, logo, Atlantis MF face (when
+twin diamonds, gold hexagonal buttons, logo with the same animated sand, Atlantis MF face (when
 `port/windows/res/AtlantisMF.ttf` is present; see
 [LICENSING.md](../../docs/LICENSING.md)), drifting sand, Start Demo / Start
 Game with what is installed under each, Install from ISO and the extraction

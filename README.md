@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/reSOT.png" alt="reSOT" width="192">
+  <img src="docs/media/reSOT.png" alt="reSOT" width="256">
 </p>
 
 <p align="center">
@@ -10,7 +10,7 @@
 
 **Prince of Persia: The Sands of Time, recompiled from Xbox to native Windows and Android.**
 
-**Current version: v0.3.2.** reSOT is an advanced, playable recompilation and
+**Current version: v0.3.3.** reSOT is an advanced, playable recompilation and
 port of the original Xbox retail game and E3 2003 demo. Both games now run
 well on Windows and Android in the configurations tested by the user, with
 working gameplay, menus, movies, audio and controller support. The project
@@ -48,7 +48,19 @@ letterboxed cutscene frames. These are gameplay examples, not a full-game test.*
 
 *Windows demo captures from a scripted 185-second run, 2026-10-14, at 16:9 Hor+.*
 
-## What's included in v0.3.2
+## What's included in v0.3.3
+
+- **Faster rendering.** On retail the game no longer waits for the GPU executor
+  after every KickOff, so the two run in parallel. In a scripted Windows run this
+  gave +20-35% FPS; Android gameplay has not been measured yet.
+- **Mid-game freeze fix (retail).** D3D's wait for a GPU far behind its fence
+  (NO_OPERATION 5 interrupt) is now modelled. It matches the freeze seen in
+  chapter 25 with only the audio playing; not yet replayed at those places.
+- **Less audio crackle.** The output queue follows the sound card's clock by
+  a small rate change instead of clearing or padding, on Windows and Android.
+- **New logo and icons.** The launchers animate the sand of the new reSOT logo.
+
+## What was included in v0.3.2
 
 - **Android GPU compatibility.** Corrected zero-sized rectangular mip levels
   in SDL. The user confirms Poco colored-pixel corruption is resolved and
@@ -117,8 +129,8 @@ The release also retains the v0.3.0 features below.
   HUD clearance, repaired log-source selection, and retained the shared
   graphics, input and diagnostic options.
 
-Both Windows targets and the Android release APK build as **0.3.2**;
-Android uses **versionCode 7**. Shader compilation, pointer, touch and GPU
+Both Windows targets and the Android release APK build as **0.3.3**;
+Android uses **versionCode 8**. Shader compilation, pointer, touch and GPU
 regressions passed in the recorded release checks. The user confirms the
 extended health-bar alignment, popup/save-carousel touch changes and launcher
 presentation on the Android test phone. See [VALIDATION.md](docs/VALIDATION.md)
@@ -152,6 +164,9 @@ every level, device or exact console accuracy.
 | Native Direct3D 11 renderer | 🟢 Windows default | 🟢 Windows default |
 | Native Direct3D 12 renderer | 🟡 Optional Windows backend; startup and GPU tests pass | 🟡 Optional Windows backend; broader gameplay checks pending |
 | Widescreen Hor+ and HUD layout | 🟢 Widened view with preserved HUD proportions; artwork edges remain limited | 🟢 Widened view; ultrawide sand-tank alignment confirmed; some dialog layout limits remain |
+| Asynchronous KickOff (title and GPU executor in parallel) | ⚪ Off (synchronous, not yet checked on the demo XBE) | 🟡 On by default; Windows scripted run +20-35% FPS, first level renders; Android gameplay not yet measured |
+| Mid-game freeze with audio still playing (BlockOnFence NOTIFY) | ⚪ Same D3D path not yet examined in the demo XBE | 🟡 Cause identified in the 2026-10-25 Android log and handled; not yet replayed at the freezing places |
+| Audio crackle from output-queue resets | 🟡 Drift-controlled output queue on both hosts; listening check pending | 🟡 Windows run: 0 drops and 0 underruns; listening check pending |
 
 | Vulkan shader/material/geometry caches | 🟢 Shared optimizations and regression checks | 🟢 Gameplay geometry reuse observed; user reports improved performance |
 | Launcher, game-folder selection and ISO installation | 🟢 Available on both hosts; demo ISO installation used by the user | 🟢 Available on both hosts; separate retail game detection |
@@ -273,6 +288,7 @@ It is regenerated from the user's own checked XBE and is never edited by hand.
 | `Assets/`, `research/`, `bin/`, `build*/`, `logs/` | Private game files, analysis or local outputs; ignored |
 
 - [Validation and observed results](docs/VALIDATION.md)
+- [v0.3.3 release notes](docs/releases/v0.3.3.md)
 - [v0.3.2 release notes](docs/releases/v0.3.2.md)
 - [v0.3.1 release notes](docs/releases/v0.3.1.md)
 - [Recompilation pipeline and target evidence](docs/RECOMP.md)

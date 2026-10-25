@@ -1,5 +1,114 @@
 # Validation log
 
+## 2026-10-25: v0.3.3, new logo with animated sand, icons
+
+The user chose their `reSOT.png` (copied to `docs/media/reSOT.png`; the
+previous one is byte-identical to `docs/media/reSOT_placeholder_logo.png`,
+and `reSOT_old.png`, `reSOT_old_icon.png`, `reSOT_old_icon.ico` are kept).
+It was split into `reSOT_letters.png` (blue fill and gold border) and
+`reSOT_sand.png` (the rest), 640 px wide. Both launchers draw the letters
+still and the sand row by row with two travelling sideways waves, a lit
+band, a faint up-wind copy and 60 grains blown off it (launcher.c
+`draw_logo_sand`, LauncherView.java `drawLogoSand`, same numbers). The teal
+diamonds moved left (TEAL_X 150 -> 182) because the new logo is wider.
+App icons: the logo on a navy disc with a gold ring (Android mipmaps,
+`port/windows/res/resot.ico`). Version 0.3.3, Android versionCode 8.
+
+Checks: `tools/recomp.ps1 -Target xbox-retail -BuildOnly` and `xbox-demo`,
+`tools/build-android.ps1` pass. The Windows retail launcher was opened and
+captured three times 0.35 s apart: v0.3.3 label, the logo's sand in a different
+position in each capture, grains around it, diamonds clear of the logo. APK
+SHA-256 6606B5A2DC91F6C607FEB1B47051BA65BCC2DECD9E5E6CF54147F4355A0A2E6A
+installed; it contains both logo layers. Not checked: the Android launcher on
+screen (the phone was in use), the icons on the Android home screen and in
+Explorer, the demo executable's launcher.
+
+## 2026-10-25: asynchronous KickOff, BlockOnFence notify, audio drift control
+
+Evidence (POCO F6, root over adb; scratch copies, not committed):
+
+- `logs/history/20261025-130544-25366-xbox-retail-err.txt`: after
+  `2501_GearRoom` is merged the title's KickOffs fall to 1,339 in 10 s and
+  then to 0 while `[APU] output` stays non-silent and other threads keep making
+  kernel calls (the user's "freeze with only the audio"). The last
+  NO_OPERATION the executor saw was `0x0100 ... last=0x00000005`. It is the only
+  zero-KickOff stall in the 42 runs kept in `history/` besides a movie phase.
+- Every retail log of 2026-10-25 shows all KickOffs waiting (e.g. 8,354 of
+  8,354, 6.0 s of 10 s) with the executor busy 7.4-9.0 s of 10 s; `top -H` on
+  a running retail session: executor thread 73-80%, title thread about 59%,
+  at 84 fps.
+
+Cause of the waiting: retail KickOff (`sub_0036FF60`, `sub_00370010` in
+`target_hooks.c`) sets NV_PFB_WC_FLUSH bit 0x10000 and waits for it to clear;
+only the ack thread cleared it, at the top of its loop, after executing the
+previous segment and presenting. Title and executor therefore ran in series.
+
+Cause proposed for the freeze (not reproduced at the freezing places): when
+the GPU is 0x2400 bytes or more behind a fence, retail BlockOnFence
+(`sub_00370140`) writes WAIT_FOR_IDLE + NO_OPERATION 5 (0x003701F4-0x00370209),
+calls `sub_0036FE60(dev, 1)`, which spins at 0x0036FE80 until
+`((fence << 2) ^ [0xFD400B10]) & 0x7C` is zero, and waits on the KEVENT at
+device+0x1DCC (0x00370281-0x0037029B) that the PGRAPH interrupt for that NOP
+sets. Nothing modelled 0xFD400B10 or that interrupt, so the title could spin
+or wait forever making no kernel calls. Making the title run ahead reached
+this path at every startup (seen with `debuggerd -b`: the title in
+`sub_0036FE60` from `sub_00370140`, then in the kernel wait from
+`sub_00370140+1560`), which is how it was found.
+
+Changes:
+- `xbox_memory_layout.c`: `RESOT_KICK_AHEAD` (default 16 for retail, 0 for
+  the demo). The title clears the flush bit itself after a full barrier and
+  waits only when more than that many KickOffs are unscanned. GET still moves
+  only after a scan. The retail fence mirror is published from the
+  (PUT, issued fence) pair the title records when it writes PUT
+  (`RESOT_KICK_PAIR=0` falls back to the old snapshot). PGRAPH 0x400B10 bits
+  2-6 mirror the published fence.
+- `nv2a_pb_exec.c`, `kernel_bridge.c`, `target.h` (retail
+  `RESOT_D3D_NOTIFY_EVENT 0x1DCC`), both hosts' main: the executor sets the
+  device+0x1DCC KEVENT when it executes NO_OPERATION 5. D3D clears its
+  SignalState (device+0x1DD0) before inserting the NOP.
+- Audio, both hosts (`audio_android.c`, `apu_xaudio2.c`): the output rate
+  follows the queue depth by at most 0.8% instead of clearing the queue
+  (Android, at 12 frames) or dropping frames, and priming silence on drift.
+- Android link: `-Wl,-Bsymbolic-functions`; jump slots for `sub_*` in
+  `libresot_retail.so` went from 8,743 to 0, symbols still exported.
+
+Commands and results:
+- `tools/recomp.ps1 -Target xbox-retail -BuildOnly` and `-Target xbox-demo
+  -BuildOnly`: both pass. `tools/build-android.ps1`: passes.
+- Windows, Vulkan, same pad script, 100 s
+  (`tools/run.ps1 -Target xbox-retail -Seconds 100 -Windowed -Set
+  @{RESOT_RENDERER='vulkan'; RECOMP_PAD_SCRIPT=...; RESOT_KICK_AHEAD=0|16}`):
+  synchronous menu 174-221 fps, first level 134-192 fps, KickOffs all
+  waiting; asynchronous menu 226-275 fps, first level 177-216 fps, 3-8% of
+  KickOffs waiting, executor busy 9.7-9.9 s of 10 s (now the limit).
+  NO_OPERATION 5 reached once in the asynchronous runs and the game went on.
+  A desktop capture at 90 s shows the first level rendered normally.
+  Audio in the final run: queue 7-9, 0 dropped, 0 starved (synchronous run:
+  1 starved).
+- Android: the APK with only the asynchronous KickOff stalled at startup in
+  BlockOnFence (above); the notify and 0x400B10 mirror were added after. The
+  final APK (SHA-256 51E27995C21FF43C318060D111F6DF60C27A10F32D1F74149FEC8AC13B3D5304)
+  is installed but was not run by the agent: the phone was in use.
+
+Follow-up, same day: the user reports that APK does not start. Over adb the
+title was in `sub_00370140+1560`; the kernel summary shows 18,009,450
+KeWaitForSingleObject calls. The D3D event at device+0x1DCC is built by D3D
+without KeInitializeEvent, so with RECOMP_TITLE_KEVENTS off the bridge passed
+its guest address to the host as a handle, every wait failed at once and
+0x00370290 retried forever. `ke_guest_event` now always accepts that one
+registered event (`xbox_Nv2aNotifyEventVa`); other title-built events are
+unchanged. `tools/build-android.ps1`, retail and demo `-BuildOnly` pass.
+APK SHA-256 B6C89BE221AF675DD9C59B620A15B006ACFFFB98AD87D9367F8EB3DBB72FA63A,
+installed and started over adb: main menu reached, 110-121 fps in the menu
+(Vulkan), screenshot shows the menu rendered normally.
+
+Not checked: Android gameplay with the final APK, its frame rate,
+the freezing places in chapter 25 (`2501_GearRoom`, `2501_TowerInside*`),
+listening for crackle on either host, the demo (asynchronous KickOff off; its
+D3D's BlockOnFence was not examined), Direct3D 11/12 with the asynchronous
+KickOff, long sessions.
+
 ## 2026-10-24: v0.3.2 presets, APK integrity and launcher updates
 
 User acceptance: the last mip-fix APK resolves the Poco colored-pixel issue

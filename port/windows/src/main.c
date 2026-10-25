@@ -927,6 +927,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 #ifdef RESOT_D3D_DEVICE_GLOBAL
     xbox_Nv2aMirrorFence(RESOT_D3D_DEVICE_GLOBAL, RESOT_D3D_FENCE_ISSUED,
                          RESOT_D3D_FENCE_GPU_PTR);
+#ifdef RESOT_D3D_NOTIFY_EVENT
+    xbox_Nv2aNotifyEvent(RESOT_D3D_DEVICE_GLOBAL, RESOT_D3D_NOTIFY_EVENT);
+#endif
 #else
     fprintf(stderr, "[BOOT] no D3D fence layout for this target yet\n");
 #endif

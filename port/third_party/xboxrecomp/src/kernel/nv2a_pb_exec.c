@@ -3487,6 +3487,13 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
     case 0x1D70:                                  /* BACK_END_WRITE_SEMAPHORE_RELEASE */
         xbox_Nv2aFenceRelease(param);
         break;
+    case 0x0100:                                  /* NO_OPERATION */
+        /* RE-SoT: a nonzero NOP is D3D's software interrupt; 5 releases
+         * BlockOnFence (xbox_Nv2aNotifyEvent). Still counted as unhandled. */
+        if (param)
+            xbox_Nv2aSoftwareNotify(param);
+        note_unhandled(method, param);
+        break;
     default:
         if (method >= 0x0260 && method < 0x0280) {         /* ALPHA_ICW(i) */
             s_gpu.rc.alpha_icw[(method - 0x0260) / 4] = param;

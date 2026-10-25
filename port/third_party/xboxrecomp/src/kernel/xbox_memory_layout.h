@@ -195,6 +195,11 @@ int xbox_Nv2aMirrorFence(uint32_t device_ptr_va,
  * preceding guest buffers; timer-based mirroring is only a fallback. */
 void xbox_Nv2aFenceOffset(uint32_t offset);
 void xbox_Nv2aFenceRelease(uint32_t value);
+/* RE-SoT: the KEVENT at [device_ptr_va]+event_off that D3D waits on after a
+ * NO_OPERATION 5; the executor sets it when it reaches that NOP, as the
+ * console's PGRAPH interrupt does. */
+void xbox_Nv2aNotifyEvent(uint32_t device_ptr_va, uint32_t event_off);
+void xbox_Nv2aSoftwareNotify(uint32_t param);
 
 /* RE-SoT: physical addresses for the audio processor.
  *

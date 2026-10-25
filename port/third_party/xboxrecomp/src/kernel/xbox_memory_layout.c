@@ -169,8 +169,45 @@ static volatile LONG g_nv2a_ack_stop = 0;
  * a millisecond, as before within one tick. */
 static HANDLE g_nv2a_kick_ev, g_nv2a_ack_ev;
 
+/* RE-SoT: asynchronous KickOff (RESOT_KICK_AHEAD=<segments>, 0 = synchronous).
+ *
+ * The busy bit the title waits on in KickOff is NV_PFB_WC_FLUSH: the console
+ * flushes the CPU's write-combining buffers and clears it within
+ * microseconds, long before the GPU has executed anything. Here only the ack
+ * thread cleared it, at the top of its loop, i.e. after it had executed the
+ * previous segment and presented. Every KickOff therefore waited for the
+ * whole executor: retail 2026-10-25 Android logs show all ~8,500 KickOffs per
+ * 10 s waiting, 4.0-7.1 s of every 10 s, while the executor itself was busy
+ * 7.4-9.0 s; title and executor ran in series rather than in parallel.
+ *
+ * With a positive limit the title clears the bit itself after a full memory
+ * barrier (what the flush means) and continues, unless it is more than that
+ * many submissions ahead of the executor. GET still advances only after a
+ * scan, so the ring keeps its back-pressure. The retail fence mirror is
+ * published from the (PUT, issued fence) pair the title recorded when it
+ * wrote PUT, so a fence is never reported for commands that were not yet
+ * scanned however far the title has got. Default on for retail only; the
+ * demo publishes its fence before the scan and keeps the synchronous wait. */
+static void kick_capture(void);
+static volatile LONG s_kick_issued, s_kick_done;
+
+static int kick_ahead(void)
+{
+    static int ahead = -1;
+    if (ahead < 0) {
+        const char *e = getenv("RESOT_KICK_AHEAD");
+        ahead = e ? atoi(e) : (RESOT_RUNTIME_RETAIL ? 16 : 0);
+        if (ahead < 0) ahead = 0;
+        fprintf(stderr, "  [NV2A] KickOff: %s (%d submissions ahead)\n",
+                ahead ? "asynchronous" : "synchronous", ahead);
+    }
+    return ahead;
+}
+
 void xbox_Nv2aKick(void)
 {
+    if (kick_ahead())
+        kick_capture();
     if (g_nv2a_kick_ev)
         SetEvent(g_nv2a_kick_ev);
 }
@@ -201,7 +238,23 @@ void xbox_Nv2aWaitClear(uint32_t va, uint32_t mask)
 {
     volatile uint32_t *r = (volatile uint32_t *)((uintptr_t)va + g_memory_offset);
     LONGLONG t0 = 0, waited;
+    int ahead = kick_ahead();
     InterlockedIncrement(&s_kick_calls);
+    if (ahead) {
+        LONG old;
+        MemoryBarrier();   /* the write-combining flush itself */
+        do old = *(volatile LONG *)r;
+        while ((old & (LONG)mask)
+               && InterlockedCompareExchange((volatile LONG *)r, old & ~(LONG)mask, old) != old);
+        while (s_kick_issued - s_kick_done >= ahead) {
+            if (!t0) t0 = kick_now();
+            if (g_nv2a_kick_ev) SetEvent(g_nv2a_kick_ev);
+            if (g_nv2a_ack_ev)
+                WaitForSingleObject(g_nv2a_ack_ev, 1);
+            else
+                Sleep(0);
+        }
+    }
     while (*r & mask) {
         if (!t0) t0 = kick_now();
         xbox_Nv2aKick();
@@ -1019,6 +1072,121 @@ static void fence_mirrors_commit(void)
 #endif
 }
 
+/* RE-SoT: the (PUT, issued fence) pair of the latest asynchronous KickOff.
+ * Recorded by the title just after it wrote PUT: every fence issued by then
+ * is in the pushbuffer below that PUT. */
+static CRITICAL_SECTION s_kick_pair_lock;
+static volatile LONG s_kick_pair_init;
+static int s_kick_pair_valid;
+static uint32_t s_kick_pair_put, s_kick_pair_fence[XBOX_MAX_FENCE_MIRRORS];
+
+static void kick_pair_lock(void)
+{
+    if (s_kick_pair_init != 2) {
+        if (InterlockedCompareExchange(&s_kick_pair_init, 1, 0) == 0) {
+            InitializeCriticalSection(&s_kick_pair_lock);
+            InterlockedExchange(&s_kick_pair_init, 2);
+        } else while (s_kick_pair_init != 2) Sleep(0);
+    }
+    EnterCriticalSection(&s_kick_pair_lock);
+}
+
+static void kick_capture(void)
+{
+    if (!g_nv2a_memory) return;
+    kick_pair_lock();
+    s_kick_pair_put = *(volatile uint32_t *)((char *)g_nv2a_memory + NV2A_USER_DMA_PUT);
+    for (int i = 0; i < g_fence_mirror_count; i++) {
+        uint32_t dev;
+        s_kick_pair_fence[i] = 0;
+        if (!fence_readable(g_fence_mirrors[i].device_ptr_va, 4)) continue;
+        dev = *(volatile uint32_t *)((uintptr_t)g_fence_mirrors[i].device_ptr_va + g_memory_offset);
+        if (fence_readable(dev + g_fence_mirrors[i].put_off, 4))
+            s_kick_pair_fence[i] = *(volatile uint32_t *)
+                ((uintptr_t)(dev + g_fence_mirrors[i].put_off) + g_memory_offset);
+    }
+    s_kick_pair_valid = 1;
+    LeaveCriticalSection(&s_kick_pair_lock);
+    InterlockedIncrement(&s_kick_issued);
+}
+
+/* After a scan up to `put`: publish the fences recorded with that PUT. If the
+ * title has kicked again since, its pair names a later PUT and nothing is
+ * published now; the next scan catches up. Retail only (see kick_ahead). */
+static void kick_pair_fences(uint32_t put)
+{
+#if RESOT_RUNTIME_RETAIL
+    static int matched, missed, on = -1;
+    int ok;
+    if (on < 0) on = !getenv("RESOT_KICK_PAIR") || atoi(getenv("RESOT_KICK_PAIR")) != 0;
+    if (!on) return;
+    kick_pair_lock();
+    ok = s_kick_pair_valid && s_kick_pair_put == put;
+    for (int i = 0; i < g_fence_mirror_count; i++) {
+        if (!g_fence_mirrors[i].pending_ptr) continue;
+        if (ok) g_fence_mirrors[i].pending_value = s_kick_pair_fence[i];
+        else g_fence_mirrors[i].pending_ptr = 0;
+    }
+    LeaveCriticalSection(&s_kick_pair_lock);
+    if (ok ? !matched++ : !missed++)
+        fprintf(stderr, "  [NV2A] async KickOff fence pair %s (PUT 0x%08X)\n",
+                ok ? "matched" : "behind the title", put);
+#else
+    (void)put;
+#endif
+}
+
+/* RE-SoT: D3D's BlockOnFence interrupt path (see xbox_Nv2aNotifyEvent). */
+static uint32_t s_notify_device, s_notify_off;
+
+void xbox_Nv2aNotifyEvent(uint32_t device_ptr_va, uint32_t event_off)
+{
+    s_notify_device = device_ptr_va;
+    s_notify_off = event_off;
+}
+
+/* The event's guest VA, 0 when none is registered or the device is not up. */
+uint32_t xbox_Nv2aNotifyEventVa(void)
+{
+    uint32_t dev;
+    if (!s_notify_device || !fence_readable(s_notify_device, 4)) return 0;
+    dev = *(volatile uint32_t *)((uintptr_t)s_notify_device + g_memory_offset);
+    if (!dev || !fence_readable(dev + s_notify_off, 16)) return 0;
+    return dev + s_notify_off;
+}
+
+void xbox_Nv2aSoftwareNotify(uint32_t param)
+{
+    extern void xbox_GuestSetEvent(uint32_t guest_va);
+    static int told;
+    uint32_t va;
+    if (param != 5 || !(va = xbox_Nv2aNotifyEventVa())) return;
+    if (!told++)
+        fprintf(stderr, "  [NV2A] NO_OPERATION 5 -> D3D event 0x%08X\n", va);
+    xbox_GuestSetEvent(va);
+}
+
+/* RE-SoT: PGRAPH 0x400B10 bits 2-6 follow the GPU's completed fence.
+ * Retail D3D 0x0036FE80 (from the fence wait 0x00370140) spins until
+ * ((fence << 2) ^ [0xFD400B10]) & 0x7C is zero. Nothing modelled the
+ * register, so it read 0; with a synchronous KickOff the fence was always
+ * current and that wait was never entered. Once the title runs ahead it is,
+ * and spun forever (2026-10-25, Windows and Android retail at startup).
+ * Mirrored from the fence the executor has published, so it never claims
+ * more than was scanned. */
+static void fence_status_mirror(volatile uint32_t *regs)
+{
+    uint32_t dev, ptr, value;
+    volatile uint32_t *status = (volatile uint32_t *)((char *)regs + 0x400B10);
+    if (!g_fence_mirror_count || !fence_readable(g_fence_mirrors[0].device_ptr_va, 4)) return;
+    dev = *(volatile uint32_t *)((uintptr_t)g_fence_mirrors[0].device_ptr_va + g_memory_offset);
+    if (!fence_readable(dev + g_fence_mirrors[0].get_ptr_off, 4)) return;
+    ptr = *(volatile uint32_t *)((uintptr_t)(dev + g_fence_mirrors[0].get_ptr_off) + g_memory_offset);
+    if (!fence_readable(ptr, 4)) return;
+    value = *(volatile uint32_t *)((uintptr_t)ptr + g_memory_offset);
+    *status = (*status & ~0x7Cu) | ((value << 2) & 0x7Cu);
+}
+
 static int s_nv2a_trace = 0;
 
 /* The display framebuffer, as reported by AvSetDisplayMode. Checksummed once a
@@ -1158,7 +1326,11 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
             static DWORD  last_put_ms;
             static uint32_t last_put;
             DWORD now_ms = GetTickCount();
-            uint32_t put = *(volatile uint32_t *)((char *)regs + NV2A_USER_DMA_PUT);
+            /* RE-SoT: KickOffs counted before PUT is read are covered by it. */
+            LONG issued = s_kick_issued;
+            uint32_t put;
+            MemoryBarrier();
+            put = *(volatile uint32_t *)((char *)regs + NV2A_USER_DMA_PUT);
             if (put != last_put || (now_ms - last_put_ms) > 2000) {
                 /* Survey the segment the title just submitted, once. */
                 {
@@ -1259,6 +1431,13 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
                                               + NV2A_USER_DMA_GET);
                     *get = put;
                 }
+                if (kick_ahead()) {
+                    if (put != last_put)
+                        kick_pair_fences(put);
+                    InterlockedExchange(&s_kick_done, issued);
+                    if (g_nv2a_ack_ev)
+                        SetEvent(g_nv2a_ack_ev);   /* a title held back by the limit */
+                }
                 last_put = put; last_put_ms = now_ms;
                 /* RE-SoT: optional host presentation waits only after the
                  * submission's fences and GET are visible to the title. */
@@ -1293,9 +1472,16 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
                             g == put ? "" : "  (GPU behind)");
                     fflush(stderr);
                 }
+            } else if (kick_ahead() && s_kick_done != issued) {
+                /* RE-SoT: a KickOff that did not move PUT has nothing to scan. */
+                InterlockedExchange(&s_kick_done, issued);
+                if (g_nv2a_ack_ev)
+                    SetEvent(g_nv2a_ack_ev);
             }
         }
         fence_mirrors_commit(); /* RE-SoT: submitted guest memory has now been consumed. */
+        if (kick_ahead())
+            fence_status_mirror(regs);
         if (s_nv2a_trace) {
             static uint32_t last_start = 0xFFFFFFFFu;
             uint32_t start = *(volatile uint32_t *)((char *)regs + 0x600800);

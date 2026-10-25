@@ -126,6 +126,11 @@ function(resot_android_game id lib runtime_define)
     add_dependencies(${lib} main_hook file_redirect_hook gsl_alloc_hook hook_impl)
     # Unresolved symbols are build errors, not a crash when the game starts.
     target_link_options(${lib} PRIVATE "-Wl,--no-undefined")
+    # RE-SoT: the lifted routines stay exported (the crash handler names them
+    # with dladdr), which made every call between them go through the PLT:
+    # 8,743 sub_* jump slots in the 2026-10-25 retail library. Bind calls
+    # inside the library directly; nothing outside it interposes them.
+    target_link_options(${lib} PRIVATE "-Wl,-Bsymbolic-functions")
 endfunction()
 
 resot_android_game(xbox-demo resot_demo RESOT_RUNTIME_DEMO)

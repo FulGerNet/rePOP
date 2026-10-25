@@ -1604,6 +1604,26 @@ static void bridge_KeSetEvent(void)
         g_eax = 0;
 }
 
+/* RE-SoT: KeSetEvent from a host thread on a title's own KEVENT (the GPU
+ * executor standing in for a D3D interrupt). Same paths as the bridge. */
+void xbox_GuestSetEvent(uint32_t guest_va)
+{
+    int type;
+    HANDLE h = ke_guest_event(guest_va, &type);
+    if (h) {
+        BRIDGE_MEM32(guest_va + 4) = 1;
+        SetEvent(h);
+        return;
+    }
+    h = ke_shadow_lookup(guest_va);
+    if (!h)
+        h = bridge_resolve_handle(guest_va);
+    if (h)
+        SetEvent(h);
+    else
+        BRIDGE_MEM32(guest_va + 4) = 1;   /* not waited on yet: the wait reads it */
+}
+
 /* ── KeWaitForSingleObject (ordinal 159) ─────────────────── */
 static void bridge_KeWaitForSingleObject(void)
 {
@@ -6539,8 +6559,15 @@ static HANDLE ke_guest_event(uint32_t guest_va, int *type)
         const char *e = getenv("RECOMP_TITLE_KEVENTS");
         enabled = e && *e == '1';
     }
-    if (!enabled)
-        return NULL;
+    /* RE-SoT: D3D's BlockOnFence event always qualifies: its setter, the
+     * NO_OPERATION 5 interrupt, is modelled (xbox_Nv2aNotifyEvent). Without
+     * this retail's wait at 0x00370290 failed at once and was retried forever
+     * (Android, 2026-10-25: 18 million KeWaitForSingleObject calls). */
+    if (!enabled) {
+        extern uint32_t xbox_Nv2aNotifyEventVa(void);
+        if (!guest_va || guest_va != xbox_Nv2aNotifyEventVa())
+            return NULL;
+    }
     if (guest_va < 0x10000u || (guest_va & 3u))
         return NULL;
     if (guest_va >= 0x04000000u && (guest_va < 0x80000000u || guest_va >= 0x84000000u))
