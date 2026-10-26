@@ -28,7 +28,9 @@ window captures at 45/70/95 s):
 - retail with the same build (asynchronous): first level drawn, 145-152 fps.
 
 Logo: `docs/media/reSOT_logo.png` used as it is for the README, both launchers
-(top) and the app icons (squared with transparency, no frame). The Prince of
+(top) and the app icons (Windows: squared with transparency, no frame;
+Android: adaptive icon, the logo in the 66/108 dp safe zone over a square
+crop of the user's ornament image, also used as the monochrome layer). The Prince of
 Persia title (`princeofpersia.png` from the user) is split into
 `port/windows/res/launcher_title_letters.png` and `launcher_title_sand.png`; the
 sand is rebuilt under the letters so its movement never shows their outline.
@@ -38,8 +40,8 @@ Subtitle "the sands of time" (Atlantis MF, 21 px), badge "Recompiled".
 Checks: `tools/recomp.ps1 -BuildOnly` for both targets and
 `tools/build-android.ps1` pass. Windows retail launcher opened and captured:
 layout as described, title sand moving between captures. APK SHA-256
-99517083E2511C3D225B25E2E9BD4119B26734CB5F7F7334AEA2F8E90911D783 contains the
-logo and both title layers; not installed (phone not connected). Not checked:
+94B4886CF0CBDBB4BC5A54A3DA8B507EC1AB8761A1F5CFD14C585097346CA40B contains the
+logo, both title layers and the adaptive icon (`aapt2 dump resources`); not installed (phone not connected). Not checked:
 Android launcher on screen, any Mali device, S25 flicker, the icons in
 Explorer and on an Android home screen.
 
