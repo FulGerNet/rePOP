@@ -1625,6 +1625,8 @@ void xbox_GuestSetEvent(uint32_t guest_va)
 }
 
 /* ── KeWaitForSingleObject (ordinal 159) ─────────────────── */
+extern uint32_t xbox_Nv2aNotifyEventVa(void);
+extern int xbox_Nv2aCaughtUp(void);
 static void bridge_KeWaitForSingleObject(void)
 {
     uint32_t object = STACK_ARG(0);
@@ -1639,6 +1641,26 @@ static void bridge_KeWaitForSingleObject(void)
          * writing 0 there -- so bring the host event in line first. */
         int type;
         HANDLE ge = ke_guest_event(object, &type);
+        if (ge && object == xbox_Nv2aNotifyEventVa()) {
+            /* RE-SoT: D3D's BlockOnFence event (xbox_Nv2aCaughtUp): set by
+             * the executor's NO_OPERATION 5, or treated as set once the
+             * executor has consumed everything, which the GPU interrupt
+             * would also mean. The title's own timeout is NULL here. */
+            static int caught;
+            for (;;) {
+                if (BRIDGE_MEM32(object + 4) || WaitForSingleObject(ge, 2) == WAIT_OBJECT_0)
+                    break;
+                if (xbox_Nv2aCaughtUp()) {
+                    if (caught++ < 8)
+                        fprintf(stderr, "  [KERNEL] D3D notify event 0x%08X: executor caught up, released\n", object);
+                    break;
+                }
+            }
+            BRIDGE_MEM32(object + 4) = 1;
+            SetEvent(ge);
+            g_eax = 0;   /* STATUS_SUCCESS */
+            return;
+        }
         if (ge) {
             if (BRIDGE_MEM32(object + 4) == 0) {
                 ResetEvent(ge);

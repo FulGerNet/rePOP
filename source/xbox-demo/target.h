@@ -24,6 +24,13 @@
 #define RESOT_D3D_DEVICE_GLOBAL  0x002A8498
 #define RESOT_D3D_FENCE_ISSUED   0x2C
 #define RESOT_D3D_FENCE_GPU_PTR  0x30
+/* When the GPU is 0x2400 bytes or more behind the fence, sub_0029D290 writes
+ * NO_OPERATION 5 after WAIT_FOR_IDLE (0x0029D344-0x0029D359), spins in
+ * sub_0029D010 until ([fence] ^ [0xFD400B10]) & 0x1F is zero (0x0029D030)
+ * and waits on the KEVENT at device+0x1DBC (0x0029D3D1-0x0029D3EB), whose
+ * SignalState it clears at 0x0029D334. Retail's layout differs (target.h). */
+#define RESOT_D3D_NOTIFY_EVENT   0x1DBC
+#define RESOT_D3D_FENCE_STATUS_SHIFT 0
 
 /* Jade world bookkeeping (0x00019890 / 0x00019A40), for crash reports. */
 #define RESOT_JADE_WORLD_CURRENT  0x0034AC38

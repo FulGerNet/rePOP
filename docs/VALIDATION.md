@@ -1,5 +1,48 @@
 # Validation log
 
+## 2026-10-26: v0.3.4, rejected pipelines, BlockOnFence release, demo KickOff, logo
+
+Reports: GitHub #9 (Galaxy S21, Exynos 2100 / Mali-G78, Android 15) with its
+`report.txt` only: game process exits `reason=5 status=6` (native SIGABRT) about
+a second after Start Game; #8 (Poco M4 Pro, Helio G96 / Mali-G57, Android 11)
+same symptom, no logs; #7 (Galaxy S25 / S25 Ultra) flickering, no logs. The
+only abort in the native renderer is `ng_fail`; a rejected guest pipeline was
+fatal (`create pipeline`). It now falls back to the reference program and the
+draw is skipped only if that fails too. No Mali device was available; the
+cause is inferred, not observed. #7 is not addressed.
+
+Demo asynchronous KickOff, Windows Vulkan, scripted run into Entree
+(`RECOMP_PAD_SCRIPT=30000:start:800,36000:a:800,62000:start:800,70000:start:800,78000:start:800`,
+window captures at 45/70/95 s):
+- first attempt: title stopped at about 65 s in `sub_0029D290`
+  (`RESOT_THREAD_DUMP_SECS` dump), waiting on the KEVENT at device+0x1DBC with
+  SignalState 0 while the executor was idle. D3D patches NO_OPERATION 5 into
+  already-submitted fence commands (0x0029D344); the executor had passed them.
+  Fixed for both targets: that wait is released when the executor has consumed
+  everything (`xbox_Nv2aCaughtUp`). The run then went 130 s without a stall.
+- the level then drew almost black with 16 or 4 submissions ahead, also with
+  the fence published immediately; correct with 1 (184 fps) and synchronous
+  (218-226 fps). The demo stays synchronous (`RESOT_KICK_AHEAD` default 0).
+  The demo's 0x400B10 fence bits are at bit 0 (`RESOT_D3D_FENCE_STATUS_SHIFT`);
+  without that mirror the asynchronous demo hung at 0 fps.
+- retail with the same build (asynchronous): first level drawn, 145-152 fps.
+
+Logo: `docs/media/reSOT_logo.png` used as it is for the README, both launchers
+(top) and the app icons (squared with transparency, no frame). The Prince of
+Persia title (`princeofpersia.png` from the user) is split into
+`port/windows/res/launcher_title_letters.png` and `launcher_title_sand.png`; the
+sand is rebuilt under the letters so its movement never shows their outline.
+Subtitle "the sands of time" (Atlantis MF, 21 px), badge "Recompiled".
+`reSOT_letters.png` / `reSOT_sand.png` removed. Version 0.3.4, versionCode 9.
+
+Checks: `tools/recomp.ps1 -BuildOnly` for both targets and
+`tools/build-android.ps1` pass. Windows retail launcher opened and captured:
+layout as described, title sand moving between captures. APK SHA-256
+99517083E2511C3D225B25E2E9BD4119B26734CB5F7F7334AEA2F8E90911D783 contains the
+logo and both title layers; not installed (phone not connected). Not checked:
+Android launcher on screen, any Mali device, S25 flicker, the icons in
+Explorer and on an Android home screen.
+
 ## 2026-10-25: v0.3.3, new logo with animated sand, icons
 
 The user chose their `reSOT.png` (copied to `docs/media/reSOT.png`; the

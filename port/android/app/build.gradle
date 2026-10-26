@@ -18,8 +18,8 @@ android {
         applicationId "com.fulger.resot"
         minSdk 29
         targetSdk 36
-        versionCode 8
-        versionName "0.3.3"
+        versionCode 9
+        versionName "0.3.4"
         ndk {
             abiFilters "arm64-v8a"
         }
@@ -79,14 +79,18 @@ dependencies {
     implementation "com.android.tools.build:apksig:9.0.1"
 }
 
-// The launcher's logo (docs/media/reSOT_letters.png and the sand round them,
-// reSOT_sand.png, which LauncherView animates) and, when present, its title
+// The launcher's logo (docs/media/reSOT_logo.png), its Prince of Persia title
+// in two layers (port/windows/res/launcher_title_letters.png and the sand
+// behind them, launcher_title_sand.png, which LauncherView animates) and, when
+// present, the Atlantis MF
 // face (port/windows/res/AtlantisMF.ttf; see docs/LICENSING.md) -- the same
 // files the Windows launcher embeds.
 tasks.register("resotAssets", Copy) {
     from(new File(root, "port/android/default-options.ini")) { rename { "resot-options.ini" } }
-    from(new File(root, "docs/media")) { include "reSOT_letters.png", "reSOT_sand.png" }
-    from(new File(root, "port/windows/res")) { include "AtlantisMF.ttf" }
+    from(new File(root, "docs/media")) { include "reSOT_logo.png" }
+    from(new File(root, "port/windows/res")) {
+        include "AtlantisMF.ttf", "launcher_title_letters.png", "launcher_title_sand.png"
+    }
     // The notices binary redistributions must carry (docs/LICENSING.md).
     from(new File(root, "port/third_party/extract-xiso/LICENSE.TXT")) {
         into "licenses"; rename { "LICENSE-extract-xiso.txt" }

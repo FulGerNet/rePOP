@@ -27,11 +27,13 @@ BEGIN
     END
 END
 
-// The launcher (src/launcher.c): the logo in two layers (its letters, and the
-// sand around them, which the launcher animates), and the Atlantis MF face for
-// its title and buttons when the build found res/AtlantisMF.ttf (CMakeLists.txt).
-202 RCDATA "../../../docs/media/reSOT_letters.png"
-204 RCDATA "../../../docs/media/reSOT_sand.png"
+// The launcher (src/launcher.c): the reSOT logo, the Prince of Persia title in
+// two layers (its letters, and the sand behind them, which the launcher
+// animates), and the Atlantis MF face for its subtitle and buttons when the
+// build found res/AtlantisMF.ttf (CMakeLists.txt).
+202 RCDATA "../../../docs/media/reSOT_logo.png"
+204 RCDATA "launcher_title_sand.png"
+205 RCDATA "launcher_title_letters.png"
 203 RCDATA "../default-options.ini"
 #ifdef RESOT_HAVE_LAUNCHER_FONT
 201 RCDATA "AtlantisMF.ttf"

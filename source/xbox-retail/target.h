@@ -36,6 +36,9 @@
  * waits on the KEVENT at device+0x1DCC (0x00370281-0x0037029B) that the
  * PGRAPH interrupt for that NOP sets. */
 #define RESOT_D3D_NOTIFY_EVENT   0x1DCC
+/* sub_0036FE60 spins at 0x0036FE80 until ((fence << 2) ^ [0xFD400B10]) & 0x7C
+ * is zero: the fence's low bits sit at bit 2 of that register. */
+#define RESOT_D3D_FENCE_STATUS_SHIFT 2
 
 /* Jade world bookkeeping, for crash reports. sub_0001F7E0 (the demo's
  * 0x00019890) stores the current world at 0x0001F7EE and reads the state

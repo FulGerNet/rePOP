@@ -49,10 +49,10 @@ final class LauncherView extends View {
     static final int BTN_DEMO = 0, BTN_GAME = 1, BTN_ISO = 2, BTN_GITHUB = 3, BTN_CLOSE = 4, BTN_CANCEL = 5, BTN_DRIVER = 6, BTN_LOGS = 7, BTN_COUNT = 8;
     // launcher.c's layout, on its 1000 x 640 plane
     private static final float BASE_W = 1000, BASE_H = 640;
-    private static final float LOGO_Y = 22, LOGO_SIZE = 132, TEAL_X = 182, TITLE_Y = 150, TITLE_H = 84, SUB_Y = 248,
-        BADGE_Y = 266, BADGE_H = 26, HEAD_RULE_Y = 320, HEAD_Y = 336, BTN_W = 300, BTN_H = 56, BTN_GAP = 64,
+    private static final float LOGO_Y = 0, LOGO_SIZE = 132, TEAL_X = 182, TITLE_Y = 122, TITLE_H = 124, SUB_Y = 256,
+        BADGE_Y = 272, BADGE_H = 26, HEAD_RULE_Y = 320, HEAD_Y = 336, BTN_W = 300, BTN_H = 56, BTN_GAP = 64,
         BTN_Y = 368, MESSAGE_Y = 510, BAR_Y = 420, CANCEL_W = 240, CANCEL_Y = 498;
-    private static final String BADGE_TEXT = "The Sands of Time";
+    private static final String BADGE_TEXT = "Recompiled", SUB_TEXT = "the sands of time";
     private final String versionLabel;
     // the ornament of the ground (launcher.c, ornament())
     private static final float PATTERN = 128, PETAL = 46, PETAL_W = 9, RING = 55, STAR = 19;
@@ -62,7 +62,7 @@ final class LauncherView extends View {
     };
     private static final int GOLD = 0xC8A666, GOLD_LIGHT = 0xF6E2A6, CYAN = 0x50C8FA;
     private static final int N_SAND = 160;
-    private static final int N_EMBER = 60, N_EMIT = 400;   // launcher.c: grains blown off the logo's sand
+    private static final int N_EMBER = 70, N_EMIT = 400;   // launcher.c: grains blown off the title's sand
 
     interface Listener { void onActivate(int button); }
 
@@ -83,7 +83,7 @@ final class LauncherView extends View {
     private final boolean[] enabled = new boolean[BTN_COUNT];
     private final Typeface display, serifBold, sans, sansBold;
     private final boolean atlantis;
-    private Bitmap logo, logoSand, ground;   // the logo's letters, and the sand round them
+    private Bitmap logo, title, titleSand, ground;   // the reSOT logo; the title's letters and its sand
     private final float[][] sand = new float[N_SAND][8]; // x y vx vy size alpha phase glint
     private final float[][] ember = new float[N_EMBER][8]; // x y vx vy size age life glint (logo-relative x y at spawn)
     private final float[][] emit = new float[N_EMIT][2];   // points of the logo's sand, 0..1
@@ -112,17 +112,20 @@ final class LauncherView extends View {
         sans = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL);
         sansBold = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD);
         display = atlantis ? face : serifBold;
-        try (InputStream in = context.getAssets().open("reSOT_letters.png")) {
+        try (InputStream in = context.getAssets().open("reSOT_logo.png")) {
             logo = BitmapFactory.decodeStream(in);
         } catch (Exception ignored) {}
-        try (InputStream in = context.getAssets().open("reSOT_sand.png")) {
-            logoSand = BitmapFactory.decodeStream(in);
+        try (InputStream in = context.getAssets().open("launcher_title_letters.png")) {
+            title = BitmapFactory.decodeStream(in);
         } catch (Exception ignored) {}
-        if (logoSand != null) {
-            int bw = logoSand.getWidth(), bh = logoSand.getHeight();
+        try (InputStream in = context.getAssets().open("launcher_title_sand.png")) {
+            titleSand = BitmapFactory.decodeStream(in);
+        } catch (Exception ignored) {}
+        if (title != null && titleSand != null) {
+            int bw = titleSand.getWidth(), bh = titleSand.getHeight();
             for (int i = 0; i < 20000 && nEmit < N_EMIT; i++) {
                 int x = rng.nextInt(bw), y = rng.nextInt(bh);
-                if ((logoSand.getPixel(x, y) >>> 24) > 150) {
+                if ((titleSand.getPixel(x, y) >>> 24) > 150) {
                     emit[nEmit][0] = (x + 0.5f) / bw; emit[nEmit][1] = (y + 0.5f) / bh; nEmit++;
                 }
             }
@@ -220,9 +223,10 @@ final class LauncherView extends View {
         }
     }
 
-    // ── the logo's sand (launcher.c, draw_logo_sand: the same numbers) ──
+    // ── the title's sand (launcher.c, draw_title_sand: the same numbers) ──
 
     private float logoWidth() { return logo == null ? 0 : LOGO_SIZE * logo.getWidth() / (float) logo.getHeight(); }
+    private float titleWidth() { return title == null ? 0 : TITLE_H * title.getWidth() / (float) title.getHeight(); }
 
     private static float sandRowDx(float y, float t) {
         return 1.8f * (float) Math.sin(y * 0.21f + t * 2.4f) + 0.9f * (float) Math.sin(y * 0.53f - t * 3.9f);
@@ -232,13 +236,13 @@ final class LauncherView extends View {
         return 0.70f + 0.30f * (float) Math.sin(y * 0.17f - t * 3.1f + 2 * Math.sin(t * 0.9f));
     }
 
-    /** x y are relative to the logo's top-left corner, in plane units. */
+    /** x y are relative to the title's top-left corner, in plane units. */
     private void spawnEmber(float[] e, boolean anywhere) {
         float[] p = emit[rng.nextInt(nEmit)];
         boolean glint = rng.nextInt(5) == 0;
         e[7] = glint ? 1 : 0;
-        e[0] = p[0] * logoWidth();
-        e[1] = p[1] * LOGO_SIZE;
+        e[0] = p[0] * titleWidth();
+        e[1] = p[1] * TITLE_H;
         e[2] = frand(8, 28);
         e[3] = frand(-16, -3);
         e[4] = glint ? frand(1.0f, 1.6f) : frand(0.6f, 1.2f);
@@ -248,25 +252,25 @@ final class LauncherView extends View {
 
     /** One pass of the sand layer in 2-unit strips: each shifted by dx(strip)
      *  (+ shiftX), the whole moved up by shiftY, at alpha(strip) * strength. */
-    private void blitLogoSand(Canvas c, float x0, float y0, float lw, float shiftX, float shiftY, float strength) {
-        int bh = logoSand.getHeight(), bw = logoSand.getWidth();
-        for (float y = 0; y < LOGO_SIZE; y += 2) {
-            float y1 = Math.min(LOGO_SIZE, y + 2), dx = sandRowDx(y, time) + shiftX;
+    private void blitTitleSand(Canvas c, float x0, float y0, float lw, float shiftX, float shiftY, float strength) {
+        int bh = titleSand.getHeight(), bw = titleSand.getWidth();
+        for (float y = 0; y < TITLE_H; y += 2) {
+            float y1 = Math.min(TITLE_H, y + 2), dx = sandRowDx(y, time) + shiftX;
             int a = Math.round(255 * Math.max(0, Math.min(1, strength * sandRowAlpha(y, time))));
             if (a == 0) continue;
-            sandSrc.set(0, (int) (y / LOGO_SIZE * bh), bw, (int) Math.ceil(y1 / LOGO_SIZE * bh));
+            sandSrc.set(0, (int) (y / TITLE_H * bh), bw, (int) Math.ceil(y1 / TITLE_H * bh));
             sandDst.set(x0 + dx, y0 + y - shiftY, x0 + dx + lw, y0 + y1 - shiftY);
             sandPaint.setAlpha(a);
-            c.drawBitmap(logoSand, sandSrc, sandDst, sandPaint);
+            c.drawBitmap(titleSand, sandSrc, sandDst, sandPaint);
         }
     }
 
-    private void drawLogoSand(Canvas c, float x0, float y0) {
-        if (logoSand == null) return;
-        float lw = logoWidth();
-        blitLogoSand(c, x0, y0, lw, 2 + 1.5f * (float) Math.sin(time * 1.3f), 2,
+    private void drawTitleSand(Canvas c, float x0, float y0) {
+        if (titleSand == null) return;
+        float lw = titleWidth();
+        blitTitleSand(c, x0, y0, lw, 2 + 1.5f * (float) Math.sin(time * 1.3f), 2,
                      0.25f * (0.5f + 0.5f * (float) Math.sin(time * 2.1f)));
-        blitLogoSand(c, x0, y0, lw, 0, 0, 1);
+        blitTitleSand(c, x0, y0, lw, 0, 0, 1);
         for (int i = 0; i < N_EMBER && nEmit > 0; i++) {
             float[] e = ember[i];
             if (e[6] <= 0) continue;
@@ -615,16 +619,19 @@ final class LauncherView extends View {
         drawSand(canvas);
         if (logo != null) {
             float lw = logoWidth();
-            drawLogoSand(canvas, cx - lw / 2, top + LOGO_Y);
-            paint.setFilterBitmap(true);
+            paint.setFilterBitmap(true); paint.setShader(null); paint.setAlpha(255);
             canvas.drawBitmap(logo, null, new RectF(cx - lw / 2, top + LOGO_Y, cx + lw / 2, top + LOGO_Y + LOGO_SIZE), paint);
         }
-        glowText(canvas, "reSOT", cx, top + TITLE_Y + TITLE_H / 2, display, atlantis ? 66 : 56,
-                 top + TITLE_Y, top + TITLE_Y + TITLE_H, 0.55f, 0xFFFFF2C8, 0xFFB8883C, 3, true);
+        if (title != null) {   // the Prince of Persia title: its sand moves, its letters stay
+            float tw = titleWidth();
+            drawTitleSand(canvas, cx - tw / 2, top + TITLE_Y);
+            paint.setFilterBitmap(true); paint.setShader(null); paint.setAlpha(255);
+            canvas.drawBitmap(title, null, new RectF(cx - tw / 2, top + TITLE_Y, cx + tw / 2, top + TITLE_Y + TITLE_H), paint);
+        }
 
         // THE SANDS OF TIME between two gold lines ending in open diamonds
         float sub = top + SUB_Y + 0.5f;
-        float half = caps(canvas, "Prince of Persia", cx, sub, display, atlantis ? 30 : 26, 0, 0xFFECD8A4) / 2 + 18;
+        float half = caps(canvas, SUB_TEXT, cx, sub, display, atlantis ? 21 : 18, 0, 0xFFECD8A4) / 2 + 18;
         line(canvas, cx - half - 130, sub, cx - half, sub, 1, GOLD, 0.9f);
         line(canvas, cx + half, sub, cx + half + 130, sub, 1, GOLD, 0.9f);
         for (int i = -1; i <= 1; i += 2) {

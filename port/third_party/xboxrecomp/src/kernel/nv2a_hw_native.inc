@@ -87,6 +87,7 @@ typedef struct NgPipeline {
      * reading NG_PSO_READY. */
     SDL_AtomicInt state;
     struct NgPipeline *job_next;
+    int reported; /* RE-SoT: a driver rejection has been logged (executor only). */
 } NgPipeline;
 enum { NG_PSO_READY, NG_PSO_PENDING, NG_PSO_FAILED };
 #define NG_DRAW_QUEUE 1024
@@ -134,6 +135,7 @@ static struct {
     uint32_t last_translated_generation;
     uint64_t translated_vsh_draws; /* RE-SoT: admitted direct-program coverage. */
     uint64_t reference_draws; /* RE-SoT: reference draws while translation pipelines compile. */
+    uint64_t rejected_draws; /* RE-SoT: draws skipped because the driver rejected every program. */
     uint64_t pipeline_waits, pipeline_wait_ticks; /* RE-SoT: measure cold stalls while preserving geometry. */
     uint64_t flare_depth_draws; /* RE-SoT: observe the retail light-halo correction separately from queries. */
     uint32_t spec_ps_count;
@@ -1238,7 +1240,22 @@ static SDL_GPUGraphicsPipeline *ng_pipeline(const NgPipelineKey *key, int may_de
         SDL_UnlockMutex(s_ngc.lock);
         state = SDL_GetAtomicInt(&p->state);
     }
-    if (state == NG_PSO_FAILED) ng_fail("create pipeline");
+    /* RE-SoT: a pipeline the driver rejects is no longer fatal here. Mali
+     * reports (GitHub #8, #9: Exynos 2100 Mali-G78, Helio G96 Mali-G57) end in
+     * SIGABRT about a second after Start Game, the shape of this abort on the
+     * first scene's pipelines. Guest draws retry their reference program and
+     * are skipped only when that fails too (ng_flush_draws); host blits and
+     * clears still require theirs. Logged once per failed key. */
+    if (state == NG_PSO_FAILED) {
+        if (!p->reported) {
+            static int shown;
+            p->reported = 1;
+            if (shown++ < 32)
+                fprintf(stderr, "[HW native] pipeline rejected by the driver: shader=%u directVS=%u specializedPS=%u format=%u\n",
+                        p->key.shader, p->key.translated_vs != NULL, p->key.specialized_ps != NULL, (unsigned)p->key.format);
+        }
+        return NULL;
+    }
     return p->gpu;
 }
 
@@ -1331,8 +1348,16 @@ static void ng_flush_draws(void)
                 reference.translated_vs = NULL; reference.specialized_ps = NULL;
             } /* RE-SoT: Mali waits for the original compact key, preserving all draw state. */
             ready[i] = ng_pipeline(&reference,0);
+            /* RE-SoT: the driver rejected the compact program; try the
+             * reference one before giving the draw up (see ng_pipeline). */
+            if (!ready[i] && (reference.translated_vs || reference.specialized_ps)) {
+                reference.translated_vs = NULL; reference.specialized_ps = NULL;
+                reference_draw[i] = 1;
+                ready[i] = ng_pipeline(&reference,0);
+            }
             s_ng.pipeline_wait_ticks += SDL_GetPerformanceCounter()-start;
             s_ng.pipeline_waits++;
+            if (!ready[i]) s_ng.rejected_draws++;
         }
     }
     /* RE-SoT: visibility transitions flush small runs very frequently in
@@ -1384,6 +1409,7 @@ static void ng_flush_draws(void)
         SDL_GPUBufferBinding vb = {s_ng.vertices,0}; /* RE-SoT: absolute ring ranges also address cached geometry. */
         uint32_t sampler_count = draw->key.shader >= 5 ? 1 : 8; /* RE-SoT */
         int new_samplers,reference_pipeline=reference_draw[i]; /* RE-SoT */
+        if (!pipeline) continue; /* RE-SoT: no program the driver accepts (counted above). */
         s_ng.reference_draws+=reference_pipeline;
         /* RE-SoT: SDL 3.4.18's D3D12 descriptor writer checks only the
          * current index, not index+table size, against its 2048-sampler heap.
@@ -1902,6 +1928,7 @@ static void ng_blit(SDL_GPUTexture *target_image, SDL_GPUTextureFormat format,
     key.shader = shader; key.mask = mask; key.format = format;
     if (shader == 3) { key.blend = 1; key.src = 0x302; key.dst = 0x303; }
     pipeline = ng_pipeline(&key,0);
+    if (!pipeline) ng_fail("create blit pipeline");
     target.texture = target_image; target.store_op = SDL_GPU_STOREOP_STORE;
     target.load_op = clear ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
     target.clear_color.a = 1;
@@ -1963,6 +1990,7 @@ static void ng_clear(uint32_t param)
             ct.texture = s->color; ct.load_op = SDL_GPU_LOADOP_LOAD; ct.store_op = SDL_GPU_STOREOP_STORE;
             ds.load_op = ds.stencil_load_op = SDL_GPU_LOADOP_LOAD;
             SDL_GPUGraphicsPipeline *pipeline = ng_pipeline(&key,0);
+            if (!pipeline) ng_fail("create depth-clear pipeline");
             pass = SDL_BeginGPURenderPass(ng_cmd(),&ct,1,&ds);
             if (!pass) ng_fail("rectangle depth clear");
             SDL_BindGPUGraphicsPipeline(pass,pipeline);
@@ -2247,6 +2275,9 @@ static void ng_flip(void)
             (unsigned long long)s_ng.translated_vsh_draws,(unsigned long long)s_ng.guest_draws); /* RE-SoT: admission is not compilation success. */
         fprintf(stderr,"[HW native] reference pipeline draws while translating: %llu\n",
             (unsigned long long)s_ng.reference_draws); /* RE-SoT: distinguish temporary fallbacks. */
+        if (s_ng.rejected_draws)
+            fprintf(stderr,"[HW native] draws skipped, no program accepted by the driver: %llu\n",
+                (unsigned long long)s_ng.rejected_draws);
         fprintf(stderr,"[HW native] cold reference waits: %llu, %.1f ms total (draws preserved)\n",
             (unsigned long long)s_ng.pipeline_waits,
             1000.0*s_ng.pipeline_wait_ticks/SDL_GetPerformanceFrequency()); /* RE-SoT */

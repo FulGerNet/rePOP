@@ -186,8 +186,12 @@ static HANDLE g_nv2a_kick_ev, g_nv2a_ack_ev;
  * scan, so the ring keeps its back-pressure. The retail fence mirror is
  * published from the (PUT, issued fence) pair the title recorded when it
  * wrote PUT, so a fence is never reported for commands that were not yet
- * scanned however far the title has got. Default on for retail only; the
- * demo publishes its fence before the scan and keeps the synchronous wait. */
+ * scanned however far the title has got. Default on for retail only. The
+ * demo was tried on 2026-10-26 (Windows, Vulkan, scripted run into Entree):
+ * with 4 or 16 submissions ahead the level drew almost black, with or
+ * without deferred fences, so the demo overwrites data the executor has not
+ * read yet; with 1 it drew correctly but at 184 fps against 222 synchronous.
+ * RESOT_KICK_AHEAD still enables it there, with the deferred fence path. */
 static void kick_capture(void);
 static volatile LONG s_kick_issued, s_kick_done;
 
@@ -1040,6 +1044,14 @@ static void fence_mirrors_tick(void)
                 *(volatile uint32_t *)((uintptr_t)(dev + g_fence_mirrors[i].put_off)
                                        + g_memory_offset);
             if (*fence != put) {
+#if !RESOT_RUNTIME_RETAIL
+                /* RE-SoT: with an asynchronous KickOff the demo's fence must
+                 * not run ahead of the scan either: same path as retail. */
+                if (pb_exec && kick_ahead()) {
+                    g_fence_mirrors[i].pending_ptr = get_ptr;
+                    g_fence_mirrors[i].pending_value = put;
+                } else
+#endif
 #if RESOT_RUNTIME_RETAIL
                 /* RE-SoT: 1401_MgcFntRm Android logs show float payloads
                  * interpreted as jumps after the stream is overwritten.
@@ -1060,7 +1072,10 @@ static void fence_mirrors_tick(void)
 
 static void fence_mirrors_commit(void)
 {
-#if RESOT_RUNTIME_RETAIL
+#if !RESOT_RUNTIME_RETAIL
+    if (!kick_ahead()) return;   /* RE-SoT: the demo defers only when asynchronous */
+#endif
+    {
     /* RE-SoT: executor-owned snapshots; never read a newer producer value
      * here, which could refer to commands submitted during the scan. */
     for (int i = 0; i < g_fence_mirror_count; i++) {
@@ -1069,7 +1084,7 @@ static void fence_mirrors_commit(void)
             *(volatile uint32_t *)((uintptr_t)ptr + g_memory_offset) = g_fence_mirrors[i].pending_value;
         g_fence_mirrors[i].pending_ptr = 0;
     }
-#endif
+    }
 }
 
 /* RE-SoT: the (PUT, issued fence) pair of the latest asynchronous KickOff.
@@ -1112,10 +1127,9 @@ static void kick_capture(void)
 
 /* After a scan up to `put`: publish the fences recorded with that PUT. If the
  * title has kicked again since, its pair names a later PUT and nothing is
- * published now; the next scan catches up. Retail only (see kick_ahead). */
+ * published now; the next scan catches up. Both targets (see kick_ahead). */
 static void kick_pair_fences(uint32_t put)
 {
-#if RESOT_RUNTIME_RETAIL
     static int matched, missed, on = -1;
     int ok;
     if (on < 0) on = !getenv("RESOT_KICK_PAIR") || atoi(getenv("RESOT_KICK_PAIR")) != 0;
@@ -1131,18 +1145,17 @@ static void kick_pair_fences(uint32_t put)
     if (ok ? !matched++ : !missed++)
         fprintf(stderr, "  [NV2A] async KickOff fence pair %s (PUT 0x%08X)\n",
                 ok ? "matched" : "behind the title", put);
-#else
-    (void)put;
-#endif
 }
 
 /* RE-SoT: D3D's BlockOnFence interrupt path (see xbox_Nv2aNotifyEvent). */
 static uint32_t s_notify_device, s_notify_off;
+static int s_fence_status_shift; /* where the fence's low 5 bits sit in 0x400B10 */
 
-void xbox_Nv2aNotifyEvent(uint32_t device_ptr_va, uint32_t event_off)
+void xbox_Nv2aNotifyEvent(uint32_t device_ptr_va, uint32_t event_off, int status_shift)
 {
     s_notify_device = device_ptr_va;
     s_notify_off = event_off;
+    s_fence_status_shift = status_shift;
 }
 
 /* The event's guest VA, 0 when none is registered or the device is not up. */
@@ -1153,6 +1166,25 @@ uint32_t xbox_Nv2aNotifyEventVa(void)
     dev = *(volatile uint32_t *)((uintptr_t)s_notify_device + g_memory_offset);
     if (!dev || !fence_readable(dev + s_notify_off, 16)) return 0;
     return dev + s_notify_off;
+}
+
+/* RE-SoT: has the executor consumed everything the title submitted? D3D
+ * patches its NO_OPERATION 5 into the commands it wrote with the fence
+ * (retail 0x003701F4, demo 0x0029D344) when it believes the GPU is still
+ * 0x2400 bytes short of them. GET moves only after a whole segment is
+ * scanned, so the executor may already be past that point: the NOP is never
+ * seen and the event never set (demo, 2026-10-26, entering the first level).
+ * An executor that has caught up has passed the fence, as the interrupt says.
+ * Both targets. */
+int xbox_Nv2aCaughtUp(void)
+{
+    if (!g_nv2a_memory) return 0;
+    if (s_kick_issued != s_kick_done) return 0;
+    if (*(volatile uint32_t *)((char *)g_nv2a_memory + NV2A_USER_DMA_GET)
+        != *(volatile uint32_t *)((char *)g_nv2a_memory + NV2A_USER_DMA_PUT)) return 0;
+    for (int i = 0; i < g_fence_mirror_count; i++)
+        if (g_fence_mirrors[i].pending_ptr) return 0;   /* published after the scan */
+    return 1;
 }
 
 void xbox_Nv2aSoftwareNotify(uint32_t param)
@@ -1166,9 +1198,11 @@ void xbox_Nv2aSoftwareNotify(uint32_t param)
     xbox_GuestSetEvent(va);
 }
 
-/* RE-SoT: PGRAPH 0x400B10 bits 2-6 follow the GPU's completed fence.
- * Retail D3D 0x0036FE80 (from the fence wait 0x00370140) spins until
- * ((fence << 2) ^ [0xFD400B10]) & 0x7C is zero. Nothing modelled the
+/* RE-SoT: PGRAPH 0x400B10 carries the low 5 bits of the GPU's completed
+ * fence, at bit 2 for retail and bit 0 for the demo (target.h,
+ * RESOT_D3D_FENCE_STATUS_SHIFT). Retail D3D 0x0036FE80 (from the fence wait
+ * 0x00370140) spins until ((fence << 2) ^ [0xFD400B10]) & 0x7C is zero; the
+ * demo's 0x0029D030 until (fence ^ [0xFD400B10]) & 0x1F is. Nothing modelled the
  * register, so it read 0; with a synchronous KickOff the fence was always
  * current and that wait was never entered. Once the title runs ahead it is,
  * and spun forever (2026-10-25, Windows and Android retail at startup).
@@ -1178,13 +1212,13 @@ static void fence_status_mirror(volatile uint32_t *regs)
 {
     uint32_t dev, ptr, value;
     volatile uint32_t *status = (volatile uint32_t *)((char *)regs + 0x400B10);
-    if (!g_fence_mirror_count || !fence_readable(g_fence_mirrors[0].device_ptr_va, 4)) return;
+    if (!s_notify_device || !g_fence_mirror_count || !fence_readable(g_fence_mirrors[0].device_ptr_va, 4)) return;
     dev = *(volatile uint32_t *)((uintptr_t)g_fence_mirrors[0].device_ptr_va + g_memory_offset);
     if (!fence_readable(dev + g_fence_mirrors[0].get_ptr_off, 4)) return;
     ptr = *(volatile uint32_t *)((uintptr_t)(dev + g_fence_mirrors[0].get_ptr_off) + g_memory_offset);
     if (!fence_readable(ptr, 4)) return;
     value = *(volatile uint32_t *)((uintptr_t)ptr + g_memory_offset);
-    *status = (*status & ~0x7Cu) | ((value << 2) & 0x7Cu);
+    *status = (*status & ~(0x1Fu << s_fence_status_shift)) | ((value & 0x1Fu) << s_fence_status_shift);
 }
 
 static int s_nv2a_trace = 0;

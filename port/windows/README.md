@@ -1,10 +1,12 @@
 # reSOT on Windows
 
-Version 0.3.3 runs the game and the GPU executor in parallel on retail, fixes
+Version 0.3.4 stops a rejected graphics pipeline from closing the game (Mali
+reports), releases a stuck D3D wait and brings the definitive logo and the
+animated Prince of Persia title to the launcher. Version 0.3.3 ran the game and the GPU executor in parallel on retail, fixes
 a retail mid-game freeze, reduces audio crackle and brings the new animated
 logo. Version 0.3.2 added Reduced/Standard/Full graphics presets and a background
 stable-release check with optional Update / Close buttons styled like the
-launcher. The displayed version is 0.3.3. Offline/rate-limit errors are ignored.
+launcher. The displayed version is 0.3.4. Offline/rate-limit errors are ignored.
 No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
 request and reSOT version in its User-Agent. Update opens the official release
 page, without downloading/installing an executable automatically.
@@ -61,8 +63,8 @@ embeds its checked Xbox image during compilation, so `default.xbe` is needed
 to build, not to play. Its embedded copy is also verified before starting.
 Demo and retail need separate folders.
 
-The executable opens on the reSOT screen: the logo (its sand streaming
-and shedding grains), a link to the GitHub
+The executable opens on the reSOT screen: the reSOT logo, the Prince of Persia title
+(its sand streaming and shedding grains), a link to the GitHub
 repository, the installed games and two buttons, Start Demo and Start Game.
 It looks for games beside the executable, in the folders remembered in
 `resot-options.ini` (`[Launcher] DemoDir`, `RetailDir`, relative to the

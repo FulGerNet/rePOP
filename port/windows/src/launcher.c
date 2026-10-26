@@ -49,18 +49,20 @@
 #define WIN_W 1000
 #define WIN_H 640
 #define RES_FONT 201          /* port/windows/res/resot.rc */
-#define RES_LOGO 202          /* the logo's letters */
-#define RES_LOGO_SAND 204     /* the sand around them, animated (draw_logo_sand) */
+#define RES_LOGO 202          /* the reSOT logo (docs/media/reSOT_logo.png) */
+#define RES_TITLE_SAND 204    /* the Prince of Persia title's sand, animated (draw_title_sand) */
+#define RES_TITLE 205         /* and its letters */
 /* The layout, on the 1000 x 640 plane LauncherView.java shares. */
-#define LOGO_Y 22
-#define LOGO_SIZE 132
+#define LOGO_Y 0              /* docs/media/reSOT_logo.png as it is: */
+#define LOGO_SIZE 132         /* its letters fill the middle 73% */
 #define TEAL_X 182            /* the teal diamonds, left of the logo */
-#define TITLE_Y 150
-#define TITLE_H 84
-#define SUB_Y 248             /* THE SANDS OF TIME, its centre line */
-#define BADGE_Y 266
+#define TITLE_Y 122           /* the Prince of Persia title image */
+#define TITLE_H 124
+#define SUB_Y 256             /* THE SANDS OF TIME, its centre line */
+#define BADGE_Y 272
 #define BADGE_H 26
-#define BADGE_TEXT L"The Sands of Time"
+#define BADGE_TEXT L"Recompiled"
+#define SUB_TEXT L"the sands of time"
 #define HEAD_RULE_Y 320
 #define HEAD_Y 336            /* INSTALLED GAMES */
 #define BTN_W 300
@@ -73,7 +75,7 @@
 #define CANCEL_W 240
 #define CANCEL_Y 498
 #define N_SAND 160
-#define N_EMBER 60            /* grains blown off the logo's sand */
+#define N_EMBER 70            /* grains blown off the title's sand */
 #define N_EMIT 400            /* where they start: points of that sand */
 #define WM_APP_ASK_ISO   (WM_APP + 1)
 #define WM_APP_EXTRACTED (WM_APP + 2)
@@ -104,11 +106,14 @@ static struct {
     HDC logo_dc;
     HBITMAP logo_bmp;
     int logo_w, logo_h;
-    uint32_t *logo_sand;              /* premultiplied BGRA, logo_w x logo_h */
-    float emit[N_EMIT][2];            /* logo-relative points of that sand */
+    HDC title_dc;                     /* the title's letters */
+    HBITMAP title_bmp;
+    int title_w, title_h;
+    uint32_t *title_sand;             /* premultiplied BGRA, title_w x title_h */
+    float emit[N_EMIT][2];            /* title-relative points of that sand */
     int n_emit;
     Ember ember[N_EMBER];
-    GlowText title, label_demo, label_game, label_cancel;
+    GlowText label_demo, label_game, label_cancel;
     HANDLE font_mem;
     int atlantis;
     HFONT f_sub, f_text, f_small, f_label, f_badge;
@@ -612,9 +617,9 @@ static void draw_sand(void)
     }
 }
 
-/* ── the logo's sand ───────────────────────────────────────────
- * The logo comes in two layers: its letters, drawn still, and the sand
- * streaming round them. The sand is redrawn every frame row by row, each row
+/* ── the title's sand ──────────────────────────────────────────
+ * The Prince of Persia title comes in two layers: its letters, drawn still,
+ * and the sand cloud behind them. The sand is redrawn every frame row by row, each row
  * pushed sideways by two travelling waves and lit by a third, with a faint
  * copy drifting up-wind; grains blow off it and fade. LauncherView.java does
  * the same with the same numbers (in 2-unit strips). Positions are in units
@@ -633,8 +638,8 @@ static void spawn_ember(Ember *e, int anywhere)
 {
     const float *p = L.emit[rnd() % (unsigned)L.n_emit];
     e->glint = (rnd() % 5) == 0;
-    e->x = (WIN_W - L.logo_w) / 2.0f + p[0];
-    e->y = LOGO_Y + p[1];
+    e->x = (WIN_W - L.title_w) / 2.0f + p[0];
+    e->y = TITLE_Y + p[1];
     e->vx = frand(8.0f, 28.0f);
     e->vy = frand(-16.0f, -3.0f);
     e->size = e->glint ? frand(1.0f, 1.6f) : frand(0.6f, 1.2f);
@@ -656,19 +661,19 @@ static void step_embers(float dt)
 
 /* One pass of the sand layer: every row shifted by dx(row) (+ shift_x), the
  * whole moved up by shift_y rows, at alpha(row) * strength. */
-static void blit_logo_sand(float shift_x, int shift_y, float strength)
+static void blit_title_sand(float shift_x, int shift_y, float strength)
 {
-    int x0 = (WIN_W - L.logo_w) / 2, row, x;
-    for (row = 0; row < L.logo_h; ++row) {
-        int y = LOGO_Y + row - shift_y, di;
+    int x0 = (WIN_W - L.title_w) / 2, row, x;
+    for (row = 0; row < L.title_h; ++row) {
+        int y = TITLE_Y + row - shift_y, di;
         float dx = sand_row_dx((float)row, L.time) + shift_x, f, k = strength * sand_row_alpha((float)row, L.time);
-        const uint32_t *src = L.logo_sand + (size_t)row * L.logo_w;
+        const uint32_t *src = L.title_sand + (size_t)row * L.title_w;
         if ((unsigned)y >= WIN_H) continue;
         di = (int)floorf(dx); f = dx - di;
-        for (x = 0; x < L.logo_w + 3; ++x) {
+        for (x = 0; x < L.title_w + 3; ++x) {
             int sx = x - di, dst_x = x0 + x;
-            uint32_t a0 = (unsigned)sx < (unsigned)L.logo_w ? src[sx] : 0;
-            uint32_t a1 = (unsigned)(sx - 1) < (unsigned)L.logo_w ? src[sx - 1] : 0;
+            uint32_t a0 = (unsigned)sx < (unsigned)L.title_w ? src[sx] : 0;
+            uint32_t a1 = (unsigned)(sx - 1) < (unsigned)L.title_w ? src[sx - 1] : 0;
             float sa, sr, sg, sb, keep;
             uint32_t *p, c;
             if (!(a0 | a1) || (unsigned)dst_x >= WIN_W) continue;
@@ -688,12 +693,12 @@ static void blit_logo_sand(float shift_x, int shift_y, float strength)
     }
 }
 
-static void draw_logo_sand(void)
+static void draw_title_sand(void)
 {
     int i;
-    if (!L.logo_sand) return;
-    blit_logo_sand(2.0f + 1.5f * sinf(L.time * 1.3f), 2, 0.25f * (0.5f + 0.5f * sinf(L.time * 2.1f)));
-    blit_logo_sand(0.0f, 0, 1.0f);
+    if (!L.title_sand) return;
+    blit_title_sand(2.0f + 1.5f * sinf(L.time * 1.3f), 2, 0.25f * (0.5f + 0.5f * sinf(L.time * 2.1f)));
+    blit_title_sand(0.0f, 0, 1.0f);
     for (i = 0; i < N_EMBER && L.n_emit; ++i) {
         const Ember *e = &L.ember[i];
         float a = sinf(3.14159f * e->age / e->life);
@@ -926,16 +931,13 @@ static void link_at(int id, const wchar_t *text, UINT align)
 
 static void render(void)
 {
-    static const int title_top[3] = {255, 242, 200}, title_bottom[3] = {184, 136, 60};
-    static const int title_halo[3] = {255, 190, 90};
     static const int badge_top[3] = {250, 232, 176}, badge_bottom[3] = {176, 132, 62};
     wchar_t text[400];
     int i, cx = WIN_W / 2, half;
     GdiFlush();
     memcpy(L.px, L.bg, (size_t)WIN_W * WIN_H * 4);
     draw_sand();
-    draw_logo_sand();
-    draw_glow_text(&L.title, 0, TITLE_Y, 0.55f, title_halo, title_top, title_bottom, 3, 1);
+    draw_title_sand();
     /* "THE SANDS OF TIME" between two gold lines ending in open diamonds */
     half = L.sub_w / 2 + 18;
     seg((float)(cx - half - 130), SUB_Y + 0.5f, (float)(cx - half), SUB_Y + 0.5f, 1.0f, GOLD, 0.9f);
@@ -983,7 +985,7 @@ static void render(void)
     }
 
     SetBkMode(L.dc, TRANSPARENT);
-    caps_at(L.f_sub, 0, RGB(236, 216, 164), L"Prince of Persia", 0, SUB_Y - 20, WIN_W, 40);
+    caps_at(L.f_sub, 0, RGB(236, 216, 164), SUB_TEXT, 0, SUB_Y - 20, WIN_W, 40);
     plate_fill(24,20,108,28,7,badge_top,badge_bottom,1);
     plate_edge(24,20,108,28,7,1,255,240,196,1);
     caps_at(L.f_label,1,RGB(22,30,50),L"v" RESOT_VERSION_W,24,20,108,28);
@@ -1030,6 +1032,10 @@ static void render(void)
         BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
         AlphaBlend(L.dc, (WIN_W - L.logo_w) / 2, LOGO_Y, L.logo_w, L.logo_h, L.logo_dc, 0, 0, L.logo_w, L.logo_h, bf);
     }
+    if (L.title_dc) {
+        BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+        AlphaBlend(L.dc, (WIN_W - L.title_w) / 2, TITLE_Y, L.title_w, L.title_h, L.title_dc, 0, 0, L.title_w, L.title_h, bf);
+    }
     launcher_update_draw();
 }
 
@@ -1043,9 +1049,9 @@ static const void *resource(int id, DWORD *size)
     return loaded ? LockResource(loaded) : NULL;
 }
 
-/* A PNG resource as premultiplied BGRA, LOGO_SIZE high (the width follows
- * its shape, or *w when that is already set), into `out` (*w x LOGO_SIZE). */
-static int decode_png(int id, int *w_out, void *out)
+/* A PNG resource as premultiplied BGRA, `height` high (the width follows
+ * its shape, or *w when that is already set), into `out` (*w x height). */
+static int decode_png(int id, int height, int *w_out, void *out)
 {
     DWORD size;
     const void *png = resource(id, &size);
@@ -1067,17 +1073,17 @@ static int decode_png(int id, int *w_out, void *out)
     if (SUCCEEDED(hr)) hr = IWICBitmapDecoder_GetFrame(decoder, 0, &frame_);
     if (SUCCEEDED(hr)) hr = IWICBitmapFrameDecode_GetSize(frame_, &w, &h);
     if (SUCCEEDED(hr) && w && h) {
-        if (!*w_out) *w_out = (int)((double)LOGO_SIZE * w / h + 0.5);
+        if (!*w_out) *w_out = (int)((double)height * w / h + 0.5);
         hr = out ? IWICImagingFactory_CreateBitmapScaler(factory, &scaler) : E_FAIL;
     } else hr = E_FAIL;
-    if (SUCCEEDED(hr)) hr = IWICBitmapScaler_Initialize(scaler, (IWICBitmapSource *)frame_, *w_out, LOGO_SIZE,
+    if (SUCCEEDED(hr)) hr = IWICBitmapScaler_Initialize(scaler, (IWICBitmapSource *)frame_, *w_out, height,
                                                         WICBitmapInterpolationModeFant);
     if (SUCCEEDED(hr)) hr = IWICImagingFactory_CreateFormatConverter(factory, &converter);
     if (SUCCEEDED(hr)) hr = IWICFormatConverter_Initialize(converter, (IWICBitmapSource *)scaler,
                                                            &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,
                                                            NULL, 0.0, WICBitmapPaletteTypeCustom);
     if (SUCCEEDED(hr)) hr = IWICFormatConverter_CopyPixels(converter, NULL, *w_out * 4,
-                                                           *w_out * LOGO_SIZE * 4, (BYTE *)out);
+                                                           *w_out * height * 4, (BYTE *)out);
     if (converter) IWICFormatConverter_Release(converter);
     if (scaler) IWICBitmapScaler_Release(scaler);
     if (frame_) IWICBitmapFrameDecode_Release(frame_);
@@ -1087,35 +1093,49 @@ static int decode_png(int id, int *w_out, void *out)
     return SUCCEEDED(hr);
 }
 
-static void load_logo(void)
+/* A PNG resource into a 32-bit DIB section `height` high, for AlphaBlend. */
+static HDC load_image(int id, int height, HBITMAP *bmp, int *w)
 {
     BITMAPINFO bi = {0};
     void *bits = NULL;
-    int w = 0, i, x, y;
-    decode_png(RES_LOGO, &w, NULL);            /* its width */
-    if (!w) return;
-    L.logo_w = w; L.logo_h = LOGO_SIZE;
+    HDC dc;
+    *w = 0; *bmp = NULL;
+    decode_png(id, height, w, NULL);           /* its width */
+    if (!*w) return NULL;
     bi.bmiHeader.biSize = sizeof bi.bmiHeader;
-    bi.bmiHeader.biWidth = L.logo_w; bi.bmiHeader.biHeight = -L.logo_h;
+    bi.bmiHeader.biWidth = *w; bi.bmiHeader.biHeight = -height;
     bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
-    L.logo_dc = CreateCompatibleDC(NULL);
-    L.logo_bmp = CreateDIBSection(L.logo_dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
-    if (L.logo_bmp && decode_png(RES_LOGO, &w, bits)) {
-        SelectObject(L.logo_dc, L.logo_bmp);
-    } else {
-        if (L.logo_bmp) DeleteObject(L.logo_bmp);
-        DeleteDC(L.logo_dc);
-        L.logo_dc = NULL; L.logo_bmp = NULL;
+    dc = CreateCompatibleDC(NULL);
+    *bmp = dc ? CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0) : NULL;
+    if (*bmp && decode_png(id, height, w, bits)) {
+        SelectObject(dc, *bmp);
+        return dc;
     }
-    /* the sand, at the letters' size, and the points grains blow off from */
-    L.logo_sand = (uint32_t *)calloc((size_t)L.logo_w * L.logo_h, 4);
-    if (L.logo_sand && !decode_png(RES_LOGO_SAND, &w, L.logo_sand)) {
-        free(L.logo_sand);
-        L.logo_sand = NULL;
+    if (*bmp) DeleteObject(*bmp);
+    if (dc) DeleteDC(dc);
+    *bmp = NULL;
+    return NULL;
+}
+
+/* The reSOT logo, as it is; the title's letters, and its sand at their size
+ * with the points grains blow off from. */
+static void load_logo(void)
+{
+    int w = 0, i, x, y;
+    L.logo_dc = load_image(RES_LOGO, LOGO_SIZE, &L.logo_bmp, &L.logo_w);
+    L.logo_h = LOGO_SIZE;
+    L.title_dc = load_image(RES_TITLE, TITLE_H, &L.title_bmp, &L.title_w);
+    L.title_h = TITLE_H;
+    if (!L.title_dc) return;
+    w = L.title_w;
+    L.title_sand = (uint32_t *)calloc((size_t)L.title_w * L.title_h, 4);
+    if (L.title_sand && !decode_png(RES_TITLE_SAND, TITLE_H, &w, L.title_sand)) {
+        free(L.title_sand);
+        L.title_sand = NULL;
     }
-    for (i = 0; L.logo_sand && i < 20000 && L.n_emit < N_EMIT; ++i) {
-        x = (int)(rnd() % (unsigned)L.logo_w); y = (int)(rnd() % (unsigned)L.logo_h);
-        if ((L.logo_sand[y * L.logo_w + x] >> 24) > 150) {
+    for (i = 0; L.title_sand && i < 20000 && L.n_emit < N_EMIT; ++i) {
+        x = (int)(rnd() % (unsigned)L.title_w); y = (int)(rnd() % (unsigned)L.title_h);
+        if ((L.title_sand[y * L.title_w + x] >> 24) > 150) {
             L.emit[L.n_emit][0] = x + 0.5f; L.emit[L.n_emit][1] = y + 0.5f;
             L.n_emit++;
         }
@@ -1134,25 +1154,22 @@ static void load_fonts(void)
     DWORD size, count = 0;
     const void *ttf = resource(RES_FONT, &size);
     const wchar_t *display, *serif = L"Palatino Linotype";
-    HFONT title, button;
+    HFONT button;
     if (ttf) L.font_mem = AddFontMemResourceEx((void *)ttf, size, NULL, &count);
     L.atlantis = L.font_mem && count;
     display = L.atlantis ? L"Atlantis MF" : serif;
-    L.f_sub = make_font(display, L.atlantis ? 30 : 26, FW_NORMAL, 0, ANTIALIASED_QUALITY);
+    L.f_sub = make_font(display, L.atlantis ? 21 : 18, FW_NORMAL, 0, ANTIALIASED_QUALITY);
     L.f_text = make_font(L"Segoe UI", 18, FW_NORMAL, 0, CLEARTYPE_QUALITY);
     L.f_small = make_font(L"Segoe UI", 14, FW_NORMAL, 0, CLEARTYPE_QUALITY);
     L.f_label = make_font(L"Segoe UI", 13, FW_SEMIBOLD, 0, CLEARTYPE_QUALITY);
     L.f_badge = make_font(serif, 14, FW_BOLD, 0, CLEARTYPE_QUALITY);
-    L.sub_w = caps_width(L.f_sub, 0, L"Prince of Persia");
+    L.sub_w = caps_width(L.f_sub, 0, SUB_TEXT);
     L.head_w = caps_width(L.f_label, 3, L"INSTALLED GAMES");
     L.badge_w = caps_width(L.f_badge, 2, BADGE_TEXT) + 48;
-    title = make_font(display, L.atlantis ? 66 : 56, L.atlantis ? FW_NORMAL : FW_BOLD, 0, ANTIALIASED_QUALITY);
     button = make_font(display, L.atlantis ? 28 : 24, L.atlantis ? FW_NORMAL : FW_SEMIBOLD, 0, ANTIALIASED_QUALITY);
-    L.title = glow_text(title, L"reSOT", WIN_W, TITLE_H, 6);
     L.label_demo = glow_text(button, L"Start Demo", BTN_W, BTN_H, 4);
     L.label_game = glow_text(button, L"Start Game", BTN_W, BTN_H, 4);
     L.label_cancel = glow_text(button, L"Cancel", CANCEL_W, BTN_H, 4);
-    DeleteObject(title);
     DeleteObject(button);
 }
 
@@ -1646,6 +1663,9 @@ static void destroy_window(void)
     UnregisterClassW(L"reSOTLauncher", GetModuleHandleW(NULL));
     if (L.logo_bmp) DeleteObject(L.logo_bmp);
     if (L.logo_dc) DeleteDC(L.logo_dc);
+    if (L.title_dc) DeleteDC(L.title_dc);
+    if (L.title_bmp) DeleteObject(L.title_bmp);
+    free(L.title_sand);
     if (L.bmp) DeleteObject(L.bmp);
     if (L.dc) DeleteDC(L.dc);
     if (L.f_sub) DeleteObject(L.f_sub);
@@ -1654,7 +1674,7 @@ static void destroy_window(void)
     if (L.f_label) DeleteObject(L.f_label);
     if (L.f_badge) DeleteObject(L.f_badge);
     if (L.font_mem) RemoveFontMemResourceEx(L.font_mem);
-    free_glow(&L.title); free_glow(&L.label_demo); free_glow(&L.label_game); free_glow(&L.label_cancel);
+    free_glow(&L.label_demo); free_glow(&L.label_game); free_glow(&L.label_cancel);
     free(L.bg);
 }
 
