@@ -1,5 +1,44 @@
 # Validation log
 
+## 2026-10-27: Mali crash on Start Game (GitHub #8, #9): SPIR-V extensions
+
+Logs: v0.3.4 (versionCode 9) diagnostics archive
+`resot-logs-20261027-131922-...` (OnePlus CPH2493, MediaTek MT6983, Mali-G710
+MC10, driver r32p1, Vulkan 1.1.177, Android 16, retail; three sessions) and,
+in the same archive's `logs/`, a retail session on Mali-G57 MC2, driver r26p0,
+Vulkan 1.1.131 (the #8 device class). All sessions end the same way: the
+first pipeline ever built (shader 2, the solid fill used by host clears,
+format 12 = B8G8R8A8) is rejected, `fatal create blit pipeline:
+vkCreateGraphicsPipelines VK_ERROR_INITIALIZATION_FAILED`, then SIGABRT in
+`resot-1002` under `nv2a_pb_scan_to` (logcat tombstones). The v0.3.4 fallback
+covers guest draws only; this blit has no fallback, and every other pipeline
+uses the same shaders.
+
+Cause found in the shaders, not on a Mali device: every embedded SPIR-V
+module declared `OpExtension SPV_GOOGLE_hlsl_functionality1` and
+`SPV_GOOGLE_user_type`, emitted by DXC's `-fspv-reflect`. Vulkan allows these
+only with the `VK_GOOGLE_hlsl_functionality1` / `VK_GOOGLE_user_type` device
+extensions, which SDL never enables. Adreno and NVIDIA ignore them; these Mali
+drivers reject the pipeline. The 2026-10-24 Samsung Mali-G57 (Android 16)
+built pipelines 1..3, so a newer Mali driver accepts them.
+
+Change: `tools/build-native-shaders.py` no longer passes `-fspv-reflect` and
+fails the build if any SPIR-V module has an `OpExtension`. DXC listings
+(`-Fc`) of ps_solid, ps_main, ps_blit, vs_uber and vs_blit with and without
+the flag differ only in the two `OpExtension` and the `OpDecorateString`
+lines: same bindings, same code. Windows Vulkan uses the same shaders.
+
+Checks: `python tools/check-hlsl.py` passes. `tools/build-android.ps1`
+(logs/mali-spirv-android-build.txt): APK 29,427,377 bytes, SHA-256
+8C32C300FE9D8DDEC467108AC7385B4AEF29F0BA50947F4DD55ACFE07C216CE0, still
+0.3.4 / versionCode 9; its regenerated SPIR-V has no `OpExtension`.
+`recomp.ps1 -BuildOnly` for xbox-demo and xbox-retail pass. Native GPU tests
+(`RESOT_GPU_BINDINGS_SMOKE=1 ctest --test-dir build/tests/native-gpu`):
+14/14 pass on the desktop GPU (logs/mali-spirv-gpu-tests.txt). Not checked:
+any Mali device (none available, POCO F6 not connected), so whether these
+drivers then render or hit the next problem (#9 had video-less audio on
+v0.3.1) is unknown; the Adreno phone was not re-run with this APK.
+
 ## 2026-10-26: v0.3.4, rejected pipelines, BlockOnFence release, demo KickOff, logo
 
 Reports: GitHub #9 (Galaxy S21, Exynos 2100 / Mali-G78, Android 15) with its

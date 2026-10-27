@@ -4,6 +4,7 @@ No game data is used. Output is an ignored build artifact embedded in the host.
 """
 import argparse
 import re
+import struct
 import subprocess
 from pathlib import Path
 from importlib.util import spec_from_file_location, module_from_spec
@@ -12,6 +13,20 @@ ROOT = Path(__file__).resolve().parent.parent
 spec = spec_from_file_location("check_hlsl", ROOT / "tools/check-hlsl.py")
 check = module_from_spec(spec)
 spec.loader.exec_module(check)
+
+
+def require_core_spirv(path, data):
+    """RE-SoT: SDL enables no SPIR-V extensions; fail the build on any OpExtension."""
+    words = struct.unpack(f"<{len(data) // 4}I", data)
+    at = 5
+    while at < len(words):
+        op, count = words[at] & 0xFFFF, words[at] >> 16
+        if count == 0:
+            raise RuntimeError(f"{path}: malformed SPIR-V")
+        if op == 10:  # OpExtension
+            name = data[(at + 1) * 4:(at + count) * 4].split(b"\0")[0].decode("ascii")
+            raise RuntimeError(f"{path}: SPIR-V extension {name} needs a Vulkan device extension")
+        at += count
 
 
 def main():
@@ -192,11 +207,15 @@ def main():
             cmd = [args.dxc, str(small_src if entry == "vs_uber_small" else src), "-E", entry, "-T", old_profile.replace("4_0", "6_0"),
                    "-O2", "-Ges", "-Wno-ignored-attributes", "-Fo", str(binary)]
             if fmt == "spirv":
+                # RE-SoT: no -fspv-reflect. It only adds SPV_GOOGLE_hlsl_functionality1
+                # and SPV_GOOGLE_user_type, which Vulkan allows only with the matching
+                # VK_GOOGLE_* device extensions SDL never enables. Mali r26/r32 (GitHub
+                # #8, #9) reject every pipeline with them; bindings are unchanged.
                 cmd += ["-spirv", "-fspv-target-env=vulkan1.0", "-fvk-use-dx-layout"]
-                # Combined image samplers occupy one binding in SDL's SPIR-V ABI.
-                cmd += ["-fspv-reflect"]
             subprocess.run(cmd, check=True)
             data = binary.read_bytes()
+            if fmt == "spirv":
+                require_core_spirv(binary, data)
             header.append(f"static const unsigned char ng_{entry}_{fmt}[] = {{\n")
             header.extend(",".join(str(b) for b in data[i:i+32]) + ",\n" for i in range(0, len(data), 32))
             header.append("};\n")
@@ -204,8 +223,9 @@ def main():
         binary = output / f"ps_specialized_{limit}.spirv"
         subprocess.run([args.dxc, str(path), "-E", "ps_main", "-T", "ps_6_0",
                         "-O2", "-Ges", "-Wno-ignored-attributes", "-Fo", str(binary),
-                        "-spirv", "-fspv-target-env=vulkan1.0", "-fvk-use-dx-layout", "-fspv-reflect"], check=True)
+                        "-spirv", "-fspv-target-env=vulkan1.0", "-fvk-use-dx-layout"], check=True)
         data = binary.read_bytes()
+        require_core_spirv(binary, data)
         header.append(f"static const unsigned char ng_ps_specialized_{limit}_spirv[] = {{\n")
         header.extend(",".join(str(b) for b in data[i:i+32]) + ",\n" for i in range(0,len(data),32))
         header.append("};\n")

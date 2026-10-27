@@ -1,5 +1,11 @@
 # reSOT for Android
 
+After 0.3.4: the Vulkan shaders no longer declare the SPIR-V extensions
+`SPV_GOOGLE_hlsl_functionality1` / `SPV_GOOGLE_user_type`, which older Mali
+drivers reject at the first pipeline (closing the game after Start Game,
+GitHub #8, #9). Not yet confirmed on a Mali device. The Windows Vulkan
+renderer uses the same shaders, so `port/windows` needs no separate change.
+
 Version 0.3.4 stops a rejected graphics pipeline from closing the game (Mali
 reports), releases a stuck D3D wait and brings the definitive logo and the
 animated Prince of Persia title to the launcher. Version 0.3.3 ran the game and the GPU executor in parallel on retail, fixes

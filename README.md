@@ -48,6 +48,14 @@ letterboxed cutscene frames. These are gameplay examples, not a full-game test.*
 
 *Windows demo captures from a scripted 185-second run, 2026-10-14, at 16:9 Hor+.*
 
+## Next release
+
+- **Fix for the Mali crash on Start Game (GitHub #8, #9).** The shaders carried
+  two SPIR-V extensions that Vulkan only allows when the matching device
+  extensions are enabled. Older Mali drivers (Mali-G57 r26, Mali-G710 r32 in
+  the logs) rejected the very first pipeline and the game closed. The shaders
+  are now built without them. Not yet confirmed on a Mali device.
+
 ## What's included in v0.3.4
 
 - **Fewer Android crashes on Mali GPUs.** A graphics pipeline the driver rejects
@@ -162,6 +170,7 @@ every level, device or exact console accuracy.
 | Windows play | 🟢 Keyboard/mouse or controller; high frame rates reported | 🟢 Corrected timing; high frame rates reported |
 | Android play with native Vulkan | 🟢 Runs well in user-tested configurations | 🟢 Runs well in user-tested configurations; caching improvements confirmed |
 | Adreno 640 / MediaTek/Samsung compatibility | 🟢 User confirms operation restored on the tested MediaTek/Samsung device after SDL mip correction | 🟢 User confirms Poco colored-pixel corruption resolved; broader GPU coverage remains open |
+| Mali GPUs (Helio G96 / Mali-G57, Dimensity 9000 / Mali-G710, Exynos 2100 / Mali-G78) | 🟡 Crash on Start Game traced to SPIR-V extensions older Mali drivers reject; shaders rebuilt without them; not yet run on a Mali device | 🟡 Same; the crash was seen in retail logs (Mali-G57 r26, Mali-G710 r32) |
 | Graphics presets | 🟡 Reduced/Standard/Full menu and policy tests pass; new preset gameplay checks pending | 🟡 Same shared policy and verification limits |
 | Android diagnostic sharing | 🟡 On-demand ZIP implemented; Samsung archive received; cancellation/cleanup timing needs device checks | 🟡 Same shared exporter |
 | Bink movies and video skipping | 🟢 Audio/video confirmed | 🟢 Audio/video confirmed |
