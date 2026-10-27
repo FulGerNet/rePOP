@@ -6,13 +6,14 @@ drivers reject at the first pipeline (closing the game after Start Game,
 GitHub #8, #9). Not yet confirmed on a Mali device. The Windows Vulkan
 renderer uses the same shaders, so `port/windows` needs no separate change.
 
-Version 0.3.4 stops a rejected graphics pipeline from closing the game (Mali
+Version 0.4.0 adds Special Load Map and Cheats (in reSOT Options, as on
+Windows) and the same HD menu font. Version 0.3.4 stops a rejected graphics pipeline from closing the game (Mali
 reports), releases a stuck D3D wait and brings the definitive logo and the
 animated Prince of Persia title to the launcher. Version 0.3.3 ran the game and the GPU executor in parallel on retail, fixes
 a retail mid-game freeze, reduces audio crackle and brings the new animated
 logo. Version 0.3.2 added Reduced/Standard/Full graphics presets and a background
 stable-release check with optional Update / Close buttons styled like the
-launcher. The displayed version is 0.3.4. Offline/rate-limit errors are ignored.
+launcher. The displayed version is 0.4.0. Offline/rate-limit errors are ignored.
 No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
 request and reSOT version in its User-Agent. Update opens the official release
 page, without downloading/installing an executable automatically.
@@ -281,6 +282,10 @@ while the panel is open or the touch pad is hidden; tapping the same spot
 still opens/closes the panel. The icon returns when the pad is visible and
 the panel is closed. Windows uses F5 and
 has no corresponding touch button.
+**Game behavior** (the Windows F7 panel's Tutorials, Dagger of time and
+Cheats) has no Android panel yet: this host keeps `[Game] Tutorials` in the
+INI and applies it (retail), and leaves the dagger as the game has it. Cheats and Special Load Map are in reSOT Options, in the
+game's own menus, as on Windows.
 **Look sensitivity** is in **reSOT Options → Controls** in both games:
 25–200% in steps of 25, default 200%, with 100% retaining the original speed. It applies
 to controller, keyboard/mouse and the touch camera, after the game's original

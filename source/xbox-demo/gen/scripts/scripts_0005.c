@@ -32319,6 +32319,8 @@ loc_00202F34: ;
  */
 void sub_00202F40(void)
 {
+    extern void sub_00202F40_enter(void);
+    sub_00202F40_enter();
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */
     int _flags = 0; /* fallback flag var */

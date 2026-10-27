@@ -1024,17 +1024,23 @@ static DWORD WINAPI fb_thread(LPVOID unused)
     (void)unused;
 
     {
-        WNDCLASSA wc;
+        WNDCLASSEXA wc;
         memset(&wc, 0, sizeof(wc));
+        wc.cbSize = sizeof(wc);
         wc.style = CS_DBLCLKS; /* RE-SoT: double-click rebinding in F6. */
         wc.lpfnWndProc   = fb_wndproc;
         wc.hInstance     = GetModuleHandleA(NULL);
         wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
         /* RE-SoT: the executable's own icon (resource 1, port/windows/res)
-         * on the window and the taskbar; NULL, the default, when absent. */
+         * on the taskbar; NULL, the default, when absent. The title bar's
+         * small icon is resource 2, the same picture with its colours
+         * inverted, because the light logo vanished on a white frame. */
         wc.hIcon         = LoadIconA(wc.hInstance, MAKEINTRESOURCEA(1));
+        wc.hIconSm       = (HICON)LoadImageA(wc.hInstance, MAKEINTRESOURCEA(2), IMAGE_ICON,
+                                             GetSystemMetrics(SM_CXSMICON),
+                                             GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
         wc.lpszClassName = "XboxRecompFramebuffer";
-        RegisterClassA(&wc);
+        RegisterClassExA(&wc);
     }
     r.left = 0; r.top = 0; r.right = (LONG)s_fb_width; r.bottom = (LONG)s_fb_height;
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);

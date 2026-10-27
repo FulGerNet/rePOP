@@ -94,6 +94,13 @@ static int s_joy_was[25], s_walk, s_walk_was, s_pending_size, s_size_posted;
 static int s_native_capture, s_native_since, s_capture_armed;
 static int s_keyboard_enabled=1, s_mouse_speed=43, s_walk_deflection=12000;
 static int s_look_sensitivity=200;
+/* Game behavior: Tutorials is saved ([Game] Tutorials); the Dagger of time
+ * (-1 as the game has it, 0 off, 1 on) applies to the running game only. */
+static int s_game_expanded, s_tutorials=1, s_dagger=-1;
+/* Cheats: the title's built-in switch (port/game/resot_cheats.h), as the
+ * game reports it (-1 not readable yet) and a change asked for here (-1
+ * none), taken by the game thread. */
+static volatile LONG s_cheats_state=-1, s_cheats_request=-1;
 static char s_path[1024];
 
 extern void *xbox_FramebufferWindowHandle(void);
@@ -114,6 +121,10 @@ extern void xbox_InputSetHostFilter(void (*)(void *, unsigned));
 /* The game's native pages refresh their labels when the revision moves. */
 static void mark_dirty(void) { InterlockedIncrement(&s_revision); InterlockedExchange(&s_dirty,1); }
 long resot_native_revision(void) { return InterlockedCompareExchange(&s_revision,0,0); }
+int resot_game_tutorials(void) { return s_tutorials; }
+int resot_game_dagger(void) { return s_dagger; }
+int resot_game_cheats_request(void) { return (int)InterlockedExchange(&s_cheats_request,-1); }
+void resot_game_cheats_report(int on) { InterlockedExchange(&s_cheats_state,on); InterlockedExchange(&s_dirty,1); }
 
 void resot_options_summary(char *out, unsigned size)
 {
@@ -163,6 +174,8 @@ static int save_config(void)
     }
     snprintf(value,sizeof value,"%d",s_console_logs);
     ok &= WritePrivateProfileStringA("Diagnostics","ConsoleLogs",value,s_path);
+    snprintf(value,sizeof value,"%d",s_tutorials);
+    ok &= WritePrivateProfileStringA("Game","Tutorials",value,s_path);
     if (!ok) fprintf(stderr,"[OPTIONS] could not save %s (read-only folder?)\n",s_path);
     snprintf(s_status,sizeof s_status,"%s",ok ? "Saved to resot-options.ini." :
              "Could not save resot-options.ini. Folder may be read-only.");
@@ -203,9 +216,10 @@ static void assign_binding(int code)
 
 static int controls_top(void) { return s_graphics_expanded ? 444 : 46; }
 static int rows_top(void) { return controls_top()+138; }
+static int game_top(void) { return controls_top()+(s_controls_expanded?138+ACTIONS*ROW_H+15:42); }
 static int max_scroll(void)
 {
-    int height=controls_top()+(s_controls_expanded?138+ACTIONS*ROW_H+15:42);
+    int height=game_top()+(s_game_expanded?200:42);
     int maximum=height-(BODY_BOTTOM-BODY_TOP);
     return maximum>0?maximum:0;
 }
@@ -352,6 +366,14 @@ static int event(void *handle, unsigned message, uintptr_t wp, intptr_t lp)
             } else if(body>=controls_top() && body<controls_top()+28 &&
                       (!s_controls_expanded || x<360)) {
                 s_controls_expanded=!s_controls_expanded;s_capture=-1;scroll_to(0);save_config();
+            } else if(body>=game_top() && body<game_top()+28) {
+                s_game_expanded=!s_game_expanded;s_capture=-1;scroll_to(s_scroll);
+            } else if(s_game_expanded && body>=game_top()+38 && body<game_top()+68 && x>=245) {
+                s_tutorials=x<360;save_config();
+            } else if(s_game_expanded && body>=game_top()+78 && body<game_top()+108 && x>=245) {
+                s_dagger=x<320?-1:x<400?1:0;mark_dirty();
+            } else if(s_game_expanded && body>=game_top()+118 && body<game_top()+148 && x>=245) {
+                InterlockedExchange(&s_cheats_request,x<360);InterlockedExchange(&s_cheats_state,x<360);
             } else if(s_graphics_expanded && body>=34 && body<64) {
                 if (x>=155 && x<500) {
                     s_renderer=x<275?0:x<405?1:2;
@@ -492,6 +514,33 @@ static int panel(const uint32_t **pixels,uint32_t *width,uint32_t *height)
             }
             text(253,y,225,s_capture==i&&s_capture_tab==s_tab?"Press input...":label,RGB(166,201,237));
         }
+        }
+        box(16,Y(game_top()),468,28,RGB(31,43,60));
+        text(23,Y(game_top()),450,s_game_expanded?"[-] Game behavior":"[+] Game behavior",RGB(110,193,249));
+        if(s_game_expanded) {
+            static const char *const dagger[3]={"Game","On","Off"};
+            int gt=game_top();
+            text(20,Y(gt+39),220,"Tutorials",RGB(220,229,242));
+            box(245,Y(gt+38),110,30,s_tutorials?RGB(46,95,135):RGB(36,46,63));
+            box(365,Y(gt+38),115,30,!s_tutorials?RGB(46,95,135):RGB(36,46,63));
+            text(257,Y(gt+39),95,"On",RGB(235,242,251));text(377,Y(gt+39),95,"Off",RGB(235,242,251));
+            text(20,Y(gt+79),220,"Dagger of time",RGB(220,229,242));
+            for(i=0;i<3;i++) {
+                int v=i==0?-1:i==1?1:0;
+                box(245+i*80,Y(gt+78),75,30,s_dagger==v?RGB(46,95,135):RGB(36,46,63));
+                text(255+i*80,Y(gt+79),65,dagger[i],RGB(235,242,251));
+            }
+            text(20,Y(gt+119),220,"Cheats",RGB(220,229,242));
+            box(245,Y(gt+118),110,30,s_cheats_state==1?RGB(46,95,135):RGB(36,46,63));
+            box(365,Y(gt+118),115,30,s_cheats_state==0?RGB(46,95,135):RGB(36,46,63));
+            text(257,Y(gt+119),95,"On",RGB(235,242,251));text(377,Y(gt+119),95,"Off",RGB(235,242,251));
+#if defined(RESOT_RUNTIME_DEMO) && RESOT_RUNTIME_DEMO
+            /* The demo has no tutorial switch: its universe keeps only a per-
+             * tutorial array (mi_Tutorials); the retail's is universe +0xC0. */
+            text(20,Y(gt+155),460,"Tutorials: retail only.",RGB(139,159,186));
+#else
+            text(20,Y(gt+155),460,"Tutorials saved.",RGB(139,159,186));
+#endif
         }
         if(s_graphics_expanded && s_dropdown)for(i=0;i<6;i++) {box(245,Y(272+i*29),235,29,RGB(42,57,78));
             text(255,Y(272+i*29),220,s_size_names[i],RGB(235,242,251));}
@@ -750,6 +799,7 @@ void resot_options_init(void)
         if(s_joy[i]<0 || s_joy[i]>24)s_joy[i]=s_default_joy[i];
     }
     s_console_logs=GetPrivateProfileIntA("Diagnostics","ConsoleLogs",0,s_path)!=0;
+    s_tutorials=GetPrivateProfileIntA("Game","Tutorials",1,s_path)!=0;
     if(s_console_logs)resot_console_logs_set(1);
     xbox_SetFrameLimit(s_fps);
     xbox_SetVSync(s_vsync);

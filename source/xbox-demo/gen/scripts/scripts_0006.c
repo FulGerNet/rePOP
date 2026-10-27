@@ -84231,13 +84231,13 @@ loc_0023EFC9: ;
 }
 
 /**
- * sub_0023F040
+ * sub_0023F040_gen
  * Original: 0x0023F040 - 0x0023F107 (199 bytes, 50 insns)
  * Folder: scripts (between: 0x0023EAA0 and 0x00240140)
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0023F040(void)
+void sub_0023F040_gen(void)
 {
     extern void sub_0023F040_enter(void);
     sub_0023F040_enter();

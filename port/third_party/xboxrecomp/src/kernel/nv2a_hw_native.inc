@@ -12,6 +12,7 @@
 #include "nv2a_native_compat.h" /* RE-SoT: bounded device workaround; environment override for A/B. */
 #include "nv2a_texture_probe.h" /* RE-SoT: separate source/upload/mip corruption using readbacks. */
 #include "resot_geometry_cache.h" /* RE-SoT: reuse immutable input geometry, keep per-draw constants live. */
+#include "resot_hd_font.h" /* RE-SoT: the user's HD menu font for the title's sheet. */
 #include "nv2a_hw_native_visibility.inc"
 static NgVisibility s_ng_visibility; /* RE-SoT: retail-only counting, shared native drivers. */
 static int s_ng_compat; /* RE-SoT: reference GPU shaders, not the CPU vertex interpreter. */
@@ -48,6 +49,7 @@ typedef struct {
     SDL_GPUTexture *image;
     Texture guest;
     uint32_t hash, checked, used;
+    int hd; /* RE-SoT: the HD menu font in place of the guest sheet (resot_hd_font.h). */
 } NgTexture;
 /* RE-SoT: stable, collision-checked program entries. Workers only read the
  * immutable source/key; shader publication is protected by each entry's lock.
@@ -881,7 +883,7 @@ static SDL_GPUTexture *ng_texture(int stage, NgSurface *target)
     const Texture *t = &s_gpu.texs[stage];
     NgSurface *best = NULL;
     NgTexture *c = NULL, *victim = NULL;
-    uint32_t i, slot, hash, layers, face, *px, levels = 1;
+    uint32_t i, slot, hash, layers, face, *px, levels = 1, w, h;
     int reuse_image = 0; /* RE-SoT: SDL cycling preserves earlier sampled versions. */
     if (!t->valid || !t->width || !t->height || t->width > 4096 || t->height > 4096) return NULL;
     for (i = 0; !t->cube && i < HW_MAX_SURFACES; i++) {
@@ -920,23 +922,34 @@ static SDL_GPUTexture *ng_texture(int stage, NgSurface *target)
     /* RE-SoT: flush readers before cycling or recreating. SDL retires the
      * old backing image after its last encoded GPU use. */
     if (c->image) ng_flush_draws(); /* RE-SoT: retire a sampled version only after encoding its draws. */
-    if (c->image && !reuse_image) SDL_ReleaseGPUTexture(s_ng.device, c->image);
     layers = t->cube ? 6 : 1;
-    if (t->levels > 1 && tex_size_from_format(t->color)) {
-        uint32_t extent = t->width > t->height ? t->width : t->height;
-        while ((extent >>= 1) != 0) levels++;
-    }
-    if (!reuse_image) c->image = ng_image(t->width, t->height, t->cube, levels,
-        SDL_GPU_TEXTUREUSAGE_SAMPLER | (levels > 1 ? SDL_GPU_TEXTUREUSAGE_COLOR_TARGET : 0),
-        SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
     px = (uint32_t *)malloc((size_t)t->width*t->height*layers*4);
     if (!px) ng_fail("decode texture allocation");
     /* RE-SoT: same bulk P8/ARGB conversion as D3D11, including Android. */
     for (face = 0; face < layers; face++)
         hw_decode_texture(t, t->cube ? face*tex_face_stride(t) : 0,
             px + (size_t)face*t->width*t->height);
-    ng_upload_cycle(c->image, px, t->width, t->height, layers, levels > 1, reuse_image);
-    if(s_ng.texture_probe && !t->cube && t->color<256 && s_ng.texture_probe_count<12 &&
+    /* RE-SoT: the menu font sheet becomes the user's HD font, a larger image
+     * with the same layout (resot_hd_font.h); the image is decoded first so
+     * its size is known before the host image is made. */
+    {
+        int hd = t->cube ? 0 : resot_hd_font_match(px, t->width, t->height);
+        uint32_t *big = hd ? resot_hd_font_pixels(hd) : NULL;
+        if (big) { free(px); px = big; w = RESOT_HD_FONT_W; h = RESOT_HD_FONT_H; }
+        else { hd = 0; w = t->width; h = t->height; }
+        if (reuse_image && c->hd != hd) reuse_image = 0;
+        c->hd = hd;
+    }
+    if (c->image && !reuse_image) SDL_ReleaseGPUTexture(s_ng.device, c->image);
+    if (t->levels > 1 && tex_size_from_format(t->color)) {
+        uint32_t extent = w > h ? w : h;
+        while ((extent >>= 1) != 0) levels++;
+    }
+    if (!reuse_image) c->image = ng_image(w, h, t->cube, levels,
+        SDL_GPU_TEXTUREUSAGE_SAMPLER | (levels > 1 ? SDL_GPU_TEXTUREUSAGE_COLOR_TARGET : 0),
+        SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+    ng_upload_cycle(c->image, px, w, h, layers, levels > 1, reuse_image);
+    if(s_ng.texture_probe && !c->hd && !t->cube && t->color<256 && s_ng.texture_probe_count<12 &&
        s_ng.texture_probe_formats[t->color]<2 && (uint64_t)t->width*t->height<=1024*1024) {
         ResotTextureProbe probes[RESOT_PROBE_MIPS];
         const uint8_t *raw=(const uint8_t *)xbox_GetMemoryOffset()+t->offset;
@@ -1271,6 +1284,22 @@ static void ng_constants(NgSurface *s, NgVsConst *vc, HwPsConst *pc, SDL_GPUText
     if (main_view && s_hw.batch_projected_2d) vc->ws[0] = 1; /* RE-SoT: hw_classify_screen */
     vc->ws[1] = (float)s->w; vc->ws[2] = 1;
     if (main_view && s_hw.batch_hud) { vc->ws[0] = 1; vc->ws[3] = hw_hud_shift(); }
+    /* RE-SoT: the demo's corner logo, moved left just enough to end
+     * RESOT_LOGO_MARGIN pixels inside the picture (hw_classify_screen). The
+     * shader squeezes flat x inside (ws.z, ws.y - ws.z), then adds ws.w. */
+    if (main_view && s_hw.batch_logo_right > 0) {
+#define RESOT_LOGO_MARGIN 24.0f /* host value, 640-wide units */
+        float r = s_hw.batch_logo_right, mid = 0.5f*vc->ws[1];
+        static unsigned told;
+        if (r > vc->ws[2] && r < vc->ws[1] - vc->ws[2]) r = (r - mid)*vc->ws[0] + mid;
+        r += vc->ws[3];
+        if (r > vc->ws[1] - RESOT_LOGO_MARGIN) {
+            vc->ws[3] -= r - (vc->ws[1] - RESOT_LOGO_MARGIN);
+            if (told++ < 4)
+                fprintf(stderr, "[HUD] demo logo ended at x %.1f of %.0f: moved %.1f left\n",
+                        r, vc->ws[1], r - (vc->ws[1] - RESOT_LOGO_MARGIN));
+        }
+    }
     for (i = 0; i < 8; i++) {
         pc->cw[i][0] = s_gpu.rc.color_icw[i]; pc->cw[i][1] = s_gpu.rc.alpha_icw[i];
         pc->cw[i][2] = s_gpu.rc.color_ocw[i]; pc->cw[i][3] = s_gpu.rc.alpha_ocw[i];
@@ -1732,7 +1761,7 @@ static int ng_draw_program_batch(void)
         }
         if (i == 4 && hw_skip_postprocess(post, 4)) return 1;
     }
-    s_hw.batch_full_width = s_hw.batch_projected_screen = s_hw.batch_hud = 0;
+    s_hw.batch_full_width = s_hw.batch_projected_screen = s_hw.batch_hud = 0; s_hw.batch_logo_right = 0; /* RE-SoT */
     s_hw.batch_projected_2d = 0;
     if (s_hw.widen > 1.0f && s_gpu.clip_w == 640 && s_gpu.clip_h >= 448) {
         float in[NV2A_VSH_INPUTS][4], lo = 1e9f, hi = -1e9f, top = 1e9f, bottom = -1e9f;

@@ -1,5 +1,72 @@
 # Validation log
 
+## 2026-10-28: HD menu font, demo corner logo
+
+**Font sheets.** Both BFs keep one main FONTDESC, 0x0B0041BC (demo
+GameInterface, retail MenuCredits), beside its texture 0x0B0041BB, 512x128:
+demo type 2, 4-bit indices into palette 0x1B007169 (high nibble first),
+retail BGRA8 with mipmaps; both stored bottom-up. Exported upright to the
+ignored `Assets/fonts/<target>/font_0B0041BB.png` (PoP BF Lab reader as a
+tool). The user drew HD versions (2170x725, 2172x724) with other margins and
+line spacing; `tools/hd-font.py` maps each onto the sheet's grid (one linear
+map per axis, glyph bounding boxes) at 2048x512, coverage in 16 levels:
+overlap with the sheet's glyphs 0.751 (demo) and 0.740 (retail); an overlay
+at 2048x512 showed the glyphs within about one sheet pixel.
+`port/game/resot_hd_font_<target>.h` holds only that coverage.
+
+**Substitution** (`resot_hd_font.h`, `nv2a_hw_native.inc`, RE-SoT): a
+decoded 512x128 texture whose coverage on a 64x16 grid matches the HD font's
+(IoU >= 0.5, upright or upside down) is uploaded as the 2048x512 white HD
+font instead; linear textures already scale coordinates by the guest size.
+`[HDFONT]` lines log the match. `RESOT_HD_FONT=0` turns it off. The D3D11
+renderer is unchanged.
+
+**Demo corner logo.** Drawn partly off the right edge once the reSOT entries
+exist (user screenshot, 16:9 cut-scene; with `RESOT_HIDDEN_MENUS=0` it was in
+place). Cause in the title not found. Native renderers, demo only: a flat,
+depth-test-off batch in the bottom band right of centre that samples a
+256x64 texture (the logo sheet 0x0B0044F9 is 256x64) and would end past the
+picture's right edge is moved left to end 24 units inside it; `[HUD]` lines
+log the move.
+
+Checks: `recomp.ps1 -BuildOnly` for both targets and `build-android.ps1`
+pass (logs/hdfont-*-build.txt). Not run: whether the match finds the sheet,
+how the HD font looks, and whether the logo is now visible.
+
+## 2026-10-28: Special Load Map without the new game, at a checkpoint
+
+User report, retail: the map loaded after the balcony, with the Prince at a
+wrong place. User log `bin/logs/xbox-retail-err.txt` (23:10, 1201): the
+follow replaced the first map at poll 3765 and saw the load at 3893 with
++0 (mk_CheckPoint_CurKey) 0xFFFFFFFF; the balcony played before, while the
+title's own new game ran.
+
+Found in the XBE: universe +0x110 is not a new-game state but a movie
+number: 0x001BC41C formats it with "Cine_%03d.int" (0x0041F6DC) and plays it,
+then stores 0xFFFFFFFF; 10 is the new game's introduction. Start New Game's
+handler (menu message kind 0x3E7, 0x00143C9A) closes the menu and sends the
+Prince (0x0067B6A0) message 0xEA; the universe gets the movie and the first
+map only after the balcony. In the retail BF (PoP BF Lab reader as a tool),
+the value +0 held after Start New Game, 0x2200B794, is the GAO
+0101_Entree_TEC_StartCheckpoint, and after MenuBoot 0x0F0053D9 is
+Menu3D_TEC_Checkpoint; every map's worlds (wol words whose binarized form is
+a "_wow_" entry) have checkpoint or start-position GAOs, except 1401.
+
+Change (`port/game/resot_cheats.h`, `source/xbox-retail/target_hooks.c`):
+each map carries one checkpoint of its worlds; the choice still sends Start
+New Game (closes the menu), and 45 polls later the universe gets the map in
++0x118/+0xF4, the checkpoint in +0, +0x110 0xFFFFFFFF (no movie) and request
+3, as a saved game is loaded. A later movie 10 or first-map write by the
+title's new game is cancelled for 20000 polls. The movie skip that followed
+the old path is removed. `[MAP]` lines log the request, the load, and +0 120
+polls after it.
+
+Checks: `recomp.ps1 -BuildOnly` for xbox-retail and xbox-demo, and
+`build-android.ps1`, pass (logs/map-checkpoint-*-build.txt). Not run: whether
+the balcony is gone, whether loading with +0 set places the Prince at that
+checkpoint, and whether a request 45 polls after the menu closes is safe
+(a request with the menu open faulted earlier) are not checked.
+
 ## 2026-10-27: Mali crash on Start Game (GitHub #8, #9): SPIR-V extensions
 
 Logs: v0.3.4 (versionCode 9) diagnostics archive
@@ -38,6 +105,196 @@ Checks: `python tools/check-hlsl.py` passes. `tools/build-android.ps1`
 any Mali device (none available, POCO F6 not connected), so whether these
 drivers then render or hit the next problem (#9 had video-less audio on
 v0.3.1) is unknown; the Adreno phone was not re-run with this APK.
+
+## 2026-10-27 (late): Special Load Map follow, skin source, demo float state
+
+**Retail Special Load Map** started the balcony and 0101_Entree as Start New
+Game does (user report). In the scripted log of that build (`logs/xbox-retail-err.txt`)
+the follow never saw +0x110 = 0x0A after the choice and stopped at its
+timeout; it also stopped for good at the first poll the universe was not
+readable, as across a load. `resot_map_frame` now replaces 0x2200B526 in any
+of the universe's first 0x180 bytes whatever +0x110 holds, skips unreadable
+polls, ends after the chosen map's request has cleared or 20000 polls.
+Built; not run.
+
+**Special Load Map, second user run** (retail, build above): the map
+loaded, but after the balcony; the Prince then stood at a wrong place and
+showed only his head. Now, once the chosen map's load is requested, the
+new-game state (+0x110) and mk_CheckPoint_CurKey (+0) go back to
+0xFFFFFFFF, and any other load requested while following becomes the chosen
+map. For the head: the Prince's set-up hook writes, into the costume source,
+the first PrinceCostume0N merged with the current world when the source's
+costume is not merged (`scene.c` records them). The F7 Prince skin choice
+was removed at the user's request. `recomp.ps1 -BuildOnly` both targets;
+not run.
+
+**Prince skin.** [0x0034AC3C] / [0x0044AA24] is the running AI instance, which
+the set-up only compares with its source reference (demo 0x002032B5, retail
+0x00270CCA); the earlier version wrote whichever AI ran last. The source is
+the set-up's first stack argument (demo 0x00202F40) or eax (retail
+0x00270940); entry hooks there write the chosen costume into its +0x1C just
+before it is read. Relifted (`recomp.ps1 -SkipAnalysis`, both targets) for
+the new hooks; not run. Android has no skin choice (returns 0).
+
+**Demo logo after a Special Load Map** (user report): the demo's guest calls
+from the hooks now save and restore xmm0-7 and the x87 stack with the integer
+registers. A guess at the cause, not confirmed; not run.
+
+## 2026-10-27 (night): v0.4.0, retail late levels, skin, menus, logo
+
+**Retail Special Load Map keys.** The retail BF's `WOLInfo.bin` (0x0D0A899F)
+lists every map's original key (dumped with the PoP BF Lab reader, used as a
+tool only). Four of the 30 keys differed: 1201 0x4D0425D8 (was 0x4D0125D8),
+6201 Prison A 0x2200BBF5 (0x3200BBF5), 7401 0x2B0059EC (0x1B0059EC), 8101
+Tower Base 0x4100268A (0x0101268A). The other 26 match.
+
+**7601 Salle crash.** User logs and `RESOT_TEST_MAP=2200BCA7,2000`: fault
+writing 0x80B66250 in the GPU executor (`nv2a_pb_scan_to`), on a contiguous
+page left PAGE_READONLY by the title's MmSetAddressProtect (0x402, texture
+pages); pushbuffer walks left physical memory before it. Retail runtime fix
+(`kernel_bridge.c`, `RE-SoT`): contiguous pages keep write access. After it:
+Salle 120 s, no fault, no pushbuffer warnings, the level drawn correctly in
+the window dump; 8101 Tomb 110 s, cutscene drawn, no fault.
+
+**8101 Tower Base** still faults in sub_00030990+0x206 (the main loop's
+call with ebx = the Prince, list at [ebx+0x24] +0x484/+0x488 holding
+garbage pointers), with the correct key, with heap reclaim off, without the
+map pages, and with `RESOT_HIDDEN_MENUS=0` (1 of 2 runs loaded; the user saw
+the Prince as a head only, in the void, when it did not fault). Not fixed.
+
+**Prince skin.** Both Prince AIs copy mi_CostumeID at set-up from variable
++0x1C of the instance at [0x0034AC3C] (demo, 0x002032DE) / [0x0044AA24]
+(retail, 0x00270CF3); writing the Prince's own variable while playing showed
+nothing (user report). The F7 skin now writes that source variable. Built;
+not checked in game.
+
+**Demo logo.** The in-game "Prince of Persia" logo was drawn right of its
+place, half off the screen (user report; window dump at 110 s, x 550+ of
+640), in v0.3.2 at x 420-520, and in the current build with
+`RESOT_HIDDEN_MENUS=0` in its place. Removing the A/B legend move did not
+change it; moving Cheats and Special Load Map off the main and pause pages
+into reSOT Options did: logo at x 420-520 at 110 s. In one run the logo was
+still cut at 20 s (during a scene before any input); not explained.
+
+**F7 Cheats On/Off** (Windows): the same switch, requested from the panel
+and reported back to it. Built; not clicked here.
+
+Checks: `recomp.ps1 -BuildOnly` both targets (0 errors), runs as above.
+Version 0.4.0 (Android versionCode 10). Android not rebuilt in these runs
+unless noted below.
+
+## 2026-10-27 (evening): map changes, Special Load Map, F7 Game behavior
+
+**How the title changes map** (universe watch, RESOT_UNIV_WATCH=1). Demo,
+Start: mi_WorldKeyToLoad (+0x88) and mi_CheckPoint_CurMapID (+0xA0) =
+0x0F00532A, mi_ChangeMapRequest (+0x90) 1 -> 2 -> 3, load, 0. Retail, Start
+New Game: +0x110 = 0x0A, +0x118 = 0x2200B526, about 120 polls later +0xF4 =
+the same and +0x108 = 3, load, mi_CurrentWorldKey +0x134. Map keys: BF
+entries are named "<name>_wol_<bin>.bin" with bin = 0xFF000000 | (key >> 24
+& 0xF) << 16 | (key & 0xFFFF); the loader accepts any key of that form (the
+demo loaded 01_GP01_E3_Long for 0x1F015364), but levels compare the original
+key, so each listed map carries its original key (lifted code immediates,
+else the most frequent matching word of the BF data).
+
+**Special Load Map.** Retail: main menu, 3 pages of 10 area maps, each a new
+game on that map (the retail XBE keeps only the strings 0x0B0041D2:7-8).
+- A direct request from the main menu loaded 2101 but, as the user saw, the
+  Prince only as a head, without weapons or Farah, falling. With the new-game
+  state written too, 2101 merged PrinceCostume03 and Prince_Sword01; the user
+  confirms the menu works. The introduction movie that then plays is ended
+  after 30 status calls (ending it at the first call left its frame on the
+  screen, user report); the fix is built, not yet confirmed.
+- A request of 1 (demo style) from the retail main menu faulted in the loader
+  (0x003AB1E0); 3 did not.
+Demo: main menu now Start, Load Map, Sound, Camera, Controller, Special Load
+Map, Cheats, reSOT Options, Quit; Special Load Map lists every map of the
+BF (20) plus 01_GP01_E3_Cour (a world no map lists) for the record. "Menu"
+closed the demo when the user chose it and is now listed only.
+- Scripted direct requests, audio on, 45 s each: 8 of 12 loaded,
+  03_GP11_GreatHall_Fight, 05_GP14_E3_Cour, 06_GP24_Bath_Fight and
+  06_GP24_E3_Long faulted (0x00028FD0 reading 0x90D068CE, and elsewhere),
+  03 also with its original key from the game's own Load Map table. The demo
+  choices now send the original Load Map's message (kind 1000, key, id 50);
+  not yet checked on those four maps.
+
+**F7 Game behavior** (Windows; Android keeps `[Game] Tutorials` only).
+- Prince variables through the main actor (demo [0x00614FCC], retail
+  [0x0067B6A0]) +0x18 +4 +0x44. Demo names from the Prince model (file
+  0xBB000032 in Prince_wow_ff0c0226, 430 records + 30-byte names; offsets
+  as serialized): mb_DaggerActive +0x8FC (1 in the first E3 level),
+  mi_CostumeID +0x5F8 (3 there, PrinceCostume04). Retail model 424 records,
+  no names: mb_DaggerActive +0x77C (1 in the main menu, 0 at the start of
+  0101_Entree), mi_CostumeID +0x4C4 (0 in 0101_Entree, 4 in
+  7401_HourglassRoom with PrinceCostume05).
+- Tutorials: retail universe +0xC0 followed every change the user made in
+  Options > Display > Tutorials; written when F7 changes and at each map
+  load. The demo has no such switch (only the mi_Tutorials array).
+- Not checked: what the Prince looks like or can do after the dagger or
+  costume variable is changed while playing.
+
+Checks: `recomp.ps1 -BuildOnly` both targets, `build-android.ps1` (APK
+built). Not committed.
+
+## 2026-10-27: built-in cheats switch, pause entries, demo legend, window icon
+
+**How the title's cheats work** (both XBEs, checked in each). The switch is a
+variable of the universe AI (key 0xCC00008E, the BF header's universe key):
+demo OVA 8 `mb_CheatsEnabled`, retail OVA 22, int 0/1, flags without Reinit
+(0x20) or Save (0x10). In memory the offset is the serialized one minus 4:
+demo pc_VarsBuffer +0x6C, retail +0xD8. Compiled AI reads it every frame
+(demo 0x001EC749, retail 0x001DC66E and 0x0026F2FE: switch on and pad bit
+0x1000 newly pressed). No compiled code writes it. Both BFs keep "Cheats" at
+text 0x0B00449C:3, but no page of either XBE adds a choice for it. The
+universe instance is the loaded address the LOA resolver finds for its key
+(demo table 0x0047EC30, retail 0x0046EFE8), pc_VarsBuffer at +0x44; observed
+at the demo main menu: instance 0x01492080, vars[0x6C] = 1 (that BF's
+initial value), vars[4] = 0xFFFFFFFF, vars[8] = 0.
+`port/game/resot_cheats.h` reads and writes it with probed reads; "Cheats:
+On/Off" (the title's own "Cheats", "On", "Off" strings) is on the main page
+of both games.
+- Windows, scripted runs (`RECOMP_PAD_SCRIPT`, `RESOT_MENU_TRACE=1`): label
+  shown, switch read (demo 0x015E114C, retail 0x743FF178), toggled and
+  written at the main menu. One press ran the choice's action more than once
+  in the scripted runs; the user then tried both games and confirms the
+  switch works. The cheats' in-level effects were not checked here.
+
+**Pause menus.** Demo: the menu init 0x0015D3B0 builds both pause pages on the
+same menu object as the main page; Cheats and reSOT Options go before
+"Restart Demo" (0x0015D958, 0x0015E7CD), and the per-construction reset moved
+to the init's first page (0x0015D8CD). "Quit to Demos Menu" (add return
+0x0015E7FC, bind return 0x0015B681, kind 1007) is skipped; RESOT_DEMOS_QUIT=1
+keeps it; this needed `recomp.ps1 -Target xbox-demo -SkipAnalysis` (gen diff:
+recomp_funcs.h and two renamed routines, sub_0023F040_gen and
+sub_00117580_gen). Retail: the pause AI uses its own menu object, so it gets
+its own reSOT Options pages (added before Quit, return 0x001A342C; built at
+the Options page open, return 0x001A3470).
+- Demo, 110 s run into Entree, START at 98 s: pause shows Continue, Sound,
+  Camera, Controller, Cheats: On, reSOT Options, Restart Demo; no Quit to
+  Demos Menu (window dumps snap_0105/0110).
+- Retail, 120 s run into the first level: pause shows Continue, Options,
+  Cheats, reSOT Options, Quit; the label changed Off/On with the presses.
+  Log: 64 of 64 pause choices bound. Selecting reSOT Options from the pause
+  was not checked.
+
+**Demo A/B legend.** 0x0B00411F:6 sat at x 0.55 (text action +0x1C, y 0.8 at
++0x20) under the longer main page; moved to x 0.75 when its text action asks
+for its string. 640x480 window dump: legend at x 440-588, clear of the choices.
+
+**Window icon.** The game window's title bar (fb_present.c `hIconSm`) uses
+resource 2, `port/windows/res/resot_window.ico` (resot.ico with RGB inverted,
+alpha kept, all 7 sizes); taskbar and executable keep resource 1. Built for
+both targets; the title bar itself was not looked at here.
+
+**Special Load Map.** Retail XBE: the main menu keeps group 0x0B0041D2 at
+var+0x7C8 and uses indices 0, 3, 4, 6, 9, 10, 14 and a loop from 0x12; 7
+("Special") and 8 ("Special Load Map") are never referenced: only the strings
+remain. Demo Load Map: each of the nine choices sends a message kind 1000,
+id 50, param = world key (keys stored at var+0xC8..+0xE8 at 0x0015D580);
+"Press Start Button" uses the same kind with key 0x0B0044C9. Demo universe
+variables include mi_WorldKeyToLoad (+0x88) and mi_ChangeMapRequest (+0x90).
+The retail recreation is not done yet.
+
+Checks: `recomp.ps1 -BuildOnly` for both targets (0 errors).
 
 ## 2026-10-26: v0.3.4, rejected pipelines, BlockOnFence release, demo KickOff, logo
 

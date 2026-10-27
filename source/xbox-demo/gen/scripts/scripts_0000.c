@@ -16089,13 +16089,13 @@ loc_0011754D: ;
 }
 
 /**
- * sub_00117580
+ * sub_00117580_gen
  * Original: 0x00117580 - 0x00117686 (262 bytes, 75 insns)
  * Folder: scripts (between: 0x00115A70 and 0x00118830)
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00117580(void)
+void sub_00117580_gen(void)
 {
     extern void sub_00117580_enter(void);
     sub_00117580_enter();

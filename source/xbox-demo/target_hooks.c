@@ -452,6 +452,8 @@ static int menu_trace(void)
     return on;
 }
 
+static void menu_text(uint32_t ref, char *out, unsigned size);
+static void text_dump(void);
 static int hidden_menus(void);
 static void native_reset(void);
 static void native_build(uint32_t menu);
@@ -463,17 +465,24 @@ static void native_bind(void);
  * menu, flags, top, spacing; floats in screen fractions). */
 #define MENU_LOADMAP_OPEN_RET 0x0015E854u /* 0x0023F110 building the page */
 #define MENU_TITLE_OPEN_RET   0x0015EB37u /* 0x0023F110 opening the title page */
-#define MENU_E3_OPEN_RET      0x0015E8EAu /* 0x0023F110 opening the E3 main page */
+#define MENU_PAUSE_OPEN_RET   0x0015D8CDu /* 0x0023F110: the init's first page, Pause */
 
 void sub_0023F110_enter(void)
 {
     /* 0x0015D3B0 rebuilds these pages after leaving a game. Guest handles
-     * belong to that construction, not to the lifetime of the host process. */
-    if (GMEM32(g_esp) == MENU_E3_OPEN_RET && hidden_menus())
+     * belong to that construction, not to the lifetime of the host process;
+     * its first page is the pause page (0x0015D8CD). */
+    if (GMEM32(g_esp) == MENU_PAUSE_OPEN_RET && hidden_menus())
         native_reset();
-    if (menu_trace())
-        fprintf(stderr, "[MENU] page open  menu=%08X ret=%08X flags=%08X top=%g step=%g\n",
-                g_eax, GMEM32(g_esp), GMEM32(g_esp + 8), GMEMF(g_esp + 16), GMEMF(g_esp + 20));
+    if (menu_trace()) {
+        char t[80];
+        text_dump();
+        menu_text(g_ecx, t, sizeof t);
+        fprintf(stderr, "[MENU] page open  menu=%08X ret=%08X flags=%08X top=%g step=%g"
+                        " title=%08X:%u \"%s\"\n",
+                g_eax, GMEM32(g_esp), GMEM32(g_esp + 8), GMEMF(g_esp + 16), GMEMF(g_esp + 20),
+                g_ecx ? GMEM32(g_ecx) : 0, g_ecx ? GMEM32(g_ecx + 4) : 0, t);
+    }
     if (GMEM32(g_esp) == MENU_LOADMAP_OPEN_RET && hidden_menus()) {
         GMEMF(g_esp + 16) = 0.26f;
         GMEMF(g_esp + 20) = 0.05f;
@@ -517,16 +526,43 @@ typedef struct {
     uint32_t choice;                  /* created handle */
     int bound;
     const uint32_t *host_page;        /* or a page built here (page_var 0) */
+    uint32_t msg;                     /* or a reSOT message instead of a page */
+    uint32_t before;                  /* return of the 0x0023F040 call it precedes */
 } MenuEntry;
 static uint32_t s_resot_root;         /* reSOT Options page, built below */
+static uint32_t s_pause_root;         /* its pause version, without the maps */
+#define T_MAP_TITLE      17u          /* "Special Load Map" */
+#define MENU_E3_SOUND_RET 0x0015E94Au /* 0x0023F040 call creating E3 "Sound" */
 #define RESOT_TEXT_GROUP 0x0B00FE00u  /* not a key of the demo's BF: injected */
+#define T_CHEATS_LABEL   16u          /* "Cheats: On/Off", see resot_cheats.h */
+#define MSG_CHEATS       0xFE00u
+/* The menu init's text group 0x0B00449C still has "Cheats" at index 3,
+ * between "Load" and "Load Map", but no page of this XBE adds a choice for
+ * it and no compiled AI writes the switch: the demo's cheats came only from
+ * the BF's initial value. This choice restores it, changing the switch in
+ * memory. */
+/* The same init builds the pause pages, on the same menu object: 0x0015D8CD
+ * (Pause: Continue, Options, Restart Demo) and 0x0015E6D1 (Pause: Continue,
+ * Sound, Camera, Controller, Restart Demo, Quit to Demos Menu). Cheats and
+ * reSOT Options go before their "Restart Demo" (0B00411F:3). */
+#define MENU_PAUSE_RESTART_RET    0x0015D958u
+#define MENU_E3PAUSE_RESTART_RET  0x0015E7CDu
+/* Cheats and Special Load Map are choices of reSOT Options, not of the
+ * game's pages: with them on the main and pause pages the in-game "Prince of
+ * Persia" logo was drawn to the right of its place, half off the screen (user
+ * report; RESOT_HIDDEN_MENUS=0 put it back, window dumps at 110 s). */
 static MenuEntry s_entries[] = {
-    { "Load Map", 0x0B00449Cu, 4u, 0x0BCu, 0, 0, 0 },  /* nine levels */
-    { "reSOT Options", RESOT_TEXT_GROUP, 0u, 0, 0, 0, &s_resot_root },
+    /* Load Map right under Start, as the title page had "Load" under its
+     * "Press Start Button". */
+    { "Load Map", 0x0B00449Cu, 4u, 0x0BCu, 0, 0, 0, 0, MENU_E3_SOUND_RET },  /* nine levels */
+    { "reSOT Options", RESOT_TEXT_GROUP, 0u, 0, 0, 0, &s_resot_root, 0, MENU_E3_QUIT_RET },
+    { "reSOT Options (pause)", RESOT_TEXT_GROUP, 0u, 0, 0, 0, &s_pause_root, 0,
+      MENU_PAUSE_RESTART_RET },
+    { "reSOT Options (E3 pause)", RESOT_TEXT_GROUP, 0u, 0, 0, 0, &s_pause_root, 0,
+      MENU_E3PAUSE_RESTART_RET },
 };
 #define MENU_ENTRIES ((int)(sizeof s_entries / sizeof s_entries[0]))
 static uint32_t s_bind_edx, s_menu_vars;
-static int s_entries_added;
 
 static int hidden_menus(void)
 {
@@ -535,16 +571,39 @@ static int hidden_menus(void)
     return on;
 }
 
-typedef struct { uint32_t eax, ebx, ecx, edx, esi, edi, ebp, seh, esp; } GuestRegs;
+/* The SSE and x87 state goes with the integer registers: our guest calls
+ * (page and choice builders, label refreshes from the pad poll) ran the
+ * title's float code and left xmm1-7 and the FPU stack changed under the
+ * code that called the hook. Suspected cause of the in-game "Prince of
+ * Persia" logo drawn shifted right and half off the screen after a Special
+ * Load Map (user report); not confirmed. */
+typedef union { float f[4]; double d[2]; uint32_t u[4]; int32_t i[4]; uint64_t q[2]; } GuestXmm;
+extern RESOT_TLS GuestXmm g_xmm0, g_xmm1, g_xmm2, g_xmm3, g_xmm4, g_xmm5, g_xmm6, g_xmm7;
+extern RESOT_TLS double g_fp_stack[8];
+extern RESOT_TLS int g_fp_top;
+typedef struct {
+    uint32_t eax, ebx, ecx, edx, esi, edi, ebp, seh, esp;
+    GuestXmm xmm[8];
+    double fp[8];
+    int fp_top;
+} GuestRegs;
 static void regs_save(GuestRegs *r)
 {
     r->eax = g_eax; r->ebx = g_ebx; r->ecx = g_ecx; r->edx = g_edx; r->esi = g_esi;
     r->edi = g_edi; r->ebp = g_ebp; r->seh = g_seh_ebp; r->esp = g_esp;
+    r->xmm[0] = g_xmm0; r->xmm[1] = g_xmm1; r->xmm[2] = g_xmm2; r->xmm[3] = g_xmm3;
+    r->xmm[4] = g_xmm4; r->xmm[5] = g_xmm5; r->xmm[6] = g_xmm6; r->xmm[7] = g_xmm7;
+    memcpy(r->fp, g_fp_stack, sizeof r->fp);
+    r->fp_top = g_fp_top;
 }
 static void regs_load(const GuestRegs *r)
 {
     g_eax = r->eax; g_ebx = r->ebx; g_ecx = r->ecx; g_edx = r->edx; g_esi = r->esi;
     g_edi = r->edi; g_ebp = r->ebp; g_seh_ebp = r->seh; g_esp = r->esp;
+    g_xmm0 = r->xmm[0]; g_xmm1 = r->xmm[1]; g_xmm2 = r->xmm[2]; g_xmm3 = r->xmm[3];
+    g_xmm4 = r->xmm[4]; g_xmm5 = r->xmm[5]; g_xmm6 = r->xmm[6]; g_xmm7 = r->xmm[7];
+    memcpy(g_fp_stack, r->fp, sizeof r->fp);
+    g_fp_top = r->fp_top;
 }
 
 /* cdecl guest call; generated routines pop their own return address. */
@@ -602,6 +661,8 @@ static int menu_bind_open_page(uint32_t choice, uint32_t page)
     return 1;
 }
 
+static int menu_bind_message(uint32_t choice, uint32_t id);
+
 static void menu_bind_entries(void)
 {
     int i;
@@ -612,25 +673,72 @@ static void menu_bind_entries(void)
         uint32_t page = e->host_page ? *e->host_page : GMEM32(s_menu_vars + e->page_var);
         if (e->bound || !e->choice)
             continue;
+        if (e->msg) {
+            e->bound = menu_bind_message(e->choice, e->msg);
+            fprintf(stderr, "[MENU] hidden: \"%s\" sends %04X%s\n", e->name, e->msg,
+                    e->bound ? "" : " -- not bound");
+            continue;
+        }
         e->bound = menu_bind_open_page(e->choice, page);
         fprintf(stderr, "[MENU] hidden: \"%s\" opens page %08X%s\n", e->name, page,
                 e->bound ? "" : " -- not bound");
     }
 }
 
+/* "Quit to Demos Menu" (0B00411F:5) leaves for the Xbox demo disc's
+ * launcher, which this port does not have. The E3 pause page adds it at
+ * 0x0015E7F7 (return 0x0015E7FC) and stores the handle at var+0x160; its
+ * only reader is the bind at 0x0015B67C (return 0x0015B681), a kind-1007
+ * message. Skipping both leaves the page as if it never had the choice: the
+ * skipped add writes handle 0 to its out argument, and the code after the
+ * skipped bind reloads every register it uses (0x0015B681-0x0015B6A6) and
+ * does not read the bind's out value. RESOT_DEMOS_QUIT=1 keeps it. */
+#define DEMOS_QUIT_ADD_RET  0x0015E7FCu
+#define DEMOS_QUIT_BIND_RET 0x0015B681u
+extern void sub_0023F040_gen(void);
+extern void sub_00117580_gen(void);
+static int hide_demos_quit(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("RESOT_DEMOS_QUIT"); on = !(e && *e && *e != '0'); }
+    return on;
+}
+void sub_0023F040(void)
+{
+    if (hide_demos_quit() && GMEM32(g_esp) == DEMOS_QUIT_ADD_RET) {
+        GMEM32(GMEM32(g_esp + 4)) = 0;
+        g_esp += 4;                                   /* ret (cdecl) */
+        return;
+    }
+    sub_0023F040_gen();
+}
+void sub_00117580(void)
+{
+    if (hide_demos_quit() && GMEM32(g_esp) == DEMOS_QUIT_BIND_RET && GMEM32(g_esp + 12) == 0) {
+        GMEM32(GMEM32(g_esp + 4)) = 0;
+        g_esp += 4;
+        return;
+    }
+    sub_00117580_gen();
+}
+
 void sub_0023F040_enter(void)
 {
-    if (menu_trace())
-        fprintf(stderr, "[MENU] choice     menu=%08X ret=%08X out=%08X text=%08X:%u\n",
+    if (menu_trace()) {
+        char t[80];
+        menu_text(GMEM32(g_esp + 12), t, sizeof t);
+        fprintf(stderr, "[MENU] choice     menu=%08X ret=%08X out=%08X text=%08X:%u \"%s\"\n",
                 GMEM32(g_esp + 8), GMEM32(g_esp), GMEM32(g_esp + 4),
-                GMEM32(GMEM32(g_esp + 12)), GMEM32(GMEM32(g_esp + 12) + 4));
-    if (GMEM32(g_esp) == MENU_E3_QUIT_RET && hidden_menus() && !s_entries_added) {
+                GMEM32(GMEM32(g_esp + 12)), GMEM32(GMEM32(g_esp + 12) + 4), t);
+    }
+    if (hidden_menus()) {
         int i;
-        s_entries_added = 1;
         for (i = 0; i < MENU_ENTRIES; i++) {
+            if (s_entries[i].before != GMEM32(g_esp) || s_entries[i].choice)
+                continue;
             s_entries[i].choice = menu_add_choice(GMEM32(g_esp + 8), s_entries[i].text_group,
                                                   s_entries[i].text_index);
-            fprintf(stderr, "[MENU] hidden: \"%s\" choice %08X added to the main page\n",
+            fprintf(stderr, "[MENU] hidden: \"%s\" choice %08X added\n",
                     s_entries[i].name, s_entries[i].choice);
         }
     }
@@ -700,6 +808,31 @@ void sub_0023FCA0_enter(void)
  * slot 1, thiscall, ret 4), would queue the descriptor for the menu AI. Ours
  * are taken here and never queued. */
 #include "../../port/windows/src/options.h"
+#include "../../port/game/guest_probe.h"
+/* Demo XBE: the LOA table 0x000C0F60 searches (0x001EBF43); mb_CheatsEnabled
+ * at pc_VarsBuffer +0x6C (0x001EBF84, read at 0x001EC749). */
+#define RESOT_CHEATS_LOA_TABLE  0x0047EC30u
+#define RESOT_CHEATS_VAR_OFFSET 0x6Cu
+/* Universe mi_CheckPoint_CurMapID +0xA0, mi_WorldKeyToLoad +0x88 and
+ * mi_ChangeMapRequest +0x90 (names from the demo BF's OVA); Start writes
+ * request 1. */
+#define RESOT_UNIV_CUR_MAP          0xA0u
+#define RESOT_UNIV_WORLD_TO_LOAD    0x88u
+#define RESOT_UNIV_CHANGE_MAP       0x90u
+#define RESOT_UNIV_CHANGE_MAP_VALUE 1u
+#define RESOT_MAIN_ACTOR            0x00614FCCu
+#define RESOT_PRINCE_DAGGER         0x8FCu
+#define RESOT_PRINCE_COSTUME_ID     0x5F8u
+/* The running AI instance, compared with the costume source at 0x002032B5. */
+#define RESOT_AI_CURRENT            0x0034AC3Cu
+#include "../../port/game/resot_cheats.h"
+/* The Prince AI's set-up, 0x00202F40: eax = the Prince's GAO, first stack
+ * argument the costume source (loaded into ebp at 0x00202F5A, tested at
+ * 0x00203013, read at 0x002032DE). */
+void sub_00202F40_enter(void)
+{
+    resot_game_skin_setup(GMEM32(g_esp + 4));
+}
 extern void sub_000C05D0_gen(void);
 /* Demo XBE: 0x000C05D0 normalizes an int16 stick pair at ECX to EAX's
  * float[2], including the original radial deadzone. 0x000C08A3 is the left
@@ -720,9 +853,10 @@ extern void sub_0023FCA0(void);
 
 #define RESOT_MSG_KIND      0x52E5u
 #define RESOT_TEXT_SLOT     96u
-#define RESOT_TEXTS         80u
+#define RESOT_TEXTS         128u
 enum { T_ROOT, T_GRAPHICS, T_CONTROLS, T_KEY0, T_KEY1, T_KEY2, T_JOY0, T_JOY1, T_JOY2,
-       T_RESET, T_GFX = 10, T_LOOK = 15, T_KEYS = 20, T_JOYS = 50 };
+       T_RESET, T_GFX = 10, T_LOOK = 15, T_KEYS = 20, T_JOYS = 50, T_MAP_PART = 80,
+       T_MAPS = 90 };
 static const char *const s_static_texts[] = {
     "reSOT Options", "Graphics", "Controls",
     "Keyboard: move and fight", "Keyboard: actions", "Keyboard: menus and camera",
@@ -731,10 +865,60 @@ static const char *const s_static_texts[] = {
 };
 static uint32_t s_text_va;
 
+/* Special Load Map: every map (world list) of the demo's prince.bf, by its
+ * entry name ("<name>_wol_<key>.bin", key as in resot_cheats.h), each with
+ * all the worlds it lists present in the BF; and, for the record, the one
+ * world no map lists (01_GP01_E3_Cour_wow_ff0f5360), which cannot be loaded
+ * as a map. A choice requests its map directly (resot_change_map). */
+#define MAP_PARTS 2
+#define MAP_PER_PART 11
+static const char *const s_map_parts[MAP_PARTS] = { "Maps 1 to 11", "Maps 12 to 21" };
+/* Original keys (resot_cheats.h): from the lifted code's immediates (the
+ * Load Map table at 0x0015D580 and others), except 05_GP14_Jardin,
+ * 06_GP24_E3_Long and 08_GP62_E3_Long (the BF's data, in their family:
+ * ff0b3xxx is 0x1B00xxxx, ff0f53xx 0x0F0053xx) and 6201_PrisonA (the
+ * retail's ff02 family, 0x22). Bin entries in the comments. */
+static const ResotMap s_maps[MAP_PARTS][MAP_PER_PART] = {
+    { { "_Start_Demo", 0x0B0044C9u },                     /* ff0b44c9 */
+      /* Menu_wol_ff0e016c (0x0E00016C) closed the demo when the user chose
+       * it: listed only. */
+      { "Menu (closes the demo)", RESOT_MAP_NAME_ONLY },
+      { "01_GP01_Start", 0x1B00392Fu },                   /* ff0b392f */
+      { "01_GP01_E3_Long", 0x0F005364u },                 /* ff0f5364 */
+      { "01_GP01_E3_Cour", 0x0F005363u },                 /* ff0f5363 */
+      { "02_GP01_Hourglass", 0x1B00396Au },               /* ff0b396a */
+      { "03_GP11_GreatHall_Fight", 0x1B003980u },         /* ff0b3980 */
+      { "04_GP61_Cour_Interieure", 0x1B00399Du },         /* ff0b399d */
+      { "05_GP14_Jardin", 0x1B003A99u },                  /* ff0b3a99 */
+      { "05_GP14_E3_Long", 0x0F00532Au },                 /* ff0f532a */
+      { "05_GP14_E3_Cour", 0x0F005329u } },               /* ff0f5329 */
+    { { "06_GP24_Bath_Fight", 0x1B0039D4u },              /* ff0b39d4 */
+      { "06_GP24_E3_Long", 0x0F005355u },                 /* ff0f5355 */
+      { "06_GP24_E3_Cour", 0x0F005354u },                 /* ff0f5354 */
+      { "07_GP61_Remparts", 0x1B0039EBu },                /* ff0b39eb */
+      { "08_GP62_Prison", 0x1B003A07u },                  /* ff0b3a07 */
+      { "08_GP62_E3_Long", 0x0F0053EEu },                 /* ff0f53ee */
+      { "08_GP62_E3_Cour", 0x0F0053EFu },                 /* ff0f53ef */
+      { "09_GP81_Tomb", 0x1B003A26u },                    /* ff0b3a26 */
+      { "6201_PrisonA", 0x2200E124u },                    /* ff02e124 */
+      { "01_GP01_E3_Cour (world, no map)", RESOT_MAP_NAME_ONLY } },
+};
+
 static void resot_text(uint32_t index, char *out, unsigned size)
 {
     if (index < sizeof s_static_texts / sizeof s_static_texts[0])
         snprintf(out, size, "%s", s_static_texts[index]);
+    else if (index == T_MAP_TITLE)
+        snprintf(out, size, "Special Load Map");
+    else if (index >= T_MAP_PART && index < T_MAP_PART + MAP_PARTS)
+        snprintf(out, size, "%s", s_map_parts[index - T_MAP_PART]);
+    else if (index >= T_MAPS && index < T_MAPS + MAP_PARTS * MAP_PER_PART) {
+        const ResotMap *m = &s_maps[(index - T_MAPS) / MAP_PER_PART][(index - T_MAPS) % MAP_PER_PART];
+        char *c;
+        snprintf(out, size, "%s", m->name ? m->name : "");
+        for (c = out; *c; c++)            /* the menu font has no '_' */
+            if (*c == '_') *c = ' ';
+    }
     else if (index >= T_GFX && index < T_GFX + RESOT_NATIVE_GRAPHICS_ITEMS)
         resot_native_label(RESOT_NATIVE_GRAPHICS, (int)(index - T_GFX), out, size);
     else if (index == T_LOOK)
@@ -747,18 +931,72 @@ static void resot_text(uint32_t index, char *out, unsigned size)
         snprintf(out, size, "?");
 }
 
+/* A string of the title's own text, looked up with the language table in esi
+ * as the caller of 0x001104E0 passed it; "" when the group has none. */
+static void game_string(uint32_t group, uint32_t index, char *out, unsigned size)
+{
+    GuestRegs saved;
+    uint32_t s;
+    unsigned i;
+    regs_save(&saved);
+    g_esp -= 0x20;
+    GMEM32(g_esp + 0x10) = group;
+    GMEM32(g_esp + 0x14) = index;
+    g_edi = g_esp + 0x10;
+    g_esp -= 4; GMEM32(g_esp) = 0;
+    sub_001104E0_gen();
+    s = g_eax;
+    regs_load(&saved);
+    if (s == 0x00325305u)                 /* "no text" */
+        s = 0;
+    for (i = 0; s && i + 1 < size; i++) {
+        char c = *(volatile char *)((uintptr_t)g_xbox_mem_offset + s + i);
+        if (!c) break;
+        out[i] = (c >= 32 && c < 127) ? c : '?';
+    }
+    out[s ? i : 0] = 0;
+}
+
+/* Text actions: vtable 0x0032380C, reference at +0x34. */
+#define TEXT_ACTION_VTABLE 0x0032380Cu
+
 void sub_001104E0(void)
 {
     uint32_t index;
     char text[RESOT_TEXT_SLOT];
-    if (GMEM32(g_edi) != RESOT_TEXT_GROUP) { sub_001104E0_gen(); return; }
+    if (GMEM32(g_edi) != RESOT_TEXT_GROUP) {
+        uint32_t ref = g_edi, table = g_esi, ret = GMEM32(g_esp);
+        sub_001104E0_gen();
+        if (menu_trace() && getenv("RESOT_TEXT_LOG")) {
+            char t[80];
+            unsigned i;
+            for (i = 0; g_eax && i + 1 < sizeof t; i++) {
+                char c = *(volatile char *)((uintptr_t)g_xbox_mem_offset + g_eax + i);
+                if (!c) break;
+                t[i] = (c >= 32 && c < 127) ? c : '?';
+            }
+            t[g_eax ? i : 0] = 0;
+            fprintf(stderr, "[TEXT] %08X:%u table=%08X ret=%08X \"%s\"\n",
+                    GMEM32(ref), GMEM32(ref + 4), table, ret, t);
+        }
+        return;
+    }
     index = GMEM32(g_edi + 4);
     if (!s_text_va)
         s_text_va = xbox_ContiguousAlloc(RESOT_TEXT_SLOT * RESOT_TEXTS, 16);
     if (!s_text_va || index >= RESOT_TEXTS) {
         g_eax = 0x00325305u;              /* the routine's own "no text" result */
     } else {
-        resot_text(index, text, sizeof text);
+        if (index == T_CHEATS_LABEL) {
+            /* The title's strings in the current language: "Cheats"
+             * 0x0B00449C:3, "On"/"Off" 0x0B0041CD:32/31 (the options'). */
+            char name[32], on[16], off[16];
+            game_string(0x0B00449Cu, 3, name, sizeof name);
+            game_string(0x0B0041CDu, 32, on, sizeof on);
+            game_string(0x0B0041CDu, 31, off, sizeof off);
+            resot_cheats_label(name, on, off, text, sizeof text);
+        } else
+            resot_text(index, text, sizeof text);
         memcpy((void *)((uintptr_t)g_xbox_mem_offset + s_text_va + index * RESOT_TEXT_SLOT),
                text, strlen(text) + 1);
         g_eax = s_text_va + index * RESOT_TEXT_SLOT;
@@ -770,7 +1008,8 @@ void sub_001104E0(void)
 enum { DO_OPEN, DO_MSG };
 typedef struct { uint32_t text; int what; int arg; uint32_t choice; } NativeChoice;
 typedef struct { uint32_t title; float top, step; int n; NativeChoice c[12]; uint32_t page; } NativePage;
-enum { P_ROOT, P_GFX, P_CTRL, P_K0, P_K1, P_K2, P_J0, P_J1, P_J2, P_PAGES };
+enum { P_ROOT, P_GFX, P_CTRL, P_K0, P_K1, P_K2, P_J0, P_J1, P_J2,
+       P_MAPS, P_MAP0, P_MAP1, P_ROOT_PAUSE, P_PAGES };
 #define MSG_ID(page, item) ((uint32_t)(page) << 8 | (uint32_t)(item))
 #define MSG_RESET 0xFF00u
 static NativePage s_pages[P_PAGES];
@@ -787,9 +1026,15 @@ static void native_layout(void)
     int i, j;
     NativePage *p;
     memset(s_pages, 0, sizeof s_pages);
-    p = &s_pages[P_ROOT]; p->title = T_ROOT; p->top = 0.36f; p->step = 0.0667f; p->n = 2;
+    /* reSOT Options: Graphics, Controls, Cheats and, from the main page only,
+     * Special Load Map (a map change from the pause was not checked). */
+    p = &s_pages[P_ROOT]; p->title = T_ROOT; p->top = 0.36f; p->step = 0.0667f; p->n = 4;
     native_choice(p, 0, T_GRAPHICS, DO_OPEN, P_GFX);
     native_choice(p, 1, T_CONTROLS, DO_OPEN, P_CTRL);
+    native_choice(p, 2, T_CHEATS_LABEL, DO_MSG, (int)MSG_CHEATS);
+    native_choice(p, 3, T_MAP_TITLE, DO_OPEN, P_MAPS);
+    s_pages[P_ROOT_PAUSE] = *p;
+    s_pages[P_ROOT_PAUSE].n = 3;
     p = &s_pages[P_GFX]; p->title = T_GRAPHICS; p->top = 0.32f; p->step = 0.0667f;
     p->n = RESOT_NATIVE_GRAPHICS_ITEMS;
     for (i = 0; i < p->n; i++)
@@ -799,6 +1044,18 @@ static void native_layout(void)
     for (i = 0; i < 6; i++)
         native_choice(p, i + 1, T_KEY0 + (uint32_t)i, DO_OPEN, P_K0 + i);
     native_choice(p, 7, T_RESET, DO_MSG, (int)MSG_RESET);
+    p = &s_pages[P_MAPS]; p->title = T_MAP_TITLE; p->top = 0.36f; p->step = 0.0667f;
+    p->n = MAP_PARTS;
+    for (i = 0; i < MAP_PARTS; i++)
+        native_choice(p, i, T_MAP_PART + (uint32_t)i, DO_OPEN, P_MAP0 + i);
+    for (i = 0; i < MAP_PARTS; i++) {
+        p = &s_pages[P_MAP0 + i];
+        p->title = T_MAP_PART + (uint32_t)i; p->top = 0.22f; p->step = 0.045f;
+        for (j = 0; j < MAP_PER_PART && s_maps[i][j].name; j++)
+            native_choice(p, j, T_MAPS + (uint32_t)(i * MAP_PER_PART + j), DO_MSG,
+                          (int)MSG_ID(P_MAP0 + i, j));
+        p->n = j;
+    }
     for (i = 0; i < 6; i++) {
         int joy = i >= 3, part = i % 3;
         p = &s_pages[P_K0 + i];
@@ -820,8 +1077,6 @@ static uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
  * 1, 1), the arguments the Load Map page is opened with at 0x0015E854.
  * Without xmm0 the column started wherever the last SSE code left it.
  * 0x0023FCA0: eax = menu, cdecl (menu). */
-typedef union { float f[4]; double d[2]; uint32_t u[4]; int32_t i[4]; uint64_t q[2]; } GuestXmm;
-extern RESOT_TLS GuestXmm g_xmm0;          /* the runtime's RecompXmm */
 #define MENU_PAGE_X 0.4f
 
 static uint32_t native_build_page(uint32_t menu, NativePage *p)
@@ -859,8 +1114,8 @@ static int s_native_built, s_native_bound;
 static void native_reset(void)
 {
     int i;
-    s_native_built = s_native_bound = s_entries_added = 0;
-    s_resot_root = s_bind_edx = s_menu_vars = 0;
+    s_native_built = s_native_bound = 0;
+    s_resot_root = s_pause_root = s_bind_edx = s_menu_vars = 0;
     memset(s_pages, 0, sizeof s_pages);
     for (i = 0; i < MENU_ENTRIES; i++) {
         s_entries[i].choice = 0;
@@ -878,12 +1133,14 @@ static void native_build(uint32_t menu)
     for (i = 0; i < P_PAGES; i++)
         s_pages[i].page = native_build_page(menu, &s_pages[i]);
     s_resot_root = s_pages[P_ROOT].page;
+    s_pause_root = s_pages[P_ROOT_PAUSE].page;
     fprintf(stderr, "[MENU] reSOT Options: %d pages built, root page %08X\n", P_PAGES, s_resot_root);
 }
 
 /* Message action as the options binder makes it at 0x0015B681..0x0015B6D8:
  * 0x00018170 (cdecl menu, &descriptor) then 0x00117580 to attach it. */
-static int menu_bind_message(uint32_t choice, uint32_t id)
+/* kind +0x28, parameter +0x2C, id +0x30 of the descriptor. */
+static int menu_bind_kind(uint32_t choice, uint32_t kind, uint32_t param, uint32_t id)
 {
     GuestRegs saved;
     uint32_t scratch, args[3], action, i;
@@ -894,7 +1151,8 @@ static int menu_bind_message(uint32_t choice, uint32_t id)
     scratch = g_esp;
     for (i = 0; i < 0x34; i += 4)
         GMEM32(scratch + 0x40 + i) = 0;
-    GMEM32(scratch + 0x40 + 0x28) = RESOT_MSG_KIND;
+    GMEM32(scratch + 0x40 + 0x28) = kind;
+    GMEM32(scratch + 0x40 + 0x2C) = param;
     GMEM32(scratch + 0x40 + 0x30) = id;
     args[0] = GMEM32(MENU_CURRENT); args[1] = scratch + 0x40;
     g_eax = GMEM32(MENU_CURRENT);
@@ -907,6 +1165,20 @@ static int menu_bind_message(uint32_t choice, uint32_t id)
     return 1;
 }
 
+static int menu_bind_message(uint32_t choice, uint32_t id)
+{
+    return menu_bind_kind(choice, RESOT_MSG_KIND, 0, id);
+}
+
+/* The Load Map choices' own message (binder loop 0x0015C951..0x0015C9A6):
+ * kind 1000, the map key as parameter, id 50, handled by the menu AI. A
+ * map requested directly in the universe instead (resot_change_map) faulted
+ * for 4 of 12 maps from the main menu (03_GP11_GreatHall_Fight,
+ * 05_GP14_E3_Cour, 06_GP24_Bath_Fight, 06_GP24_E3_Long; at 0x00028FD0 and
+ * elsewhere, scripted runs with audio). */
+#define MSG_KIND_CHANGE_MAP 1000u
+#define MSG_MENU_ID         50u
+
 static void native_bind(void)
 {
     int i, j, ok = 0, all = 0;
@@ -917,8 +1189,12 @@ static void native_bind(void)
         for (j = 0; j < s_pages[i].n; j++) {
             NativeChoice *c = &s_pages[i].c[j];
             all++;
-            ok += c->what == DO_OPEN ? menu_bind_open_page(c->choice, s_pages[c->arg].page)
-                                     : menu_bind_message(c->choice, (uint32_t)c->arg);
+            if (i >= P_MAP0 && i <= P_MAP1 && s_maps[i - P_MAP0][j].key != RESOT_MAP_NAME_ONLY)
+                ok += menu_bind_kind(c->choice, MSG_KIND_CHANGE_MAP, s_maps[i - P_MAP0][j].key,
+                                     MSG_MENU_ID);
+            else
+                ok += c->what == DO_OPEN ? menu_bind_open_page(c->choice, s_pages[c->arg].page)
+                                         : menu_bind_message(c->choice, (uint32_t)c->arg);
         }
     fprintf(stderr, "[MENU] reSOT Options: %d of %d choices bound\n", ok, all);
 }
@@ -933,21 +1209,27 @@ static void native_bind(void)
  * object is checked to still carry our reference before it is touched. */
 extern void sub_000605C0(void);
 #define TEXT_MANAGER       0x0064D1E4u   /* +0x44: objects by choice handle */
-#define TEXT_ACTION_VTABLE 0x0032380Cu
 
+/* Probed reads, as the retail's: the cheats label is refreshed from the
+ * per-frame poll, where a main-page handle can outlive its page. */
 static int native_text_object(uint32_t choice, uint32_t *out)
 {
-    uint32_t mgr = GMEM32(TEXT_MANAGER), obj, text, it, end;
-    if (!mgr || !choice || !GMEM32(mgr + 0x44))
+    uint32_t mgr, table, obj, text, it, end;
+    if (!choice || !resot_cheats_word(TEXT_MANAGER, &mgr) || !mgr ||
+            !resot_cheats_word(mgr + 0x44, &table) || !table ||
+            choice > 0x3FFFFFFFu || !resot_cheats_word(table + choice * 4, &obj) || !obj ||
+            !resot_cheats_word(obj + 0x9C, &text) || !text ||
+            !resot_cheats_word(text + 0x0C, &it) || !resot_cheats_word(text + 0x10, &end))
         return 0;
-    obj = GMEM32(GMEM32(mgr + 0x44) + choice * 4);
-    text = obj ? GMEM32(obj + 0x9C) : 0;
-    if (!text)
+    /* Host traversal limit, not an XBE constant: reject stale vector bounds. */
+    if (!it || end < it || ((it | end) & 3) || end - it > 65536u)
         return 0;
-    for (it = GMEM32(text + 0x0C), end = GMEM32(text + 0x10); it && it < end; it += 4) {
-        uint32_t action = GMEM32(it);
-        if (action && GMEM32(action) == TEXT_ACTION_VTABLE
-                && GMEM32(action + 0x34) == RESOT_TEXT_GROUP) {
+    for (; it < end; it += 4) {
+        uint32_t action, vtable, group;
+        if (!resot_cheats_word(it, &action))
+            return 0;
+        if (action && resot_cheats_word(action, &vtable) && vtable == TEXT_ACTION_VTABLE &&
+                resot_cheats_word(action + 0x34, &group) && group == RESOT_TEXT_GROUP) {
             *out = text;
             return 1;
         }
@@ -955,11 +1237,31 @@ static int native_text_object(uint32_t choice, uint32_t *out)
     return 0;
 }
 
+static void native_refresh_text(uint32_t text)
+{
+    GuestRegs saved;
+    regs_save(&saved);
+    g_esi = text;
+    guest_cdecl(sub_000605C0, NULL, 0);
+    regs_load(&saved);
+}
+
 static void native_refresh(void)
 {
     static long seen;
     long revision;
     int i, j, n = 0;
+    uint32_t cheats_text;
+    resot_universe_watch();
+    resot_prince_watch();
+    resot_game_behavior_frame();
+    resot_game_skin_frame();
+    resot_test_map();
+    /* The cheats switch: kept as chosen, and its labels follow it. */
+    if (resot_cheats_frame() && s_native_bound)
+        for (i = P_ROOT; i <= P_ROOT_PAUSE; i += P_ROOT_PAUSE - P_ROOT)
+            if (native_text_object(s_pages[i].c[2].choice, &cheats_text))
+                native_refresh_text(cheats_text);
     if (!s_native_bound || (revision = resot_native_revision()) == seen)
         return;
     seen = revision;
@@ -987,15 +1289,78 @@ void sub_00061470(void)
     if (GMEM32(self + 0x24 + 0x28) != RESOT_MSG_KIND) { sub_00061470_gen(); return; }
     id = GMEM32(self + 0x24 + 0x30);
     if (menu_trace())
-        fprintf(stderr, "[MENU] reSOT choice %04X\n", id);
-    if (id == MSG_RESET)
+        fprintf(stderr, "[MENU] reSOT choice %04X self=%08X ret=%08X\n", id, self, GMEM32(g_esp));
+    if (id == MSG_CHEATS)
+        resot_cheats_toggle();
+    else if (id == MSG_RESET)
         resot_native_reset_bindings();
     else if ((id >> 8) == P_GFX)
         resot_native_activate(RESOT_NATIVE_GRAPHICS, (int)(id & 0xFF));
     else if ((id >> 8) == P_CTRL)
         resot_native_activate(RESOT_NATIVE_CONTROLS, (int)(id & 0xFF));
+    else if ((id >> 8) >= P_MAP0 && (id >> 8) <= P_MAP1 && (id & 0xFF) < MAP_PER_PART) {
+        const ResotMap *m = &s_maps[(id >> 8) - P_MAP0][id & 0xFF];
+        if (m->key != RESOT_MAP_NAME_ONLY)
+            resot_change_map(m->key);
+    }
     else if ((id >> 8) >= P_K0 && (id >> 8) <= P_J2)
         resot_native_activate((id >> 8) >= P_J0 ? RESOT_NATIVE_JOY : RESOT_NATIVE_KEYS,
                               (int)(id & 0xFF));
     g_esp += 8;                           /* ret 4 */
+}
+
+/* The game's string for a text reference in guest memory, or "": 0x001104E0
+ * with edi = &{group, index} and esi = the current language's table, which
+ * 0x0023EB66 loads from 0x00614FCC. */
+static void menu_text(uint32_t ref, char *out, unsigned size)
+{
+    GuestRegs saved;
+    uint32_t s;
+    unsigned i;
+    out[0] = 0;
+    if (!ref || GMEM32(ref) == 0xFFFFFFFFu || !GMEM32(0x00614FCCu))
+        return;
+    regs_save(&saved);
+    g_edi = ref;
+    g_esi = GMEM32(0x00614FCCu);
+    g_esp -= 4; GMEM32(g_esp) = 0;
+    sub_001104E0();
+    s = g_eax;
+    regs_load(&saved);
+    for (i = 0; s && i + 1 < size; i++) {
+        char c = *(volatile char *)((uintptr_t)g_xbox_mem_offset + s + i);
+        if (!c) break;
+        out[i] = (c >= 32 && c < 127) ? c : '?';
+    }
+    out[s ? i : 0] = 0;
+}
+
+/* RESOT_TEXT_DUMP=<group>[,<group>...]: print every string of those text
+ * groups once, at the first page the menu library opens (with the trace). */
+static void text_dump(void)
+{
+    static int done;
+    const char *e = getenv("RESOT_TEXT_DUMP");
+    if (done || !e || !*e) return;
+    done = 1;
+    while (*e) {
+        char *next;
+        uint32_t group = (uint32_t)strtoul(e, &next, 16), i, empty = 0;
+        GuestRegs saved;
+        if (next == e) break;
+        e = next;
+        regs_save(&saved);
+        g_esp -= 0x20;
+        for (i = 0; i < 400 && empty < 8; i++) {
+            char t[120];
+            GMEM32(g_esp + 0x10) = group;
+            GMEM32(g_esp + 0x14) = i;
+            menu_text(g_esp + 0x10, t, sizeof t);
+            empty = t[0] ? 0 : empty + 1;
+            if (t[0])
+                fprintf(stderr, "[TEXT] %08X:%u \"%s\"\n", group, i, t);
+        }
+        regs_load(&saved);
+        while (*e == ',' || *e == ' ') e++;
+    }
 }

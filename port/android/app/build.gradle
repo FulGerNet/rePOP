@@ -18,8 +18,8 @@ android {
         applicationId "com.fulger.resot"
         minSdk 29
         targetSdk 36
-        versionCode 9
-        versionName "0.3.4"
+        versionCode 10
+        versionName "0.4.0"
         ndk {
             abiFilters "arm64-v8a"
         }

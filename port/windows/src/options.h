@@ -48,5 +48,15 @@ void resot_native_activate(int page, int item);
 void resot_native_reset_bindings(void);
 /* Changes whenever a native label may read differently. */
 long resot_native_revision(void);
+/* Game behavior (the F7 panel's section), applied by the target hooks:
+ * tutorials 1 on / 0 off (saved); Dagger of time -1 as the game has it,
+ * 0 off, 1 on. */
+int resot_game_tutorials(void);
+int resot_game_dagger(void);
+/* Cheats On/Off in the same section: a change asked for there (1 on, 0 off,
+ * -1 none; taking it clears it), and the switch as the game has it (-1 not
+ * readable), reported back for the panel. */
+int resot_game_cheats_request(void);
+void resot_game_cheats_report(int on);
 
 #endif

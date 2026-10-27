@@ -97,6 +97,15 @@ static int read_name(uintptr_t base, uint32_t world, char *name)
     return name[0] != '\0';
 }
 
+/* Costumes merged with the current primary world: bit n for
+ * PrinceCostume(n+1). Guest thread only. */
+static unsigned s_scene_costumes;
+unsigned resot_scene_costumes(void) { return s_scene_costumes; }
+/* A map loaded into the same aggregate (no primary merge): the retail
+ * Special Load Map from the menu kept MenuBoot's 01 and 04 beside the
+ * level's 02. Its caller forgets them when the map's load is requested. */
+void resot_scene_costumes_reset(void) { s_scene_costumes = 0; }
+
 /* Called on the guest thread before a world merge, while the source still
  * owns its BF name. Cache identity includes the aggregate and primary key. */
 void resot_scene_loaded(uint32_t destination, uint32_t source, int primary, uint32_t caller)
@@ -107,6 +116,13 @@ void resot_scene_loaded(uint32_t destination, uint32_t source, int primary, uint
     if (!read_name(base, source, name)) return;
     fprintf(stderr, "[WOW] merge name=%s source=%08X destination=%08X key=%08X primary=%d caller=%08X\n",
             name, source, destination, key, primary, caller);
+    /* The primary world merges before its dependencies, PrinceCostume0N
+     * among them (MenuBoot: 01 and 04). */
+    if (primary)
+        s_scene_costumes = 0;
+    else if (!strncmp(name, "PrinceCostume", 13) && name[13] >= '0' && name[13] <= '9' &&
+             name[14] >= '1' && name[14] <= '9')
+        s_scene_costumes |= 1u << ((name[13] - '0') * 10 + name[14] - '0' - 1);
     if (!primary) return;
     AcquireSRWLockExclusive(&s_scene_lock);
     s_scene_world = destination;

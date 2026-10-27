@@ -569,6 +569,49 @@ static void text_dump(void)
  * (0x00234DC8, return 0x00234DCD), and again for each new main menu.
  * RESOT_HIDDEN_MENUS=0 disables them. */
 #include "../../port/windows/src/options.h"
+/* Retail XBE: the LOA table 0x000DFF90 searches (0x0025B80B, 0x0026F2A0);
+ * OVA 22 at pc_VarsBuffer +0xD8 (0x0026F2EC), read at 0x001DC66E and
+ * 0x0026F2FE. */
+#define RESOT_CHEATS_LOA_TABLE  0x0046EFE8u
+#define RESOT_CHEATS_VAR_OFFSET 0xD8u
+/* Universe variables of a map change, from RESOT_UNIV_WATCH across Start New
+ * Game (map 0x2200B526): mi_CheckPoint_CurMapID +0x118, mi_WorldKeyToLoad
+ * +0xF4 (also written by 0x001BC2C2..0x001BC2FA, as the demo's +0x88),
+ * mi_ChangeMapRequest +0x108 set to 3, cleared after the load, and
+ * mi_CurrentWorldKey +0x134. */
+#define RESOT_UNIV_CUR_MAP          0x118u
+#define RESOT_UNIV_WORLD_TO_LOAD    0xF4u
+#define RESOT_UNIV_CHANGE_MAP       0x108u
+#define RESOT_UNIV_CHANGE_MAP_VALUE 3u
+#define RESOT_UNIV_CURRENT_WORLD    0x134u
+#define RESOT_MAIN_ACTOR            0x0067B6A0u
+#define RESOT_PRINCE_DAGGER         0x77Cu
+/* mi_CostumeID: the int (flags 0x41, as the demo's) that was 0 in 0101_Entree
+ * (PrinceCostume01) and 4 in 7401_HourglassRoom (PrinceCostume05 merged),
+ * RESOT_PRINCE_DUMP of both; where the alignment puts the demo's +0x5F8. */
+#define RESOT_PRINCE_COSTUME_ID     0x4C4u
+/* The running AI instance, compared with the costume source at 0x00270CCA. */
+#define RESOT_AI_CURRENT            0x0044AA24u
+/* Options > Display > Tutorials: universe +0xC0 followed each change the
+ * user made there (1 -> 0 -> 1 -> 0 -> 1 -> 0, RESOT_UNIV_WATCH); compiled
+ * code takes its address (0x006A3F80). */
+#define RESOT_UNIV_TUTORIALS        0xC0u
+/* Start New Game (same watch): +0x110 becomes 0x0A, two polls later +0x118
+ * the first map 0x2200B526 (0101_Entree), about 120 polls later +0xF4 the
+ * same and +0x108 3; +0x110 returns to 0xFFFFFFFF with the load. +0x110 is
+ * the movie the load plays: 0x001BC41C formats it with "Cine_%03d.int"
+ * (0x0041F6DC) into 0x00758550, then stores 0xFFFFFFFF (0x001BC486). */
+#define RESOT_UNIV_LOAD_MOVIE       0x110u
+#define RESOT_UNIV_NEW_GAME_MOVIE   0x0Au
+#define RESOT_UNIV_FIRST_MAP        0x2200B526u
+#include "../../port/game/resot_cheats.h"
+/* The Prince AI's set-up, 0x00270940: first stack argument the Prince's GAO
+ * (ebp at 0x00270953), eax the costume source (ebx at 0x0027094F, tested at
+ * 0x00270A13, read at 0x00270CF3). */
+void sub_00270940_enter(void)
+{
+    resot_game_skin_setup(g_eax);
+}
 extern void sub_000DBDE0_gen(void);
 /* Retail XBE: 0x000DBDE0 normalizes ECX's int16 stick pair into EAX's
  * float[2]. Its callers return to 0x000DC0B3 (left) and 0x000DC0C2 (right,
@@ -597,7 +640,21 @@ extern RESOT_TLS GuestXmm g_xmm1;          /* the runtime's RecompXmm */
 
 #define MAIN_OPEN_RET      0x00234B42u
 #define MAIN_CLOSE_RET     0x00234D8Bu
+/* The main page's handle: its open's out argument, read when its first
+ * choice is added (at its close the slot held 0xBF800000). */
+static uint32_t s_main_page_out, s_main_page;
+/* Start New Game's message (kind, parameter, id; seen in a scripted press). */
+#define NEW_GAME_MSG_KIND  0x3E7u
+#define NEW_GAME_MSG_PARAM 0x3FDu
+#define NEW_GAME_MSG_ID    0x32u
 #define MAIN_NEXT_OPEN_RET 0x00234DCDu
+/* The pause AI's init: the Pause page opens at 0x001A3239 (return
+ * 0x001A323E; Continue 0x001A326B, Options 0x001A3297, Quit 0x001A342C),
+ * then the Options page at return 0x001A3470, where the pause pages here are
+ * built, as the main menu's are at its next page. */
+#define PAUSE_OPEN_RET      0x001A323Eu
+#define PAUSE_QUIT_ADD_RET  0x001A342Cu
+#define PAUSE_NEXT_OPEN_RET 0x001A3470u
 #define TEXT_MANAGER       0x007584F0u
 #define TEXT_ACTION_VTABLE 0x0041F838u
 #define TEXT_NONE          0x0041F4A8u
@@ -605,7 +662,7 @@ extern RESOT_TLS GuestXmm g_xmm1;          /* the runtime's RecompXmm */
 #define RESOT_TEXT_GROUP   0x0B00FE00u   /* no key of the retail BF: injected */
 #define RESOT_MSG_KIND     0x52E5u
 #define RESOT_TEXT_SLOT    96u
-#define RESOT_TEXTS        80u
+#define RESOT_TEXTS        128u
 
 static int hidden_menus(void)
 {
@@ -628,7 +685,8 @@ static uint32_t guest_cdecl(void (*fn)(void), const uint32_t *args, int n)
 static uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
 enum { T_ROOT, T_GRAPHICS, T_CONTROLS, T_KEY0, T_KEY1, T_KEY2, T_JOY0, T_JOY1, T_JOY2,
-       T_RESET, T_GFX = 10, T_LOOK = 15, T_KEYS = 20, T_JOYS = 50 };
+       T_RESET, T_GFX = 10, T_LOOK = 15, T_CHEATS_LABEL = 16, T_MAP_TITLE = 17,
+       T_KEYS = 20, T_JOYS = 50, T_MAP_PART = 80, T_MAPS = 90 };
 static const char *const s_static_texts[] = {
     "reSOT Options", "Graphics", "Controls",
     "Keyboard: move and fight", "Keyboard: actions", "Keyboard: menus and camera",
@@ -637,10 +695,72 @@ static const char *const s_static_texts[] = {
 };
 static uint32_t s_text_va;
 
+/* Special Load Map: the map (world list) at the start of each area, by the
+ * entry names of the retail prince.bf ("<name>_wol_<key>.bin", key as in
+ * resot_cheats.h). No routine of this XBE builds the page its strings name
+ * (0x0B0041D2:7-8); this one loads the chosen map as a saved game is, at a
+ * checkpoint of its own (resot_map_follow). */
+#define MAP_PARTS 3
+#define MAP_PER_PART 10
+static const char *const s_map_parts[MAP_PARTS] = {
+    "Areas 01 to 15", "Areas 21 to 35", "Areas 51 to 91",   /* the font has no '-' */
+};
+/* Original keys (resot_cheats.h), each as the retail BF's WOLInfo.bin
+ * (0x0D0A899F) lists it beside its map (bin entry in the comment). Four
+ * earlier guesses from the most frequent word of the BF's data differed
+ * from that table: 1201 (0x4D0125D8), 6201 Prison A (0x3200BBF5), 7401
+ * (0x1B0059EC) and 8101 Tower Base (0x0101268A).
+ * Checkpoints: GAOs of the worlds each list loads (the wol's words whose
+ * binarized form is a "_wow_" entry), whose name names a checkpoint or a
+ * start position; key in the GAO header (0xEEFFC099, key, ".gao") before the
+ * name, read from the BF with the PoP BF Lab reader as a tool. A "Start"
+ * one where the map has it, else a TEC checkpoint, else the map's other
+ * checkpoint (named in the comment); no Vision or camera ones, and a
+ * fountain one only for 8101 Tower Base, which has no other. 1401 has none
+ * in its worlds. Not each checkpoint was seen in game. 0x2200B794 and 0x0F0053D9 are the values the
+ * universe held after Start New Game and after MenuBoot's load. */
+static const ResotMap s_maps[MAP_PARTS][MAP_PER_PART] = {
+    { { "0101 Entree", 0x2200B526u, 0x2200B794u },             /* ff02b526, StartCheckpoint */
+      { "0102 Remparts", 0x2200B528u, 0x2200CB57u },           /* ff02b528, Checkpoint_00 */
+      { "0103 Hourglass", 0x2200B5AFu, 0x0F0496C6u },          /* ff02b5af, code; CheckpointCine */
+      { "0201 Couloir Aller", 0x2200B674u, 0x2200CB63u },      /* ff02b674, Checkpoint_00 */
+      { "1101 Hall", 0x4D00138Eu, 0x4D001362u },               /* ff0d138e, 1102_Corridor01 01 */
+      { "1102 Corridor 01", 0x4D0006E2u, 0x4D001362u },        /* ff0d06e2, code; Checkpoint01 */
+      { "1201 Chambre Sultan Start", 0x4D0425D8u, 0x4D0026F3u }, /* ff0d25d8, Checkpoint01 */
+      { "1301 Lobby", 0x4D000D5Bu, 0x4D00F5CBu },              /* ff0d0d5b, DefconRoom 01 */
+      { "1401 Corridor Start", 0x4D000F5Eu, 0 },               /* ff0d0f5e */
+      { "1501 Reception Hall", 0x0F00387Du, 0x0F00425Du } },   /* ff0f387d, FRH_Checkpoint */
+    { { "2101 Start", 0x0D0024F8u, 0x0D002504u },              /* ff0d24f8, TEC_Checkpoint */
+      { "2201 Aviary", 0x2B005C22u, 0x2B0065B8u },             /* ff0b5c22, CheckPoint01 */
+      { "2401 Corridor Start", 0x4D006474u, 0x410036B0u },     /* ff0d6474, LowerBath Start */
+      { "2501 Ancient Hall", 0x2B005DBAu, 0x2B0065BCu },       /* ff0b5dba, CheckPoint01 */
+      { "2601 Bridge", 0x0F003E8Bu, 0x2B006896u },             /* ff0f3e8b, CheckPoint_00 */
+      { "3101 Tower", 0x41002456u, 0x41005E82u },              /* ff012456, Checkpoint01_StartPos */
+      { "3201 Grotte", 0x2200AC02u, 0x2200E14Du },             /* ff02ac02, Checkpoint_01 */
+      { "3301 Reservoir", 0x0F00322Bu, 0x41001EF5u },          /* ff0f322b, TEC_StartPos */
+      { "3401 Balcony", 0x410052C9u, 0x4100536Au },            /* ff0152c9, Checkpoint_StartPos */
+      { "3501 Harem Access", 0x2B0064B5u, 0x2B006488u } },     /* ff0b64b5, WestLinker */
+    { { "5102 Great Hall", 0x2B005131u, 0x2B006599u },         /* ff0b5131, TEC_CheckPoint */
+      { "6101 Cour", 0x2200A298u, 0x2200A47Fu },               /* ff02a298, Start_Checkpoint */
+      { "6201 Prison A", 0x2200BBF5u, 0x2200AB41u },           /* ff02bbf5, Checkpoint_Start */
+      { "7201 Cour", 0x2200A642u, 0x0F0053ABu },               /* ff02a642, TEC_Checkpoint */
+      { "7301 Ground Floor", 0x2B00569Eu, 0x2B006C94u },       /* ff0b569e, GroudFloor_CheckPoint */
+      { "7401 Hourglass Room", 0x2B0059ECu, 0x3F0012D3u },     /* ff0b59ec, sc740_Tomb_StartPos */
+      { "7601 Salle", 0x2200BCA7u, 0x60000AF7u },              /* ff02bca7, Checkpoint_00 */
+      { "8101 Tower Base", 0x4100268Au, 0x4B00F6C8u },         /* ff01268a, ReturnFountain */
+      { "8101 Tomb", 0x41002818u, 0x4100283Bu },               /* ff012818, TEC_StartPos */
+      { "9101 Farah Room", 0x2B0066FBu, 0x2B0068CFu } },       /* ff0b66fb, CheckPoint01 */
+};
+
 static void resot_text(uint32_t index, char *out, unsigned size)
 {
     if (index < sizeof s_static_texts / sizeof s_static_texts[0])
         snprintf(out, size, "%s", s_static_texts[index]);
+    else if (index >= T_MAP_PART && index < T_MAP_PART + MAP_PARTS)
+        snprintf(out, size, "%s", s_map_parts[index - T_MAP_PART]);
+    else if (index >= T_MAPS && index < T_MAPS + MAP_PARTS * MAP_PER_PART)
+        snprintf(out, size, "%s",
+                 s_maps[(index - T_MAPS) / MAP_PER_PART][(index - T_MAPS) % MAP_PER_PART].name);
     else if (index >= T_GFX && index < T_GFX + RESOT_NATIVE_GRAPHICS_ITEMS)
         resot_native_label(RESOT_NATIVE_GRAPHICS, (int)(index - T_GFX), out, size);
     else if (index == T_LOOK)
@@ -651,6 +771,29 @@ static void resot_text(uint32_t index, char *out, unsigned size)
         resot_native_label(RESOT_NATIVE_JOY, (int)(index - T_JOYS), out, size);
     else
         snprintf(out, size, "?");
+}
+
+/* A string of the title's own text; "" when the group has none. */
+static void game_string(uint32_t group, uint32_t index, char *out, unsigned size)
+{
+    GuestRegs saved;
+    uint32_t s;
+    unsigned i;
+    regs_save(&saved);
+    g_esp -= 0x20;
+    GMEM32(g_esp + 0x10) = group;
+    GMEM32(g_esp + 0x14) = index;
+    g_edi = g_esp + 0x10;
+    g_esp -= 4; GMEM32(g_esp) = 0;
+    sub_000F84A0_gen();
+    s = g_eax == TEXT_NONE ? 0 : g_eax;
+    regs_load(&saved);
+    for (i = 0; s && i + 1 < size; i++) {
+        char c = *(volatile char *)((uintptr_t)g_xbox_mem_offset + s + i);
+        if (!c) break;
+        out[i] = (c >= 32 && c < 127) ? c : '?';
+    }
+    out[s ? i : 0] = 0;
 }
 
 /* References to RESOT_TEXT_GROUP are answered from a guest buffer that is
@@ -666,7 +809,21 @@ void sub_000F84A0(void)
     if (!s_text_va || index >= RESOT_TEXTS) {
         g_eax = TEXT_NONE;
     } else {
-        resot_text(index, text, sizeof text);
+        if (index == T_CHEATS_LABEL) {
+            /* The retail BF keeps the development text group 0x0B00449C:
+             * "Cheats" at index 3 (RESOT_TEXT_DUMP); "On"/"Off" are the
+             * options' 0x0B0041CD:32/31. */
+            char name[32], on[16], off[16];
+            game_string(0x0B00449Cu, 3, name, sizeof name);
+            game_string(0x0B0041CDu, 32, on, sizeof on);
+            game_string(0x0B0041CDu, 31, off, sizeof off);
+            resot_cheats_label(name, on, off, text, sizeof text);
+        } else if (index == T_MAP_TITLE) {
+            game_string(0x0B0041D2u, 8, text, sizeof text);   /* "Special Load Map" */
+            if (!text[0])
+                snprintf(text, sizeof text, "Special Load Map");
+        } else
+            resot_text(index, text, sizeof text);
         memcpy((void *)((uintptr_t)g_xbox_mem_offset + s_text_va + index * RESOT_TEXT_SLOT),
                text, strlen(text) + 1);
         g_eax = s_text_va + index * RESOT_TEXT_SLOT;
@@ -677,39 +834,67 @@ void sub_000F84A0(void)
 enum { DO_OPEN, DO_MSG };
 typedef struct { uint32_t text; int what; int arg; uint32_t choice; } NativeChoice;
 typedef struct { uint32_t title; float top, step; int n; NativeChoice c[12]; uint32_t page; } NativePage;
-enum { P_ROOT, P_GFX, P_CTRL, P_K0, P_K1, P_K2, P_J0, P_J1, P_J2, P_PAGES };
+enum { P_ROOT, P_GFX, P_CTRL, P_K0, P_K1, P_K2, P_J0, P_J1, P_J2,
+       P_MAPS, P_MAP0, P_MAP1, P_MAP2, P_PAGES };
 #define MSG_ID(page, item) ((uint32_t)(page) << 8 | (uint32_t)(item))
 #define MSG_RESET 0xFF00u
-static NativePage s_pages[P_PAGES];
+#define MSG_CHEATS 0xFE00u
 static const int s_bind_first[3] = { 0, 9, 16 }, s_bind_count[3] = { 9, 7, 9 };
-static uint32_t s_main_menu, s_main_cur, s_root_choice;
-static int s_native_built, s_native_bound;
+/* The main menu and the pause menu are separate menu objects (the pause AI's
+ * init 0x001A3xxx opens its pages on 0x74758F10 where the main menu used
+ * 0x74757110 in the same run), so each gets its own reSOT Options pages,
+ * built and bound with its own current/menu pair. */
+typedef struct {
+    const char *name;
+    uint32_t menu, cur;               /* edx / eax of its page opens */
+    uint32_t root_choice, cheats_choice;   /* cheats: a choice of its root page */
+    int built, bound, cheats_bound;
+    NativePage pages[P_PAGES];
+} MenuCtx;
+enum { CTX_MAIN, CTX_PAUSE, CTX_COUNT };
+static MenuCtx s_ctx[CTX_COUNT] = { { "main" }, { "pause" } };
+static MenuCtx *s_bind_ctx = &s_ctx[CTX_MAIN];   /* the one being built and bound */
 
 static void native_choice(NativePage *p, int i, uint32_t text, int what, int arg)
 {
     p->c[i].text = text; p->c[i].what = what; p->c[i].arg = arg; p->c[i].choice = 0;
 }
 
-static void native_layout(void)
+static void native_layout(NativePage *pages)
 {
     int i, j;
     NativePage *p;
-    memset(s_pages, 0, sizeof s_pages);
-    p = &s_pages[P_ROOT]; p->title = T_ROOT; p->top = 0.3833f; p->step = 0.0667f; p->n = 2;
+    memset(pages, 0, sizeof(NativePage) * P_PAGES);
+    /* reSOT Options: Graphics, Controls, Cheats, and Special Load Map (main
+     * menu only, see native_build_and_bind). */
+    p = &pages[P_ROOT]; p->title = T_ROOT; p->top = 0.3833f; p->step = 0.0667f; p->n = 4;
     native_choice(p, 0, T_GRAPHICS, DO_OPEN, P_GFX);
     native_choice(p, 1, T_CONTROLS, DO_OPEN, P_CTRL);
-    p = &s_pages[P_GFX]; p->title = T_GRAPHICS; p->top = 0.3833f; p->step = 0.0667f;
+    native_choice(p, 2, T_CHEATS_LABEL, DO_MSG, (int)MSG_CHEATS);
+    native_choice(p, 3, T_MAP_TITLE, DO_OPEN, P_MAPS);
+    p = &pages[P_GFX]; p->title = T_GRAPHICS; p->top = 0.3833f; p->step = 0.0667f;
     p->n = RESOT_NATIVE_GRAPHICS_ITEMS;
     for (i = 0; i < p->n; i++)
         native_choice(p, i, T_GFX + (uint32_t)i, DO_MSG, (int)MSG_ID(P_GFX, i));
-    p = &s_pages[P_CTRL]; p->title = T_CONTROLS; p->top = 0.3f; p->step = 0.05f; p->n = 8;
+    p = &pages[P_CTRL]; p->title = T_CONTROLS; p->top = 0.3f; p->step = 0.05f; p->n = 8;
     native_choice(p, 0, T_LOOK, DO_MSG, (int)MSG_ID(P_CTRL, 0));
     for (i = 0; i < 6; i++)
         native_choice(p, i + 1, T_KEY0 + (uint32_t)i, DO_OPEN, P_K0 + i);
     native_choice(p, 7, T_RESET, DO_MSG, (int)MSG_RESET);
+    p = &pages[P_MAPS]; p->title = T_MAP_TITLE; p->top = 0.3833f; p->step = 0.0667f;
+    p->n = MAP_PARTS;
+    for (i = 0; i < MAP_PARTS; i++)
+        native_choice(p, i, T_MAP_PART + (uint32_t)i, DO_OPEN, P_MAP0 + i);
+    for (i = 0; i < MAP_PARTS; i++) {
+        p = &pages[P_MAP0 + i];
+        p->title = T_MAP_PART + (uint32_t)i; p->top = 0.24f; p->step = 0.05f; p->n = MAP_PER_PART;
+        for (j = 0; j < MAP_PER_PART; j++)
+            native_choice(p, j, T_MAPS + (uint32_t)(i * MAP_PER_PART + j), DO_MSG,
+                          (int)MSG_ID(P_MAP0 + i, j));
+    }
     for (i = 0; i < 6; i++) {
         int joy = i >= 3, part = i % 3;
-        p = &s_pages[P_K0 + i];
+        p = &pages[P_K0 + i];
         p->title = T_KEY0 + (uint32_t)i; p->top = 0.26f; p->step = 0.05f;
         p->n = s_bind_count[part];
         for (j = 0; j < p->n; j++) {
@@ -778,7 +963,7 @@ static int menu_bind(uint32_t choice, uint32_t action)
     g_esp -= 0x40;
     GMEM32(g_esp + 0x30) = 0;
     args[0] = g_esp + 0x30; args[1] = action; args[2] = choice;
-    g_eax = s_main_cur; g_edx = s_main_menu;
+    g_eax = s_bind_ctx->cur; g_edx = s_bind_ctx->menu;
     guest_cdecl(sub_00116660, args, 3);
     regs_load(&saved);
     return 1;
@@ -791,51 +976,104 @@ static int menu_bind_open_page(uint32_t choice, uint32_t page)
     if (!choice || !page)
         return 0;
     regs_save(&saved);
-    args[0] = s_main_cur; args[1] = 0; args[2] = 1;
-    g_eax = s_main_cur; g_ecx = page;
+    args[0] = s_bind_ctx->cur; args[1] = 0; args[2] = 1;
+    g_eax = s_bind_ctx->cur; g_ecx = page;
     action = guest_cdecl(sub_000182A0, args, 3);
     regs_load(&saved);
     return menu_bind(choice, action);
 }
 
-static int menu_bind_message(uint32_t choice, uint32_t id)
+/* A message action: descriptor kind +0x28, parameter +0x2C, id +0x30. */
+static uint32_t menu_message_action_to(uint32_t owner, uint32_t kind, uint32_t param, uint32_t id);
+static uint32_t menu_message_action(uint32_t kind, uint32_t param, uint32_t id)
+{
+    return menu_message_action_to(s_bind_ctx->cur, kind, param, id);
+}
+
+/* The same, addressed to owner (stored at the action's +4). */
+static uint32_t menu_message_action_to(uint32_t owner, uint32_t kind, uint32_t param, uint32_t id)
 {
     GuestRegs saved;
     uint32_t scratch, args[2], action, i;
-    if (!choice)
-        return 0;
     regs_save(&saved);
     g_esp -= 0x80;
     scratch = g_esp;
     for (i = 0; i < 0x34; i += 4)
         GMEM32(scratch + 0x40 + i) = 0;
-    GMEM32(scratch + 0x40 + 0x28) = RESOT_MSG_KIND;
+    GMEM32(scratch + 0x40 + 0x28) = kind;
+    GMEM32(scratch + 0x40 + 0x2C) = param;
     GMEM32(scratch + 0x40 + 0x30) = id;
-    args[0] = s_main_cur; args[1] = scratch + 0x40;
-    g_eax = s_main_cur;
+    args[0] = owner; args[1] = scratch + 0x40;
+    g_eax = owner;
     action = guest_cdecl(sub_00018310, args, 2);
     regs_load(&saved);
-    return menu_bind(choice, action);
+    return action;
 }
 
-static void native_build_and_bind(void)
+static int menu_bind_message(uint32_t choice, uint32_t id)
 {
+    return choice && menu_bind(choice, menu_message_action(RESOT_MSG_KIND, 0, id));
+}
+
+
+static void native_build_and_bind(MenuCtx *x, uint32_t menu, uint32_t cur)
+{
+    NativePage *pages = x->pages;
     int i, j, ok = 0, all = 0, root;
-    native_layout();
+    x->menu = menu;
+    x->cur = cur;
+    s_bind_ctx = x;
+    native_layout(pages);
+    /* The pause menu has no Special Load Map: its four pages (33 choices)
+     * are not built there. */
+    if (x != &s_ctx[CTX_MAIN]) {
+        memset(&pages[P_MAPS], 0, sizeof(NativePage) * (P_PAGES - P_MAPS));
+        pages[P_ROOT].n = 3;
+    }
     for (i = 0; i < P_PAGES; i++)
-        s_pages[i].page = native_build_page(s_main_cur, s_main_menu, &s_pages[i]);
+        if (pages[i].n)
+            pages[i].page = native_build_page(cur, menu, &pages[i]);
     for (i = 0; i < P_PAGES; i++)
-        for (j = 0; j < s_pages[i].n; j++) {
-            NativeChoice *c = &s_pages[i].c[j];
+        for (j = 0; j < pages[i].n; j++) {
+            NativeChoice *c = &pages[i].c[j];
             all++;
-            ok += c->what == DO_OPEN ? menu_bind_open_page(c->choice, s_pages[c->arg].page)
+            ok += c->what == DO_OPEN ? menu_bind_open_page(c->choice, pages[c->arg].page)
                                      : menu_bind_message(c->choice, (uint32_t)c->arg);
+            /* A map: after our message (which notes the map), back to the
+             * main page and the title's own Start New Game message addressed
+             * to the main menu object, as that choice's last message is (head
+             * +4); addressed to the current object it was ignored. It closes
+             * the menu; the map is requested before its balcony goes on. */
+            if (i >= P_MAP0 && i <= P_MAP2 && s_main_page) {
+                menu_bind_open_page(c->choice, s_main_page);
+                menu_bind(c->choice, menu_message_action_to(menu, NEW_GAME_MSG_KIND,
+                                                            NEW_GAME_MSG_PARAM, NEW_GAME_MSG_ID));
+            }
         }
-    root = menu_bind_open_page(s_root_choice, s_pages[P_ROOT].page);
-    s_native_built = 1;
-    s_native_bound = 1;
-    fprintf(stderr, "[MENU] reSOT Options: %d pages, %d of %d choices bound, main entry %08X %s\n",
-            P_PAGES, ok, all, s_root_choice, root ? "bound" : "not bound");
+    root = menu_bind_open_page(x->root_choice, pages[P_ROOT].page);
+    x->cheats_choice = pages[P_ROOT].c[2].choice;
+    x->cheats_bound = x->cheats_choice != 0;
+    x->built = x->bound = 1;
+    fprintf(stderr, "[MENU] reSOT Options (%s menu): %d pages, %d of %d choices bound,"
+                    " entry %08X %s\n", x->name, P_PAGES, ok, all, x->root_choice,
+            root ? "bound" : "not bound");
+}
+
+static void native_ctx_reset(MenuCtx *x)
+{
+    x->built = x->bound = x->cheats_bound = 0;
+    x->root_choice = x->cheats_choice = 0;
+}
+
+/* reSOT Options, added to a page being built. Cheats (the built-in switch,
+ * resot_cheats.h: no page of this XBE offers the development group's
+ * "Cheats") and Special Load Map are choices of its own page, as on the
+ * demo, where with them on the game's pages the in-game logo moved. */
+static void native_add_entries(MenuCtx *x, uint32_t cur, uint32_t menu)
+{
+    x->root_choice = menu_add_choice(cur, menu, RESOT_TEXT_GROUP, T_ROOT);
+    fprintf(stderr, "[MENU] hidden: \"reSOT Options\" %08X added to the %s page\n",
+            x->root_choice, x->name);
 }
 
 void sub_002A2B20_enter(void)
@@ -853,13 +1091,18 @@ void sub_002A2B20_enter(void)
     if (!hidden_menus())
         return;
     if (GMEM32(g_esp) == MAIN_OPEN_RET) {          /* a new main menu */
-        s_native_built = s_native_bound = 0;
-        s_root_choice = 0;
-    } else if (GMEM32(g_esp) == MAIN_NEXT_OPEN_RET && s_root_choice && !s_native_built) {
-        s_main_menu = g_edx;
-        s_main_cur = g_eax;
-        native_build_and_bind();
+        native_ctx_reset(&s_ctx[CTX_MAIN]);
+        s_main_page_out = GMEM32(g_esp + 4);
+        s_main_page = 0;
     }
+    else if (GMEM32(g_esp) == PAUSE_OPEN_RET)      /* a new pause menu */
+        native_ctx_reset(&s_ctx[CTX_PAUSE]);
+    else if (GMEM32(g_esp) == MAIN_NEXT_OPEN_RET && s_ctx[CTX_MAIN].root_choice
+             && !s_ctx[CTX_MAIN].built)
+        native_build_and_bind(&s_ctx[CTX_MAIN], g_edx, g_eax);
+    else if (GMEM32(g_esp) == PAUSE_NEXT_OPEN_RET && s_ctx[CTX_PAUSE].root_choice
+             && !s_ctx[CTX_PAUSE].built)
+        native_build_and_bind(&s_ctx[CTX_PAUSE], g_edx, g_eax);
 }
 
 /* Xbox Live is not provided (xbox-retail XBE). The main menu adds its choice
@@ -910,6 +1153,16 @@ void sub_002A3910_enter(void)
 {
     char t[80];
     uint32_t ref = GMEM32(g_esp + 12);
+    /* The main page's first choice: its open has written the page handle. */
+    if (s_main_page_out && !s_main_page) {
+        if (!resot_cheats_word(s_main_page_out, &s_main_page))
+            s_main_page = 0;
+        s_main_page_out = 0;
+        fprintf(stderr, "[MENU] main page %08X\n", s_main_page);
+    }
+    /* Pause page: Cheats and reSOT Options just before Quit. */
+    if (GMEM32(g_esp) == PAUSE_QUIT_ADD_RET && hidden_menus() && !s_ctx[CTX_PAUSE].root_choice)
+        native_add_entries(&s_ctx[CTX_PAUSE], g_eax, GMEM32(g_esp + 8));
     if (!menu_trace()) return;
     menu_text(ref, t, sizeof t);
     fprintf(stderr, "[MENU] choice     menu=%08X ret=%08X text=%08X:%u \"%s\"\n",
@@ -920,11 +1173,8 @@ void sub_002A2670_enter(void)
 {
     if (menu_trace())
         fprintf(stderr, "[MENU] page close ret=%08X arg=%08X\n", GMEM32(g_esp), GMEM32(g_esp + 4));
-    if (GMEM32(g_esp) == MAIN_CLOSE_RET && hidden_menus() && !s_root_choice) {
-        s_root_choice = menu_add_choice(g_eax, GMEM32(g_esp + 4), RESOT_TEXT_GROUP, T_ROOT);
-        fprintf(stderr, "[MENU] hidden: \"reSOT Options\" choice %08X added to the main page\n",
-                s_root_choice);
-    }
+    if (GMEM32(g_esp) == MAIN_CLOSE_RET && hidden_menus() && !s_ctx[CTX_MAIN].root_choice)
+        native_add_entries(&s_ctx[CTX_MAIN], g_eax, GMEM32(g_esp + 4));
 }
 
 /* Labels: as in the demo, the refresh runs for our value choices once the
@@ -970,27 +1220,77 @@ static int native_text_object(uint32_t choice, uint32_t *out)
     return 0;
 }
 
+static void native_refresh_text(uint32_t text)
+{
+    GuestRegs saved;
+    regs_save(&saved);
+    g_ecx = text; g_eax = 1;
+    guest_cdecl(sub_00038DD0, NULL, 0);
+    regs_load(&saved);
+}
+
+/* RESOT_PRINCE_LIST=1: the list sub_00030990 walks for the main actor,
+ * [GAO +0x24] +0x484 count / +0x488 entries, logged when it changes
+ * (diagnostic). */
+static void prince_list_watch(void)
+{
+    static int on = -1;
+    static uint32_t last_gao, last_owner, last_n, last_arr, last_bad = 0xFFFFFFFFu;
+    uint32_t gao, owner, n = 0, arr = 0, i, e, bad = 0, first_bad = 0, w;
+    if (on < 0) { const char *v = getenv("RESOT_PRINCE_LIST"); on = v && *v && *v != '0'; }
+    if (!on) return;
+    if (!resot_cheats_word(0x0067B6A0u, &gao) || !gao || !resot_cheats_word(gao + 0x24, &owner) ||
+            !owner || !resot_cheats_word(owner + 0x484, &n) || !resot_cheats_word(owner + 0x488, &arr))
+        n = arr = owner = 0;
+    for (i = 0; arr && i < n && i < 4096; i++)
+        if (!resot_cheats_word(arr + i * 4, &e) || !e || !resot_cheats_word(e + 0x24, &w)) {
+            if (!bad++) first_bad = i;
+        }
+    if (gao == last_gao && owner == last_owner && n == last_n && arr == last_arr && bad == last_bad)
+        return;
+    last_gao = gao; last_owner = owner; last_n = n; last_arr = arr; last_bad = bad;
+    fprintf(stderr, "[PLIST] poll %u gao=%08X owner=%08X n=%u arr=%08X bad=%u (first %u)",
+            s_cheats_frames, gao, owner, n, arr, bad, first_bad);
+    for (i = 0; arr && i < n && i < 6; i++)
+        fprintf(stderr, " %08X", resot_cheats_word(arr + i * 4, &e) ? e : 0xDEADDEADu);
+    fprintf(stderr, "\n");
+}
+
 static void native_refresh(void)
 {
     static long seen;
     long revision;
-    int i, j, n = 0;
-    if (!s_native_bound || (revision = resot_native_revision()) == seen)
+    int i, j, k, n = 0;
+    uint32_t text;
+    /* The cheats switch: kept as chosen, and its labels follow it
+     * (resot_cheats.h). */
+    resot_universe_watch();
+    resot_prince_watch();
+    resot_prince_dump();
+    resot_game_behavior_frame();
+    resot_game_skin_frame();
+    resot_test_map();
+    prince_list_watch();
+    if (resot_cheats_frame())
+        for (k = 0; k < CTX_COUNT; k++)
+            if (s_ctx[k].cheats_bound && native_text_object(s_ctx[k].cheats_choice, &text))
+                native_refresh_text(text);
+    if ((revision = resot_native_revision()) == seen)
         return;
     seen = revision;
-    for (i = 0; i < P_PAGES; i++)
-        for (j = 0; j < s_pages[i].n; j++) {
-            GuestRegs saved;
-            uint32_t text;
-            if (s_pages[i].c[j].what != DO_MSG
-                    || !native_text_object(s_pages[i].c[j].choice, &text))
-                continue;
-            regs_save(&saved);
-            g_ecx = text; g_eax = 1;
-            guest_cdecl(sub_00038DD0, NULL, 0);
-            regs_load(&saved);
-            n++;
-        }
+    for (k = 0; k < CTX_COUNT; k++) {
+        NativePage *pages = s_ctx[k].pages;
+        if (!s_ctx[k].bound)
+            continue;
+        for (i = 0; i < P_PAGES; i++)
+            for (j = 0; j < pages[i].n; j++) {
+                if (pages[i].c[j].what != DO_MSG
+                        || !native_text_object(pages[i].c[j].choice, &text))
+                    continue;
+                native_refresh_text(text);
+                n++;
+            }
+    }
     if (menu_trace())
         fprintf(stderr, "[MENU] reSOT labels refreshed (%d, revision %ld)\n", n, revision);
 }
@@ -999,11 +1299,32 @@ static void native_refresh(void)
 void sub_00039B20(void)
 {
     uint32_t self = g_ecx, id;
-    if (GMEM32(self + 0x24 + 0x28) != RESOT_MSG_KIND) { sub_00039B20_gen(); return; }
+    if (GMEM32(self + 0x24 + 0x28) != RESOT_MSG_KIND) {
+        if (menu_trace()) {
+            uint32_t o;
+            fprintf(stderr, "[MENU] game message self=%08X ret=%08X head:", self, GMEM32(g_esp));
+            for (o = 0; o < 0x24; o += 4)
+                fprintf(stderr, " %08X", GMEM32(self + o));
+            fprintf(stderr, " desc:");
+            for (o = 0; o < 0x34; o += 4)
+                fprintf(stderr, " %08X", GMEM32(self + 0x24 + o));
+            fprintf(stderr, "\n");
+        }
+        sub_00039B20_gen();
+        return;
+    }
     id = GMEM32(self + 0x24 + 0x30);
     if (menu_trace())
-        fprintf(stderr, "[MENU] reSOT choice %04X\n", id);
-    if (id == MSG_RESET)
+        fprintf(stderr, "[MENU] reSOT choice %04X self=%08X ret=%08X\n", id, self, GMEM32(g_esp));
+    if (id == MSG_CHEATS)
+        resot_cheats_toggle();
+    else if ((id >> 8) >= P_MAP0 && (id >> 8) <= P_MAP2 && (id & 0xFF) < MAP_PER_PART) {
+        /* The choice's next actions send Start New Game, which closes the
+         * menu; the map is loaded at its checkpoint after (resot_map_follow). */
+        const ResotMap *m = &s_maps[(id >> 8) - P_MAP0][id & 0xFF];
+        resot_map_follow(m->key, m->checkpoint);
+    }
+    else if (id == MSG_RESET)
         resot_native_reset_bindings();
     else if ((id >> 8) == P_GFX)
         resot_native_activate(RESOT_NATIVE_GRAPHICS, (int)(id & 0xFF));

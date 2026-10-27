@@ -10,7 +10,7 @@
 
 **Prince of Persia: The Sands of Time, recompiled from Xbox to native Windows and Android.**
 
-**Current version: v0.3.4.** reSOT is an advanced, playable recompilation and
+**Current version: v0.4.0.** reSOT is an advanced, playable recompilation and
 port of the original Xbox retail game and E3 2003 demo. Both games now run
 well on Windows and Android in the configurations tested by the user, with
 working gameplay, menus, movies, audio and controller support. The project
@@ -148,8 +148,11 @@ The release also retains the v0.3.0 features below.
   HUD clearance, repaired log-source selection, and retained the shared
   graphics, input and diagnostic options.
 
-Both Windows targets and the Android release APK build as **0.3.4**;
-Android uses **versionCode 9**. Shader compilation, pointer, touch and GPU
+Version 0.4.0 adds Special Load Map, the built-in cheats switch, the F7
+Game behavior section and an HD menu font for both games (see the status
+table and [the release notes](docs/releases/v0.4.0.md)). Both Windows targets and the
+Android release APK build as **0.4.0**; Android uses **versionCode 10**.
+Of 0.3.4: Shader compilation, pointer, touch and GPU
 regressions passed in the recorded release checks. The user confirms the
 extended health-bar alignment, popup/save-carousel touch changes and launcher
 presentation on the Android test phone. See [VALIDATION.md](docs/VALIDATION.md)
@@ -177,7 +180,11 @@ every level, device or exact console accuracy.
 | Game audio and effects | 🟢 Audio and earlier stutter/crash fixes confirmed | 🟢 Audio and earlier movie-return fix confirmed; Windows menu music restored in v0.3.0 |
 | Keyboard and physical controllers | 🟢 | 🟢 |
 | Android gameplay touch controls | 🟢 Custom layout, vibration and approved visual design | 🟢 Same shared controls |
-| Native menu navigation and pause | 🟢 Includes Load Map and reSOT Options | 🟢 Includes reSOT Options; Xbox Live entries hidden |
+| Native menu navigation and pause | 🟢 Includes Load Map and reSOT Options (main and pause menus); "Quit to Demos Menu" hidden. Cheats and Special Load Map moved into reSOT Options: on the game's pages they moved the in-game logo half off the screen | 🟢 Includes reSOT Options (main and pause menus); Xbox Live entries hidden |
+| Special Load Map (reSOT Options, main menu) | 🟡 All 20 maps of the BF (and one world-only entry for the record), sent as the original Load Map's message; scripted direct requests faulted for 4 of 12 maps, the message path is not yet checked on those | 🟡 30 area maps with the keys of the BF's WOLInfo.bin (four corrected in 0.4.0), loaded as a saved game is: Start New Game only closes the menu, then the map with a checkpoint of its own (none known for 1401) and no movie, before the balcony (earlier build: user saw the map load after the balcony, Prince misplaced and head only; the new path and the costume fix are not checked yet); 7601 Salle and 8101 Tomb load (Salle's crash fixed); 8101 Tower Base still faults (sub_00030990), with or without the reSOT menus |
+| HD menu font | 🟡 The user's HD drawing of the menu font sheet (2048x512) replaces the 512x128 sheet in the Direct3D 12 and Vulkan renderers, recognised by its glyph coverage; built, not yet seen on screen. The corner logo, pushed off the right edge once the reSOT menu entries exist, is moved back inside the picture there (cause in the title not found) | 🟡 The same with the retail's own sheet; built, not yet seen on screen |
+| F7 Game behavior: Tutorials, Dagger of time, Cheats | 🟡 Dagger visual effect not checked; Cheats On/Off; Tutorials not available (Prince skin removed) | 🟡 Tutorials (universe +0xC0, saved); Cheats On/Off (Prince skin removed) |
+| Built-in cheats switch ("Cheats: On/Off", reSOT Options and F7) | 🟢 Changes OVA 8 `mb_CheatsEnabled` in memory, no BF rebuild; user confirms it works on Windows; Android not run | 🟢 Same for OVA 22; user confirms it works on Windows; label toggled in the in-level pause in a scripted run; Android not run |
 | Mouse/touch selection of menu rows | 🟡 Text and literal-text choices covered; synthetic tests pass; broader interaction checks pending | 🟢 Yes/No choices and save-carousel arrows confirmed on the Android test phone; synthetic tests pass |
 | Automatic Android overlay hiding | 🟡 Toggle stays visible with pad; hidden toggle/FPS remain touchable. Policy tests pass; device checks pending | 🟡 Same shared implementation and validation limit |
 | Native Vulkan renderer | 🟢 Windows and Android runs; shader/GPU comparisons pass | 🟢 Windows and Android runs; gameplay and GPU comparisons recorded |

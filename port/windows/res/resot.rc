@@ -4,6 +4,9 @@
 
 // The first icon in the file is the one Explorer shows.
 1 ICON "resot.ico"
+// The game window's title bar only (fb_present.c): resot.ico with its colours
+// inverted and its transparency kept, so the light logo shows on a white frame.
+2 ICON "resot_window.ico"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION RESOT_VERSION_PARTS

@@ -1,12 +1,14 @@
 # reSOT on Windows
 
-Version 0.3.4 stops a rejected graphics pipeline from closing the game (Mali
+Version 0.4.0 adds Special Load Map and Cheats (in reSOT Options), the
+F7 Game behavior section and an HD menu font (Direct3D 12 and Vulkan
+renderers; `RESOT_HD_FONT=0` keeps the original sheet). Version 0.3.4 stops a rejected graphics pipeline from closing the game (Mali
 reports), releases a stuck D3D wait and brings the definitive logo and the
 animated Prince of Persia title to the launcher. Version 0.3.3 ran the game and the GPU executor in parallel on retail, fixes
 a retail mid-game freeze, reduces audio crackle and brings the new animated
 logo. Version 0.3.2 added Reduced/Standard/Full graphics presets and a background
 stable-release check with optional Update / Close buttons styled like the
-launcher. The displayed version is 0.3.4. Offline/rate-limit errors are ignored.
+launcher. The displayed version is 0.4.0. Offline/rate-limit errors are ignored.
 No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
 request and reSOT version in its User-Agent. Update opens the official release
 page, without downloading/installing an executable automatically.
@@ -114,7 +116,10 @@ all of it, with the last 80 log lines, on the clipboard.
 
 F7 opens/closes the restored `reSOT Options` overlay (demo and retail);
 Esc or its X button also closes it. Expand Graphics or Controls to edit
-settings. Double-click a binding to change it, right-click to clear it;
+settings. **Game behavior** holds the game's own switches: Tutorials On/Off
+(retail; saved as `[Game] Tutorials` and applied at every map load), Dagger
+of time (Game / On / Off) and Cheats On/Off (the same switch as reSOT
+Options > Cheats); neither of these two is saved. Double-click a binding to change it, right-click to clear it;
 scroll to reach the remaining actions. The overlay captures game input
 while open. F6 remains assigned to diagnostics; while options are open,
 the options surface takes display priority. The same settings remain in

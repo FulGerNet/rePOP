@@ -78,6 +78,15 @@ extern const char *resot_android_data_dir(void);
 
 static void mark_dirty(void) { InterlockedIncrement(&s_revision); }
 long resot_native_revision(void) { return InterlockedCompareExchange(&s_revision, 0, 0); }
+/* Game behavior, as on Windows (port/windows/src/options.c): Tutorials is
+ * kept in [Game]; this host has no panel for the Dagger of time yet, so
+ * it stays as the game has it. */
+static int s_tutorials = 1;
+int resot_game_tutorials(void) { return s_tutorials; }
+int resot_game_dagger(void) { return -1; }
+/* No Cheats row here either: the game's menus have their own Cheats choice. */
+int resot_game_cheats_request(void) { return -1; }
+void resot_game_cheats_report(int on) { (void)on; }
 
 void resot_options_summary(char *out, unsigned size)
 {
@@ -141,6 +150,7 @@ static int save_config(void)
     fprintf(f,"GraphicsPreset=%d\n",s_post_quality);
     fprintf(f,"[Diagnostics]\nConsoleLogs=%d\n",s_console_logs);
     fprintf(f, "[Controls]\nLookSensitivityPercent=%d\n",s_look_sensitivity);
+    fprintf(f, "[Game]\nTutorials=%d\n",s_tutorials);
     fprintf(f, "[Keyboard]\n");
     for (i = 0; i < ACTIONS; i++) fprintf(f, "Action%d=%d\n", i, s_keys[i]);
     fprintf(f, "[Joystick]\n");
@@ -408,6 +418,7 @@ void resot_options_init(void)
     xbox_SetFrameLimit(s_fps);
     xbox_SetVSync(s_vsync);
     s_console_logs=ini_get("Diagnostics","ConsoleLogs",0)!=0;
+    s_tutorials=ini_get("Game","Tutorials",1)!=0;
     if(s_console_logs)fprintf(stderr,"[CONSOLE] On-screen logs enabled (logs/%s-err.txt and -out.txt)\n",RESOT_TARGET_ID);
     xbox_FramebufferSetOptionsCallbacks(resot_console_panel,NULL);
     xbox_InputSetHostFilter(input);

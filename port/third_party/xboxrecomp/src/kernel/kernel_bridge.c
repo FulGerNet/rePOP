@@ -2031,6 +2031,15 @@ static void bridge_MmSetAddressProtect(void)
     if (KERNEL_LOG_ON_HALF())
         fprintf(stderr, "  [KERNEL] MmSetAddressProtect: 0x%08X+0x%X prot=0x%X from 0x%08X\n",
                 addr, size, prot, g_xbox_kernel_caller);
+#if RESOT_RUNTIME_RETAIL
+    /* RE-SoT: retail PoP marks its texture pages PAGE_READONLY|
+     * PAGE_WRITECOMBINE (0x402, from 0x000D63E1). The console's GPU ignores
+     * CPU page protection and renders into such pages; here the GPU is the
+     * executor thread, and from 7601_Salle on it faulted writing one
+     * (0x80B66250, nv2a_pb_scan_to). Contiguous pages stay writable. */
+    if (addr >= XBOX_CONTIG_BASE && !(prot & 0xCC))
+        prot = (prot & ~0xFFu) | 0x04u;
+#endif
     xbox_MmSetAddressProtect(XBOX_TO_NATIVE(addr), size, prot);
     g_eax = 0;
 }
