@@ -249,7 +249,6 @@ static struct {
     int batch_projected_screen;          /* RE-SoT: screen quad already narrowed by Hor+ */
     int batch_hud;                       /* RE-SoT: projected HUD: -1 left, +1 right, 0 none */
     int batch_projected_2d;              /* RE-SoT: retail: projected 2D across the centre */
-    float batch_logo_right;              /* RE-SoT: demo logo's right edge, 0 for other batches */
 } s_hw;
 
 /* RE-SoT: the projection hook already gives the HUD its 4:3 proportions,
@@ -2423,19 +2422,6 @@ static void hw_classify_screen(float left, float right, float top, float bottom)
         && right <= 320.0f + 320.0f / s_hw.widen + 0.5f)
         s_hw.batch_projected_2d = 1;
 #endif
-    /* RE-SoT: demo only. Its corner "Prince of Persia" logo (the 256x64 logo
-     * sheet, flat, depth test off, bottom right) was drawn partly off the
-     * right edge once reSOT's menu entries exist (user reports; with
-     * RESOT_HIDDEN_MENUS=0 it was in place). Where it lands depends on the
-     * session, so the native backends move it back inside the picture when
-     * its right edge passes the screen's (ng_constants), and leave it alone
-     * otherwise. The cause in the title was not found. */
-    s_hw.batch_logo_right = 0;
-#if RESOT_RUNTIME_DEMO
-    if (!s_gpu.depth_test && top >= 288.0f && left > 320.0f && s_gpu.texs[0].valid
-        && !s_gpu.texs[0].cube && s_gpu.texs[0].width == 256 && s_gpu.texs[0].height == 64)
-        s_hw.batch_logo_right = right;
-#endif
 }
 
 /* RE-SoT: the demo's traced final glow pass (unpaused frame 1917) and
@@ -2799,7 +2785,7 @@ static int hw_draw_program_batch(void)
     /* RE-SoT: classify the whole flat batch, including the pause layers
      * already narrowed by the target's projection. The full-height bounds
      * distinguish these from smaller UI widgets. */
-    s_hw.batch_full_width = s_hw.batch_projected_screen = s_hw.batch_hud = 0; s_hw.batch_logo_right = 0; /* RE-SoT */
+    s_hw.batch_full_width = s_hw.batch_projected_screen = s_hw.batch_hud = 0;
     s_hw.batch_projected_2d = 0;
     if (s_hw.widen > 1.0f && s_gpu.clip_w == 640 && s_gpu.clip_h >= 448) {
         float in[NV2A_VSH_INPUTS][4], lo = 1e9f, hi = -1e9f;
@@ -3024,7 +3010,7 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
     /* Full-width 2D keeps its width (see hw_draw_program_batch). */
     {
         float lo = 1e9f, hi = -1e9f, top = 1e9f, bottom = -1e9f;
-        s_hw.batch_full_width = s_hw.batch_projected_screen = s_hw.batch_hud = 0; s_hw.batch_logo_right = 0; /* RE-SoT */
+        s_hw.batch_full_width = s_hw.batch_projected_screen = s_hw.batch_hud = 0;
         s_hw.batch_projected_2d = 0;
         for (i = 0; i < n; i++) {
             if (fabsf(v[i].pos[3] - 1.0f) > 0.0001f)

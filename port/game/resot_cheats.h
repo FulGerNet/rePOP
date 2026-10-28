@@ -257,8 +257,13 @@ static void resot_map_frame(void)
         s_map_seen = v[0];
     /* Loaded: what the checkpoint became once the level runs (diagnostic). */
     if (s_map_logged && s_cheats_frames - s_map_logged >= 120u) {
-        fprintf(stderr, "[MAP] poll %u: +0 %08X in %08X\n", s_cheats_frames, v[0],
-                v[RESOT_UNIV_CURRENT_WORLD / 4]);
+        /* The Prince's sector, [GAO +0x24]: left on the menu's freed world it
+         * faulted in sub_00030990+0x206 (1401 without a checkpoint). */
+        uint32_t gao = 0, sector = 0;
+        if (resot_cheats_word(RESOT_MAIN_ACTOR, &gao) && gao)
+            resot_cheats_word(gao + 0x24, &sector);
+        fprintf(stderr, "[MAP] poll %u: +0 %08X in %08X, Prince %08X sector %08X\n",
+                s_cheats_frames, v[0], v[RESOT_UNIV_CURRENT_WORLD / 4], gao, sector);
         s_map_logged = 0;
     }
     /* The title's new game going on: its movie or its first map. */

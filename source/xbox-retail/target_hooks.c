@@ -715,9 +715,14 @@ static const char *const s_map_parts[MAP_PARTS] = {
  * start position; key in the GAO header (0xEEFFC099, key, ".gao") before the
  * name, read from the BF with the PoP BF Lab reader as a tool. A "Start"
  * one where the map has it, else a TEC checkpoint, else the map's other
- * checkpoint (named in the comment); no Vision or camera ones, and a
- * fountain one only for 8101 Tower Base, which has no other. 1401 has none
- * in its worlds. Not each checkpoint was seen in game. 0x2200B794 and 0x0F0053D9 are the values the
+ * checkpoint (named in the comment); no Vision, camera or fountain ones.
+ * Loaded without one, 1401 Corridor Start faulted in sub_00030990+0x206
+ * (user log 2026-10-28): the Prince's sector, [GAO +0x24], still pointed
+ * into the menu's freed world; 8101 Tower Base, with only a fountain
+ * checkpoint, faulted there too. Their areas are listed by a neighbouring
+ * map with a checkpoint: 1401 Cour (0x4D000F5F) and 8101 Bridge Support
+ * (0x41006037), keys as WOLInfo.bin lists them. 2601 and 7401 loaded at
+ * their checkpoints (user logs); the others were not all seen in game. 0x2200B794 and 0x0F0053D9 are the values the
  * universe held after Start New Game and after MenuBoot's load. */
 static const ResotMap s_maps[MAP_PARTS][MAP_PER_PART] = {
     { { "0101 Entree", 0x2200B526u, 0x2200B794u },             /* ff02b526, StartCheckpoint */
@@ -728,7 +733,7 @@ static const ResotMap s_maps[MAP_PARTS][MAP_PER_PART] = {
       { "1102 Corridor 01", 0x4D0006E2u, 0x4D001362u },        /* ff0d06e2, code; Checkpoint01 */
       { "1201 Chambre Sultan Start", 0x4D0425D8u, 0x4D0026F3u }, /* ff0d25d8, Checkpoint01 */
       { "1301 Lobby", 0x4D000D5Bu, 0x4D00F5CBu },              /* ff0d0d5b, DefconRoom 01 */
-      { "1401 Corridor Start", 0x4D000F5Eu, 0 },               /* ff0d0f5e */
+      { "1401 Cour", 0x4D000F5Fu, 0x4D002774u },               /* ff0d0f5f, TEC_Checkpoint */
       { "1501 Reception Hall", 0x0F00387Du, 0x0F00425Du } },   /* ff0f387d, FRH_Checkpoint */
     { { "2101 Start", 0x0D0024F8u, 0x0D002504u },              /* ff0d24f8, TEC_Checkpoint */
       { "2201 Aviary", 0x2B005C22u, 0x2B0065B8u },             /* ff0b5c22, CheckPoint01 */
@@ -747,7 +752,7 @@ static const ResotMap s_maps[MAP_PARTS][MAP_PER_PART] = {
       { "7301 Ground Floor", 0x2B00569Eu, 0x2B006C94u },       /* ff0b569e, GroudFloor_CheckPoint */
       { "7401 Hourglass Room", 0x2B0059ECu, 0x3F0012D3u },     /* ff0b59ec, sc740_Tomb_StartPos */
       { "7601 Salle", 0x2200BCA7u, 0x60000AF7u },              /* ff02bca7, Checkpoint_00 */
-      { "8101 Tower Base", 0x4100268Au, 0x4B00F6C8u },         /* ff01268a, ReturnFountain */
+      { "8101 Bridge Support", 0x41006037u, 0x4100587Fu },     /* ff016037, Checkpoint_02 */
       { "8101 Tomb", 0x41002818u, 0x4100283Bu },               /* ff012818, TEC_StartPos */
       { "9101 Farah Room", 0x2B0066FBu, 0x2B0068CFu } },       /* ff0b66fb, CheckPoint01 */
 };

@@ -1,5 +1,50 @@
 # Validation log
 
+## 2026-10-28 (evening): HD font made from the title's sheet
+
+User report: the HD font from the user's drawings showed some letters cut;
+that drawing had other margins and line spacing than the sheet the
+FONTDESC's boxes describe. Now `resot_hd_font.h` recognises the decoded
+512x128 sheet by its FNV-1a hash (demo 0x3372CC85, retail 0xBF3884F3, each
+the only 512x128 texture of a 45-50 s run to the menu) and enlarges it 4x on
+the host: Catmull-Rom on premultiplied colour, coverage edge tightened with
+a smoothstep over 0.3..0.7. Every letter stays in its box. The generated
+headers of the user's drawings and `tools/hd-font.py` are removed.
+
+Checks: `recomp.ps1 -BuildOnly` both targets, `build-android.ps1` pass;
+runs `run.ps1 -Seconds 45/50`: `[HDFONT] ... the menu font: HD` on both. The
+same filter applied in Python to the exported sheets gave sharp letters with
+slightly wavy edges. Not checked: the HD text on screen (window dumps are the
+640x480 guest image), Android at run time.
+
+## 2026-10-28 (later): retail Special Load Map crashes, demo logo hidden
+
+**Retail crash** (user log, 1401 Corridor Start, no checkpoint): access
+violation in sub_00030990+0x206 after the load, ebx = the Prince
+(0x748C1750, from MenuBoot's merge), as 8101 Tower Base before. XBE: the
+routine walks [GAO +0x24] (the Prince's sector) +0x484 count / +0x488 list;
+0x00030B42..0x00030BA1 replace [GAO +0x24] from a sector key through the
+LOA table. Left on the menu's world it points into freed data. 2601 and
+7401, loaded at their checkpoints, ran (user logs). The menu's 1401 and
+8101 entries now load 1401 Cour (0x4D000F5F, checkpoint 0x4D002774
+1401_Cour_TEC_Checkpoint) and 8101 Bridge Support (0x41006037, checkpoint
+0x4100587F 8101_BridgeSupport_TEC_Checkpoint_02); keys from WOLInfo.bin.
+`[MAP]` now logs the Prince and his sector 120 polls after the load. Not
+run: those two maps and the other maps of the list.
+
+**Demo logo.** The previous move never applied: no `[HUD]` line in the
+user's log. Frame traces (`RESOT_LOGO_TRACE`, removed) found no flat or
+projected lower-right batch matching it. The logo is texture 0x0B0044F9
+(256x64 BGRA8; GAO E3_WorkInProgress 0x0B0044F7 in CameraAndGlobal); the
+native renderer now uploads it transparent when the FNV-1a hash of its
+decoded pixels is 0x72C687A6 (the same in the four worlds that hold it).
+Run: `run.ps1 -Target xbox-demo -Seconds 100 -Pad` into the first level:
+`[LOGO] ... the E3 logo: hidden`, window dumps at 50 and 100 s show "Work in
+progress" and no logo. Not checked: whether the menu showed this texture
+too (it is now transparent everywhere); D3D11 is unchanged.
+
+Checks: `recomp.ps1 -BuildOnly` both targets and `build-android.ps1` pass.
+
 ## 2026-10-28: HD menu font, demo corner logo
 
 **Font sheets.** Both BFs keep one main FONTDESC, 0x0B0041BC (demo
