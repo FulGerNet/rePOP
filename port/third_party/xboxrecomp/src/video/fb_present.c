@@ -1139,6 +1139,25 @@ static DWORD WINAPI fb_thread(LPVOID unused)
                 }
                 xbox_FramebufferDumpBmp(dump);
             }
+            /* RE-SoT: RESOT_FB_BURST=<window frame>,<count> also writes that
+             * many consecutive window frames as <RECOMP_FB_DUMP>_burst_NNN.bmp,
+             * to compare neighbouring frames (flicker). */
+            {
+                static int burst_at = -1, burst_n;
+                const char *burst = getenv("RESOT_FB_BURST");
+                if (burst_at < 0) {
+                    burst_at = burst ? atoi(burst) : 0;
+                    burst_n = burst && strchr(burst, ',') ? atoi(strchr(burst, ',') + 1) : 0;
+                }
+                if (dump && burst_at > 0 && frames >= burst_at && frames < burst_at + burst_n
+                        && s_hw_mode && s_rgb) {
+                    char path[600];
+                    if (!nv2a_hw_readback(s_rgb, s_fb_width, s_fb_height))
+                        memset(s_rgb, 0, (size_t)s_fb_width * s_fb_height * 4);
+                    snprintf(path, sizeof path, "%s_burst_%03d.bmp", dump, frames - burst_at);
+                    xbox_FramebufferDumpBmp(path);
+                }
+            }
         }
         {
             static DWORD t0;

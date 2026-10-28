@@ -301,16 +301,27 @@ static void resot_map_frame(void)
 typedef struct { const char *name; uint32_t key, checkpoint; } ResotMap;
 #define RESOT_MAP_NAME_ONLY 0u              /* listed for the record, not loadable */
 
-/* RESOT_TEST_MAP=<key>,<poll>: request that map at that pad poll (a check
- * that needs no menu navigation). */
+/* RESOT_TEST_MAP=<key>,<poll>[,<checkpoint>]: request that map at that pad
+ * poll (a check that needs no menu navigation). */
 static void resot_test_map(void)
 {
     static int done;
     const char *e = getenv("RESOT_TEST_MAP"), *comma;
     if (done || !e || !(comma = strchr(e, ',')))
         return;
-    if (s_cheats_frames >= (unsigned)strtoul(comma + 1, NULL, 10))
-        done = resot_change_map((uint32_t)strtoul(e, NULL, 16));
+    if (s_cheats_frames < (unsigned)strtoul(comma + 1, NULL, 10))
+        return;
+#ifdef RESOT_UNIV_LOAD_MOVIE
+    /* RESOT_TEST_MAP=<key>,<poll>,<checkpoint>: the Special Load Map path
+     * (retail; without a checkpoint the Prince's sector stays on the menu's
+     * freed world, resot_map_follow). */
+    if ((comma = strchr(comma + 1, ',')) != NULL) {
+        resot_map_follow((uint32_t)strtoul(e, NULL, 16), (uint32_t)strtoul(comma + 1, NULL, 16));
+        done = 1;
+        return;
+    }
+#endif
+    done = resot_change_map((uint32_t)strtoul(e, NULL, 16));
 }
 
 /* RESOT_UNIV_WATCH=1: log every change of the universe's first 0x50 words

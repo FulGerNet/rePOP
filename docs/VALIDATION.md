@@ -1,5 +1,52 @@
 # Validation log
 
+## 2026-10-28 (late): demo menu title and E3 logo, final 0.4.0 builds
+
+User request, from a screenshot of the E3 build's menu: "E3 Demo" as the
+main page's title and the logo at the top left.
+
+- Title: the E3 page opens at 0x0015E8EA with title 0B00449C:0, empty in
+  this BF. Rewriting the init's reference shifted every following text and
+  the game closed (it numbers the choices from it); the page now gets its own
+  reference (RESOT_TEXT_GROUP:18, "E3 Demo"). Window dump: "E3 Demo" above
+  Start.
+- Logo: the hidden texture 0x0B0044F9 is kept, upright, when it is decoded,
+  and the native renderer draws it over the picture while a menu is up
+  (`resot_menu_scene() == 1`), top left of the 4:3 frame. Log: `[LOGO] E3
+  logo drawn over the menu`; the user saw it on screen. It also shows over
+  the pause menu.
+- "Work in progress" stays where it is (user's choice). It is not menu
+  text: the GAO E3_WorkInProgress (0x0B0044F7) draws it in play; its matrix
+  translation was 0.273, 0.336, -0.759.
+
+Checks: `recomp.ps1 -BuildOnly` for both targets and `build-android.ps1`
+pass (logs/final040-*-build.txt): sot-xbox-demo.exe 41,793,536 bytes,
+sot-xbox-retail.exe 50,199,552, reSOT-android.apk 29,437,889. Not checked:
+Android at run time.
+
+## 2026-10-28 (night): retail flicker check in 8101 Tomb
+
+User report: shadows and objects flicker at some angles on both games, and
+some objects in 8101 Tomb flashed in many colours; believed present in
+earlier versions too (the 2026-10-24 Android reports describe the same).
+
+Run: `run.ps1 -Target xbox-retail -Seconds 75 -Windowed -SnapshotEvery 15
+-Set @{RESOT_TEST_MAP='41002818,1500,4100283B'; RESOT_FB_BURST='3300,90'}`
+(D3D12, internal resolution 225%). Tomb loaded at 8101_Tomb_TEC_StartPos,
+no fault; Prince sector 0x7519B9F0 after the load. 90 consecutive window
+frames: the largest frame-to-frame changes are the guards and the Prince
+moving (difference images); no surface flashed or changed colour. The user,
+watching the same run, saw it correct. Not reproduced, so not fixed; the
+angle that triggers it is not known.
+
+New diagnostics: `RESOT_FB_BURST=<window frame>,<count>` writes consecutive
+window frames as `<RECOMP_FB_DUMP>_burst_NNN.bmp` (`fb_present.c`, RE-SoT);
+`RESOT_TEST_MAP` takes a third field, a checkpoint, and then loads the map
+the Special Load Map way on retail (a direct request without one faulted in
+sub_00030990, as from the menu).
+
+Checks: `recomp.ps1 -Target xbox-retail -BuildOnly` passes.
+
 ## 2026-10-28 (evening): HD font made from the title's sheet
 
 User report: the HD font from the user's drawings showed some letters cut;

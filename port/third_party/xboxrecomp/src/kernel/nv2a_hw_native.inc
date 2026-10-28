@@ -170,6 +170,7 @@ static struct {
     int vc_valid, pc_valid;
     /* RE-SoT: overlay and F5/F6 panel images, kept while their size holds. */
     SDL_GPUTexture *overlay, *panel;
+    SDL_GPUTexture *e3logo; /* RE-SoT: demo menu logo (ng_compose) */
     uint32_t overlay_w, overlay_h, overlay_serial, panel_w, panel_h;
     DWORD movie_log;
     uint32_t movie_composes; /* RE-SoT: distinguish movie repaint cadence from guest flips. */
@@ -878,6 +879,10 @@ static SDL_GPUTexture *ng_depth(NgSurface *s)
     depth->offset = s_gpu.zeta_offset; depth->w = w; depth->h = h;
     return s->depth;
 }
+#if RESOT_RUNTIME_DEMO
+static uint32_t s_e3_logo[256*64]; /* RE-SoT: the E3 logo texture, upright */
+static int s_e3_logo_ready;
+#endif
 static SDL_GPUTexture *ng_texture(int stage, NgSurface *target)
 {
     const Texture *t = &s_gpu.texs[stage];
@@ -954,7 +959,15 @@ static SDL_GPUTexture *ng_texture(int stage, NgSurface *target)
         const uint8_t *b = (const uint8_t *)px;
         size_t k;
         for (k = 0; k < (size_t)256*64*4; k++) fnv = (fnv ^ b[k]) * 16777619u;
-        if (fnv == 0x72C687A6u) memset(px, 0, (size_t)256*64*4);
+        if (fnv == 0x72C687A6u) {
+            /* Kept, upright (the sheet is stored bottom-up), for the menu
+             * logo ng_compose draws; then hidden in the game's own draws. */
+            uint32_t row;
+            for (row = 0; row < 64; row++)
+                memcpy(s_e3_logo + (size_t)row*256, px + (size_t)(63 - row)*256, 256*4);
+            s_e3_logo_ready = 1;
+            memset(px, 0, (size_t)256*64*4);
+        }
         if (told++ < 8)
             fprintf(stderr, "[LOGO] 256x64 texture %08X: hash %08X%s\n", t->offset, fnv,
                     fnv == 0x72C687A6u ? ", the E3 logo: hidden" : "");
@@ -2123,6 +2136,30 @@ static void ng_compose(void)
     vp.x = px; vp.y = py; vp.w = pw; vp.h = ph; vp.min_depth = 0; vp.max_depth = 1;
     if (s_ng.front)
         ng_blit(s_ng.composed, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, s_ng.front->color, &vp, NULL, 1, 15, NULL, 1);
+#if RESOT_RUNTIME_DEMO
+    /* RE-SoT: the E3 build's menu showed the "Prince of Persia / The Sands of
+     * Time" logo at the top left (user's screenshot); this demo's menu does
+     * not draw it. While a menu is up (resot_menu_scene 1, main or pause),
+     * the game's own logo texture, kept by ng_texture, is drawn there over
+     * the picture, in the 4:3 frame: x 9..57 %, from 8.5 % down. */
+    {
+        extern int resot_menu_scene(void);
+        if (s_e3_logo_ready && s_ng.front && resot_menu_scene() == 1) {
+            float mw = ph*(4.0f/3.0f), mx = px+(pw-mw)*0.5f;
+            SDL_GPUViewport lv;
+            if (!s_ng.e3logo) {
+                s_ng.e3logo = ng_image(256,64,0,1,SDL_GPU_TEXTUREUSAGE_SAMPLER,
+                                       SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+                ng_upload(s_ng.e3logo, s_e3_logo, 256, 64, 1, 0);
+                fprintf(stderr, "[LOGO] E3 logo drawn over the menu\n");
+            }
+            lv.x = mx + 0.09f*mw; lv.y = py + 0.085f*ph;
+            lv.w = 0.48f*mw; lv.h = lv.w * 64.0f/256.0f;
+            lv.min_depth = 0; lv.max_depth = 1;
+            ng_blit(s_ng.composed,SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,s_ng.e3logo,&lv,NULL,3,15,NULL,0);
+        }
+    }
+#endif
     if (xbox_FramebufferOverlayGet(&pixels, &w, &h, rect, &serial) && w && h) {
         /* RE-SoT: movies often issue no FLIP_STALL; guest FPS cannot measure
          * their presenter. Report compositions, not claimed decoded frames. */

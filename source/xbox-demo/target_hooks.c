@@ -466,6 +466,10 @@ static void native_bind(void);
 #define MENU_LOADMAP_OPEN_RET 0x0015E854u /* 0x0023F110 building the page */
 #define MENU_TITLE_OPEN_RET   0x0015EB37u /* 0x0023F110 opening the title page */
 #define MENU_PAUSE_OPEN_RET   0x0015D8CDu /* 0x0023F110: the init's first page, Pause */
+extern uint32_t xbox_ContiguousAlloc(uint32_t size, uint32_t alignment);
+#define MENU_E3_OPEN_RET      0x0015E8EAu /* 0x0023F110 opening the E3 page, title 0B00449C:0 */
+#define RESOT_TEXT_GROUP 0x0B00FE00u  /* not a key of the demo's BF: injected */
+#define T_E3_TITLE       18u          /* "E3 Demo", the E3 page's title */
 
 void sub_0023F110_enter(void)
 {
@@ -489,6 +493,21 @@ void sub_0023F110_enter(void)
     }
     if (GMEM32(g_esp) == MENU_TITLE_OPEN_RET && hidden_menus())
         native_build(GMEM32(g_esp + 8));      /* reSOT Options pages */
+    /* The E3 page's title, 0B00449C:0, is empty in this BF; the E3 build
+     * showed "E3 Demo" there (user's screenshot). ecx points at the init's
+     * own reference, from which it numbers the choices that follow
+     * (0x0015E8EA..): rewriting it shifted every text, so the page gets a
+     * reference of its own instead. */
+    if (GMEM32(g_esp) == MENU_E3_OPEN_RET && hidden_menus() && g_ecx) {
+        static uint32_t title_ref;
+        if (!title_ref)
+            title_ref = xbox_ContiguousAlloc(16, 16);
+        if (title_ref) {
+            GMEM32(title_ref) = RESOT_TEXT_GROUP;
+            GMEM32(title_ref + 4) = T_E3_TITLE;
+            g_ecx = title_ref;
+        }
+    }
 }
 
 /* ── Hidden menus: the demo's own level select ("Load Map") ──
@@ -533,7 +552,6 @@ static uint32_t s_resot_root;         /* reSOT Options page, built below */
 static uint32_t s_pause_root;         /* its pause version, without the maps */
 #define T_MAP_TITLE      17u          /* "Special Load Map" */
 #define MENU_E3_SOUND_RET 0x0015E94Au /* 0x0023F040 call creating E3 "Sound" */
-#define RESOT_TEXT_GROUP 0x0B00FE00u  /* not a key of the demo's BF: injected */
 #define T_CHEATS_LABEL   16u          /* "Cheats: On/Off", see resot_cheats.h */
 #define MSG_CHEATS       0xFE00u
 /* The menu init's text group 0x0B00449C still has "Cheats" at index 3,
@@ -910,6 +928,8 @@ static void resot_text(uint32_t index, char *out, unsigned size)
         snprintf(out, size, "%s", s_static_texts[index]);
     else if (index == T_MAP_TITLE)
         snprintf(out, size, "Special Load Map");
+    else if (index == T_E3_TITLE)
+        snprintf(out, size, "E3 Demo");
     else if (index >= T_MAP_PART && index < T_MAP_PART + MAP_PARTS)
         snprintf(out, size, "%s", s_map_parts[index - T_MAP_PART]);
     else if (index >= T_MAPS && index < T_MAPS + MAP_PARTS * MAP_PER_PART) {
