@@ -1,5 +1,61 @@
 # Validation log
 
+## 2026-10-28 (night, 2): HD menu font from the Atlantis face, logo opaque
+
+User requests: the menu logo back to full opacity; menu text of higher
+quality than the 4x enlargement, from the user's HD drawings
+(Assets/fonts/<target>/font_<demo|retail>_hd.png), fixed where their
+letters, accents and dots differ from the sheet; the letters are the
+Atlantis MF face (`port/windows/res/AtlantisMF.ttf`).
+
+- Logo: `RESOT_E3_LOGO_ALPHA` defaults to 1 (full opacity).
+- `tools/hd-font.py <target> --preview` (rewritten): the sheet is cut into
+  glyphs (cores at coverage 0.7, faint pixels to the nearest core, cores
+  sharing columns in one line joined; a glyph wider than 1.15 capitals that
+  nothing matches is cut at its column of least ink). Each glyph is compared
+  with the face's letters at the sheet's size, the best eight fitted by least
+  squares (offset, scale 0.8..1.25 per axis, area-sampled); accepted when the
+  error (wrong coverage / own) is under 0.36 and the wrong coverage in any
+  3x3 sheet pixels under 4. Else the user's drawing is fitted there the same
+  way; else the runtime enlarges the sheet in that rectangle.
+  Demo: 192 glyphs, 156 from the face, 34 from the drawing, 2 enlarged (`%`
+  and `@`). Retail: 205 glyphs, 169 face, 34 drawing, 2 enlarged (two marks
+  near x 201..228, y 54..71 of the sheet). Output port/game/resot_hd_font_
+  <target>.h, 2048x512 coverage, 8 bits. In the drawings the accents of
+  É Ê Ë and others were graves; the face gives the sheet's own.
+  Looked at: logs/hd-font-<target>.png, the result over the sheet.
+- Runtime (`resot_hd_font.h`): the sheet is still found by its hash; the
+  fitted coverage replaces it, the two rectangles keep the enlargement. The
+  coverage is laid upright or upside down by comparing it with the sheet;
+  `[HDFONT] fitted font, ...` logs which. `RESOT_HD_FONT=sheet` keeps only
+  the enlargement, `RESOT_HD_FONT=0` the original sheet.
+
+Checks: `recomp.ps1 -BuildOnly` for both targets and `build-android.ps1`
+pass (logs/hdfont2-*-build.txt): sot-xbox-demo.exe 42,057,216 bytes,
+sot-xbox-retail.exe 50,466,816, reSOT-android.apk 29,729,297. Not checked:
+the game at run time (the orientation line, the text on screen), on either
+host.
+
+## 2026-10-28 (late, 2): demo menu logo semi-transparent, and on Android
+
+User report: the E3 logo over the demo's menu was opaque (the game drew it
+semi-transparent in its corner), and on Android it showed only with the 1440
+resolution setting; on Windows it was always there.
+
+- Android: `ng_compose` copies the frame as it is and returns when it is no
+  larger than the display (`[POWER] exact frame snapshot`); the logo was drawn
+  only on the other path, so only a frame larger than the screen (1440 on the
+  user's phone) showed it. The logo is now drawn on that snapshot too
+  (`ng_e3_logo`, nv2a_hw_native.inc).
+- Transparency: the logo is drawn with the sheet's own alpha times
+  `RESOT_E3_LOGO_ALPHA` (default 0.5). The value the game used in its own
+  draw was not read; 0.5 is a choice. `[LOGO] E3 logo drawn over the menu:
+  sheet alpha A..B, x K` logs the sheet's alpha range once.
+
+Checks: `recomp.ps1 -BuildOnly` for both targets and `build-android.ps1`
+pass (logs/logo-alpha-*-build.txt). Not checked: the logo on screen on
+Windows or Android, and the logged alpha range.
+
 ## 2026-10-28 (late): demo menu title and E3 logo, final 0.4.0 builds
 
 User request, from a screenshot of the E3 build's menu: "E3 Demo" as the

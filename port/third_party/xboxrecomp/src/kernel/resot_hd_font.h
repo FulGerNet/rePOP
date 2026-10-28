@@ -1,4 +1,4 @@
-/* RE-SoT: an HD menu font, made on the host from the title's own sheet.
+/* RE-SoT: an HD menu font for the title's own sheet.
  *
  * Both executables draw their menu text from one 512x128 sheet (texture
  * 0x0B0041BB, letters in FONTDESC 0x0B0041BC; the demo stores it with 4-bit
@@ -8,18 +8,30 @@
  * layout can take its place on the host.
  *
  * The sheet is recognised by the FNV-1a hash of its decoded pixels and
- * enlarged RESOT_HD_FONT_SCALE times: Catmull-Rom on premultiplied colour,
- * then the coverage's edge tightened around its middle (smoothstep), so the
- * letters keep their place and shape with sharp edges. Every letter stays in
- * its box of the FONTDESC. An earlier version used the user's own drawing,
- * whose different margins cut some letters. No pixel of the game is kept in
- * the source. RESOT_HD_FONT=0 turns it off. */
+ * replaced by an image RESOT_HD_FONT_SCALE times larger, white:
+ * - the coverage in port/game/resot_hd_font_<target>.h: the Atlantis MF face
+ *   the sheet was drawn from (and the user's HD drawing where the face
+ *   differs), fitted glyph by glyph onto the sheet by tools/hd-font.py, so
+ *   every letter keeps its box of the FONTDESC;
+ * - in the few rectangles neither matched, the sheet itself enlarged:
+ *   Catmull-Rom on premultiplied colour, then the coverage's edge tightened
+ *   around its middle (smoothstep).
+ * The header is upright; the sheet is matched upright or upside down,
+ * whichever its coverage fits. No pixel of the game is kept in the source.
+ * RESOT_HD_FONT=0 turns it off; RESOT_HD_FONT=sheet keeps only the
+ * enlargement. */
 #ifndef RESOT_HD_FONT_INCLUDED
 #define RESOT_HD_FONT_INCLUDED
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#if RESOT_RUNTIME_DEMO
+#include "../../../../game/resot_hd_font_xbox_demo.h"
+#elif RESOT_RUNTIME_RETAIL
+#include "../../../../game/resot_hd_font_xbox_retail.h"
+#endif
 
 #define RESOT_HD_SHEET_W    512u
 #define RESOT_HD_SHEET_H    128u
@@ -69,7 +81,7 @@ static float resot_hd_cubic(float a, float b, float c, float d, float t)
 }
 
 /* The sheet enlarged RESOT_HD_FONT_SCALE times, 0xAARRGGBB; the caller frees it. */
-static uint32_t *resot_hd_font_pixels(const uint32_t *px)
+static uint32_t *resot_hd_font_enlarged(const uint32_t *px)
 {
     const uint32_t sw = RESOT_HD_SHEET_W, sh = RESOT_HD_SHEET_H;
     const uint32_t ow = RESOT_HD_FONT_W, oh = RESOT_HD_FONT_H;
@@ -130,6 +142,83 @@ static uint32_t *resot_hd_font_pixels(const uint32_t *px)
         }
     }
     free(pm);
+    return out;
+}
+#ifdef RESOT_HD_FONT_DATA_W
+/* The fitted coverage, upright, decoded once; NULL if the header is broken. */
+static uint8_t *resot_hd_font_coverage(void)
+{
+    static uint8_t *cov;
+    static int tried;
+    size_t at = 0, i, n = (size_t)RESOT_HD_FONT_DATA_W * RESOT_HD_FONT_DATA_H;
+    if (tried) return cov;
+    tried = 1;
+    if (RESOT_HD_FONT_DATA_W != RESOT_HD_FONT_W || RESOT_HD_FONT_DATA_H != RESOT_HD_FONT_H) return NULL;
+    cov = (uint8_t *)malloc(n);
+    if (!cov) return NULL;
+    for (i = 0; i + 1 < sizeof s_resot_hd_font_rle; i += 2) {
+        size_t run = (size_t)s_resot_hd_font_rle[i + 1] + 1;
+        if (at + run > n) break;
+        memset(cov + at, s_resot_hd_font_rle[i], run);
+        at += run;
+    }
+    if (at != n) { free(cov); cov = NULL; }
+    return cov;
+}
+#endif
+
+/* The HD font for the sheet px (0xAARRGGBB, guest order), white; the
+ * caller frees it. */
+static uint32_t *resot_hd_font_pixels(const uint32_t *px)
+{
+    const uint32_t ow = RESOT_HD_FONT_W, oh = RESOT_HD_FONT_H, k = RESOT_HD_FONT_SCALE;
+    uint32_t *out = resot_hd_font_enlarged(px);
+#ifdef RESOT_HD_FONT_DATA_W
+    const uint8_t *cov;
+    const char *e = getenv("RESOT_HD_FONT");
+    uint32_t x, y, r, flip;
+    uint64_t err[2] = {0, 0};
+    if (!out || (e && strcmp(e, "sheet") == 0) || !(cov = resot_hd_font_coverage()))
+        return out;
+    /* Orientation: the coverage, box-averaged to the sheet's size, against
+     * the sheet's alpha, upright (0) and upside down (1). */
+    for (y = 0; y < RESOT_HD_SHEET_H; y++) for (x = 0; x < RESOT_HD_SHEET_W; x++) {
+        uint32_t sum = 0, i, j;
+        int a, b;
+        for (j = 0; j < k; j++) for (i = 0; i < k; i++)
+            sum += cov[(size_t)(y*k + j)*ow + x*k + i];
+        a = (int)(sum / (k*k));
+        b = (int)(px[(size_t)y*RESOT_HD_SHEET_W + x] >> 24);
+        err[0] += (uint64_t)abs(a - b);
+        b = (int)(px[(size_t)(RESOT_HD_SHEET_H - 1 - y)*RESOT_HD_SHEET_W + x] >> 24);
+        err[1] += (uint64_t)abs(a - b);
+    }
+    flip = err[1] < err[0];
+    {
+        static unsigned told;
+        if (told++ < 2)
+            fprintf(stderr, "[HDFONT] fitted font, %s (difference %.1f vs %.1f per pixel), "
+                    "%u rectangles from the sheet\n", flip ? "upside down" : "upright",
+                    (double)err[flip] / (RESOT_HD_SHEET_W*RESOT_HD_SHEET_H),
+                    (double)err[!flip] / (RESOT_HD_SHEET_W*RESOT_HD_SHEET_H), RESOT_HD_FONT_RUNTIME_N);
+    }
+    for (y = 0; y < oh; y++) {
+        const uint8_t *row = cov + (size_t)(flip ? oh - 1 - y : y) * ow;
+        uint32_t sy = (flip ? oh - 1 - y : y) / k;        /* upright sheet row */
+        for (x = 0; x < ow; x++) {
+            uint32_t a = row[x], sx = x / k, keep = 0;
+            for (r = 0; r < RESOT_HD_FONT_RUNTIME_N; r++) {
+                const unsigned short *b = s_resot_hd_font_runtime[r];
+                if (sx >= b[0] && sx < b[2] && sy >= b[1] && sy < b[3]) { keep = 1; break; }
+            }
+            if (keep) {                                   /* the enlarged sheet, or ours */
+                uint32_t old = out[(size_t)y*ow + x] >> 24;
+                if (old > a) a = old;
+            }
+            out[(size_t)y*ow + x] = a << 24 | 0x00FFFFFFu;
+        }
+    }
+#endif
     return out;
 }
 #endif

@@ -96,6 +96,9 @@ DXVK and D3D11On12 are no longer used by the renderer or included by packaging.
 licence has not been checked here. The build embeds it only when the file is
 present and falls back to Palatino Linotype without it. Check its terms before
 publishing it or an executable that embeds it.
+`port/game/resot_hd_font_<target>.h` (made by `tools/hd-font.py`) holds the
+coverage of letters rendered from this face, and of the user's HD drawings
+of the menu font, compiled into both executables: the same check applies.
 
 **Not covered by any grant here:**
 

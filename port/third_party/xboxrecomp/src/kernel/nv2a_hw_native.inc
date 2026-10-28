@@ -2060,6 +2060,42 @@ static void ng_clear(uint32_t param)
     }
     s_gpu.clears++;
 }
+#if RESOT_RUNTIME_DEMO
+/* RE-SoT: the E3 build's menu showed the "Prince of Persia / The Sands of
+ * Time" logo at the top left (user's screenshot); this demo's menu does
+ * not draw it. While a menu is up (resot_menu_scene 1, main or pause), the
+ * game's own logo texture, kept by ng_texture, is drawn over the picture
+ * (px, py, pw, ph in s_ng.composed), in the 4:3 frame: x 9..57 %, from
+ * 8.5 % down. Full opacity by the user's choice: the sheet's alpha times
+ * RESOT_E3_LOGO_ALPHA (0..1, default 1). */
+static void ng_e3_logo(float px, float py, float pw, float ph)
+{
+    extern int resot_menu_scene(void);
+    float mw = ph*(4.0f/3.0f), mx = px+(pw-mw)*0.5f;
+    SDL_GPUViewport lv;
+    if (!s_e3_logo_ready || resot_menu_scene() != 1) return;
+    if (!s_ng.e3logo) {
+        const char *env = getenv("RESOT_E3_LOGO_ALPHA");
+        float k = env ? (float)atof(env) : 1.0f;
+        uint32_t i, amin = 255, amax = 0;
+        if (k < 0) k = 0; if (k > 1) k = 1;
+        for (i = 0; i < 256*64; i++) {
+            uint32_t a = s_e3_logo[i] >> 24;
+            if (a < amin) amin = a; if (a > amax) amax = a;
+            s_e3_logo[i] = (s_e3_logo[i] & 0x00FFFFFFu) | ((uint32_t)(a*k + 0.5f) << 24);
+        }
+        s_ng.e3logo = ng_image(256,64,0,1,SDL_GPU_TEXTUREUSAGE_SAMPLER,
+                               SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+        ng_upload(s_ng.e3logo, s_e3_logo, 256, 64, 1, 0);
+        fprintf(stderr, "[LOGO] E3 logo drawn over the menu: sheet alpha %u..%u, x %.2f\n",
+                amin, amax, k);
+    }
+    lv.x = mx + 0.09f*mw; lv.y = py + 0.085f*ph;
+    lv.w = 0.48f*mw; lv.h = lv.w * 64.0f/256.0f;
+    lv.min_depth = 0; lv.max_depth = 1;
+    ng_blit(s_ng.composed,SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,s_ng.e3logo,&lv,NULL,3,15,NULL,0);
+}
+#endif
 static void ng_compose(void)
 {
     ng_flush_draws(); /* RE-SoT: snapshot the completed guest surface. */
@@ -2109,6 +2145,12 @@ static void ng_compose(void)
             if(!copy) ng_fail("frame snapshot");
             SDL_CopyGPUTextureToTexture(copy,&from,&to,fw,fh,1,true);
             SDL_EndGPUCopyPass(copy);
+#if RESOT_RUNTIME_DEMO
+            /* RE-SoT: the menu logo goes on the snapshot too; it showed only
+             * when this path was skipped (frame larger than the display, the
+             * 1440 setting on the user's phone). */
+            ng_e3_logo(0, 0, (float)fw, (float)fh);
+#endif
             s_ng.movie_log=0; s_ng.movie_composes=0;
             s_hw.pending_present=1;
             return;
@@ -2137,28 +2179,7 @@ static void ng_compose(void)
     if (s_ng.front)
         ng_blit(s_ng.composed, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, s_ng.front->color, &vp, NULL, 1, 15, NULL, 1);
 #if RESOT_RUNTIME_DEMO
-    /* RE-SoT: the E3 build's menu showed the "Prince of Persia / The Sands of
-     * Time" logo at the top left (user's screenshot); this demo's menu does
-     * not draw it. While a menu is up (resot_menu_scene 1, main or pause),
-     * the game's own logo texture, kept by ng_texture, is drawn there over
-     * the picture, in the 4:3 frame: x 9..57 %, from 8.5 % down. */
-    {
-        extern int resot_menu_scene(void);
-        if (s_e3_logo_ready && s_ng.front && resot_menu_scene() == 1) {
-            float mw = ph*(4.0f/3.0f), mx = px+(pw-mw)*0.5f;
-            SDL_GPUViewport lv;
-            if (!s_ng.e3logo) {
-                s_ng.e3logo = ng_image(256,64,0,1,SDL_GPU_TEXTUREUSAGE_SAMPLER,
-                                       SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
-                ng_upload(s_ng.e3logo, s_e3_logo, 256, 64, 1, 0);
-                fprintf(stderr, "[LOGO] E3 logo drawn over the menu\n");
-            }
-            lv.x = mx + 0.09f*mw; lv.y = py + 0.085f*ph;
-            lv.w = 0.48f*mw; lv.h = lv.w * 64.0f/256.0f;
-            lv.min_depth = 0; lv.max_depth = 1;
-            ng_blit(s_ng.composed,SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,s_ng.e3logo,&lv,NULL,3,15,NULL,0);
-        }
-    }
+    if (s_ng.front) ng_e3_logo(px, py, pw, ph); /* RE-SoT */
 #endif
     if (xbox_FramebufferOverlayGet(&pixels, &w, &h, rect, &serial) && w && h) {
         /* RE-SoT: movies often issue no FLIP_STALL; guest FPS cannot measure

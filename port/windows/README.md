@@ -1,8 +1,8 @@
 # reSOT on Windows
 
 Version 0.4.0 adds Special Load Map and Cheats (in reSOT Options), the
-F7 Game behavior section and an HD menu font made from the game's own sheet (Direct3D 12 and Vulkan
-renderers; `RESOT_HD_FONT=0` keeps the original sheet). Version 0.3.4 stops a rejected graphics pipeline from closing the game (Mali
+F7 Game behavior section and an HD menu font fitted onto the game's own sheet from the Atlantis MF face (Direct3D 12 and Vulkan
+renderers; `RESOT_HD_FONT=0` keeps the original sheet, `RESOT_HD_FONT=sheet` only enlarges it). Version 0.3.4 stops a rejected graphics pipeline from closing the game (Mali
 reports), releases a stuck D3D wait and brings the definitive logo and the
 animated Prince of Persia title to the launcher. Version 0.3.3 ran the game and the GPU executor in parallel on retail, fixes
 a retail mid-game freeze, reduces audio crackle and brings the new animated
