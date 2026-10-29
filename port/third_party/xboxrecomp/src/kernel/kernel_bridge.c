@@ -4277,6 +4277,23 @@ static void bridge_ObReferenceObjectByHandle(void)
             AcquireSRWLockExclusive(&s_thread_obj_lock);
             for (i = 0; i < THREAD_OBJ_MAX && s_thread_objs[i].token; i++)
                 if (s_thread_objs[i].token == handle) break;
+            /* RE-SoT: slots were never given back. Every retail loading
+             * screen runs a new 0x000CA320 thread; after 63 of them (user run
+             * 2026-10-29, about 30 Special Load Maps and returns to the menu)
+             * the table was full, the object null, and the wait at 0x000CA420
+             * read STILL_ACTIVE for ever: the loading screen stayed. A slot
+             * whose handle the title has closed is taken first, else one in
+             * turn; the block is rewritten on every reference anyway, and
+             * XAPI drops its reference right after reading it. */
+#if RESOT_RUNTIME_RETAIL
+            if (i == THREAD_OBJ_MAX) {
+                static int next;
+                for (i = 0; i < THREAD_OBJ_MAX; i++)
+                    if (!bridge_resolve_handle(s_thread_objs[i].token)) break;
+                if (i == THREAD_OBJ_MAX) i = next++ % THREAD_OBJ_MAX;
+                s_thread_objs[i].token = handle;
+            }
+#endif
             if (i < THREAD_OBJ_MAX) {
                 if (!s_thread_objs[i].token) {
                     uint32_t va = xbox_HeapAlloc(0x140, 16);

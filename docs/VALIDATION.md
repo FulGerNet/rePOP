@@ -65,6 +65,20 @@ left untranslated in the retail gen. The halo visibility code (0x000CE2C0)
 keeps its last ratio while a result is pending. Builds pass
 (logs/stall-*-build.txt); not run.
 
+Loading-screen hang found (same log): every retail loading screen runs a new
+thread at 0x000CA320 (75 threads, 63 of them that one). The menu's
+0x000CA420 stops it and polls GetExitCodeThread (0x00331D1E) every 20 ms
+until it is not STILL_ACTIVE; that reads the ETHREAD the bridge's
+ObReferenceObjectByHandle builds from a 64-slot table that never gave a
+slot back. At the 63rd loading thread the table was full, the object null,
+and the poll read STILL_ACTIVE for ever: the thread had ended
+(PsTerminateSystemThread logged) but `video overlay off`, which follows in
+the 30 earlier returns, never came. Retail fix (`kernel_bridge.c`, RE-SoT):
+a full table reuses a slot whose handle the title closed, else one in turn.
+The demo keeps the 64-slot table (not checked against its XBE). Builds pass
+(logs/threadobj-*-build.txt): sot-xbox-retail.exe 50,470,912 bytes,
+sot-xbox-demo.exe 42,059,264, reSOT-android.apk 29,734,997. Not run.
+
 ## 2026-10-28 (night, 2): HD menu font from the Atlantis face, logo opaque
 
 User requests: the menu logo back to full opacity; menu text of higher
