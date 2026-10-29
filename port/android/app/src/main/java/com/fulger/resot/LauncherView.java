@@ -648,6 +648,7 @@ final class LauncherView extends View {
         plateFill(canvas, vx, 20, 108, 28, 7, 0xFAE8B0, 0xB0843E, 1);
         plateEdge(canvas, vx, 20, 108, 28, 7, focus == BTN_LOGS || hover == BTN_LOGS ? 2 : 1, 0xFFF0C4, 1);
         caps(canvas, versionLabel, vx + 54, 34, sansBold, 13, 1, 0xFF161E32);
+        drawLogsTip(canvas);
 
         if (state.extracting) {
             float f = state.total > 0 ? Math.min(1f, (float) ((double) state.done / state.total)) : 0;
@@ -695,10 +696,44 @@ final class LauncherView extends View {
         postInvalidateOnAnimation();
     }
 
+    // ── the logs tip: a bubble beside the version plate, shown once a launch ──
+
+    private static final String LOGS_TIP = "The game crashed? Tap here for logs!";
+    private static final float TIP_IN = 1.5f, TIP_HOLD = 8, TIP_FADE = 0.6f;   // seconds
+    private final RectF tip = new RectF();
+
+    /** 0..1: how much of the tip shows now. */
+    private float tipAlpha() {
+        float t = time - TIP_IN;
+        if (t <= 0 || t >= TIP_HOLD + 2 * TIP_FADE) return 0;
+        return Math.min(1, Math.min(t, TIP_HOLD + 2 * TIP_FADE - t) / TIP_FADE);
+    }
+
+    private void drawLogsTip(Canvas c) {
+        float a = tipAlpha();
+        if (a <= 0) { tip.setEmpty(); return; }
+        RectF plate = buttons[BTN_LOGS];
+        paint.setTypeface(sans); paint.setTextSize(13); paint.setLetterSpacing(0);
+        float w = paint.measureText(LOGS_TIP) + 28, x = plate.right + 14 - 6 * (1 - a), y = plate.top;
+        tip.set(x, y, x + w, plate.bottom);
+        paint.setStyle(Paint.Style.FILL); paint.setShader(null);
+        paint.setColor(argb(0x0C1A32, 0.92f * a));
+        c.drawRoundRect(tip, 8, 8, paint);
+        android.graphics.Path arrow = new android.graphics.Path();   // the tail, towards the plate
+        arrow.moveTo(x + 1, tip.centerY() - 6); arrow.lineTo(x - 7, tip.centerY()); arrow.lineTo(x + 1, tip.centerY() + 6);
+        arrow.close();
+        c.drawPath(arrow, paint);
+        paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1);
+        paint.setColor(argb(GOLD, 0.9f * a));
+        c.drawRoundRect(tip, 8, 8, paint);
+        text(c, LOGS_TIP, x + 14, tip.centerY(), w - 28, sans, 13, argb(GOLD_LIGHT, a), Paint.Align.LEFT);
+    }
+
     // ── input: touch, and a controller or keyboard moving the focus ──
 
     private int hit(float px, float py) {
         float x = px / scale, y = py / scale;
+        if (tipAlpha() > 0.3f && tip.contains(x, y)) return BTN_LOGS;
         for (int i = 0; i < BTN_COUNT; i++) {
             RectF r = buttons[i];
             if (visible(i) && enabled[i] && x >= r.left - 8 && x < r.right + 8 && y >= r.top - 8 && y < r.bottom + 8)

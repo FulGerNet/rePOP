@@ -10,7 +10,7 @@
 
 **Prince of Persia: The Sands of Time, recompiled from Xbox to native Windows and Android.**
 
-**Current version: v0.4.0.** reSOT is an advanced, playable recompilation and
+**Current version: v0.4.1.** reSOT is an advanced, playable recompilation and
 port of the original Xbox retail game and E3 2003 demo. Both games now run
 well on Windows and Android in the configurations tested by the user, with
 working gameplay, menus, movies, audio and controller support. The project
@@ -148,10 +148,13 @@ The release also retains the v0.3.0 features below.
   HUD clearance, repaired log-source selection, and retained the shared
   graphics, input and diagnostic options.
 
+Version 0.4.1 fixes retail flicker, black scenes and GPU-thread crashes,
+Special Load Map crashes and a loading-screen hang after many loads, and
+adds a logs tip to the Android launcher ([release notes](docs/releases/v0.4.1.md)).
 Version 0.4.0 adds Special Load Map, the built-in cheats switch, the F7
 Game behavior section and an HD menu font for both games (see the status
 table and [the release notes](docs/releases/v0.4.0.md)). Both Windows targets and the
-Android release APK build as **0.4.0**; Android uses **versionCode 10**.
+Android release APK build as **0.4.1**; Android uses **versionCode 11**.
 Of 0.3.4: Shader compilation, pointer, touch and GPU
 regressions passed in the recorded release checks. The user confirms the
 extended health-bar alignment, popup/save-carousel touch changes and launcher

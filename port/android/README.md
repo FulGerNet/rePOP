@@ -6,14 +6,17 @@ drivers reject at the first pipeline (closing the game after Start Game,
 GitHub #8, #9). Not yet confirmed on a Mali device. The Windows Vulkan
 renderer uses the same shaders, so `port/windows` needs no separate change.
 
-Version 0.4.0 adds Special Load Map and Cheats (in reSOT Options, as on
+Version 0.4.1 carries the retail rendering, crash and loading-hang fixes
+(as on Windows) and a tip beside the launcher's version plate: "The game
+crashed? Tap here for logs!" appears after 1.5 s, stays 8 s and fades; it
+opens the same log sharing as the plate. Version 0.4.0 adds Special Load Map and Cheats (in reSOT Options, as on
 Windows) and the same HD menu font. Version 0.3.4 stops a rejected graphics pipeline from closing the game (Mali
 reports), releases a stuck D3D wait and brings the definitive logo and the
 animated Prince of Persia title to the launcher. Version 0.3.3 ran the game and the GPU executor in parallel on retail, fixes
 a retail mid-game freeze, reduces audio crackle and brings the new animated
 logo. Version 0.3.2 added Reduced/Standard/Full graphics presets and a background
 stable-release check with optional Update / Close buttons styled like the
-launcher. The displayed version is 0.4.0. Offline/rate-limit errors are ignored.
+launcher. The displayed version is 0.4.1. Offline/rate-limit errors are ignored.
 No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
 request and reSOT version in its User-Agent. Update opens the official release
 page, without downloading/installing an executable automatically.

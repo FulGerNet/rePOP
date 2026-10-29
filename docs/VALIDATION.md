@@ -1,5 +1,17 @@
 # Validation log
 
+## 2026-10-29 (later): v0.4.1
+
+Version 0.4.1 (versionCode 11): `resot_version.h`, `build.gradle`, READMEs,
+release notes `docs/releases/v0.4.1.md`. Android launcher: a bubble beside
+the version plate, "The game crashed? Tap here for logs!", shows from 1.5 s
+for 8 s with 0.6 s fades and opens the log sharing as the plate does
+(`LauncherView.drawLogsTip`); not on Windows, whose plate is no button.
+Checks: `recomp.ps1 -BuildOnly` both targets and `build-android.ps1` pass
+(logs/v041-*-build.txt): sot-xbox-retail.exe 50,470,912 bytes (file version
+0.4.1), sot-xbox-demo.exe 42,059,264, reSOT-android.apk 29,735,965. Not
+checked: the bubble on a phone screen.
+
 ## 2026-10-29: retail flicker, black scenes, GPU-thread faults, Special Load Map
 
 User reports: in some retail maps (the dagger area among them) objects,
