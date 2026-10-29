@@ -495,6 +495,7 @@ Diagnostics added by the host (`port/windows/src/main.c`), all off unless set:
 | Variable | Effect |
 | --- | --- |
 | `RESOT_THREAD_DUMP_SECS=n` | every n seconds, the host call chain of every thread; lifted routines appear as `sub_XXXXXXXX`, so a deadlock shows both sides |
+| `RESOT_STALL_DUMP=0` | Windows: turns off the one thread dump written when the title has made no KickOff for 20 s (`[THREADS] no KickOff for 20 s`); on by default |
 | `RESOT_PROFILE_MS=n` | samples the two busiest threads every n ms and reports, every 10 s, the routines the samples fell in |
 | `RESOT_TRACE_ICALLS=va,...` | logs each call that reaches those routines through a pointer, with `ecx`, the first arguments and the returned `eax` |
 | `RECOMP_SYNC_TRACE=1` | mutex, event, thread-resume and unbounded-wait calls with thread id and guest caller |

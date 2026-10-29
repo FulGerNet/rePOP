@@ -3241,6 +3241,20 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
         uint32_t at = dma_resolve(param & 0x00FFFFFFu);
         uint64_t stamp = (uint64_t)s_gpu.reports++ * 1000u;
 #if RESOT_RUNTIME_RETAIL
+        /* RE-SoT: a report slot is 16 aligned bytes of RAM. Android retail
+         * logs (2026-10-28, OnePlus SM8650) faulted BUS_ADRALN completing a
+         * report at 0x806DC793, after the stream had been misread ([PB] walk
+         * left physical memory): 16 bytes written there corrupt guest data
+         * and the atomic store faults on AArch64. Such a word is dropped. */
+        if ((at & 3u) || !((at >= 0x00010000u && at <= 0x04000000u - 16u) ||
+                           (at >= XBOX_CONTIG_BASE && at <= XBOX_CONTIG_BASE + XBOX_CONTIG_SIZE - 16u))) {
+            static unsigned told;
+            if (told++ < 8)
+                fprintf(stderr, "  [GPU] GET_REPORT %08X -> %08X is not a report slot: dropped\n",
+                        param, at);
+            s_gpu.reports--;
+            break;
+        }
         /* RE-SoT: preserve the guest's pending marker until the D3D11 query
          * completes; unlike software, host GPU draws execute asynchronously. */
         if (hw_active()) { hw_visibility_method(method, at, stamp); break; }

@@ -191,7 +191,7 @@ every level, device or exact console accuracy.
 | Native Direct3D 11 renderer | 🟢 Windows default | 🟢 Windows default |
 | Native Direct3D 12 renderer | 🟡 Optional Windows backend; startup and GPU tests pass | 🟡 Optional Windows backend; broader gameplay checks pending |
 | Widescreen Hor+ and HUD layout | 🟢 Widened view with preserved HUD proportions; artwork edges remain limited | 🟢 Widened view; ultrawide sand-tank alignment confirmed; some dialog layout limits remain |
-| Asynchronous KickOff (title and GPU executor in parallel) | ⚪ Off: tried in v0.3.4, the first level drew almost black; kept synchronous | 🟡 On by default; Windows scripted run +20-35% FPS, first level renders; Android gameplay not yet measured |
+| Asynchronous KickOff (title and GPU executor in parallel) | ⚪ Off: tried in v0.3.4, the first level drew almost black; kept synchronous | 🟡 On by default, now 1 submission ahead (was 16): the 0.4.0 logs showed the misread-stream signature behind flicker, black scenes and faults; not yet run with the change (`RESOT_KICK_AHEAD=16` restores the old depth) |
 | Mid-game freeze with audio still playing (BlockOnFence NOTIFY) | 🟡 Same D3D path (device+0x1DBC) handled in v0.3.4; a level-entry stall it caused while testing is gone | 🟡 Cause identified in the 2026-10-25 Android log and handled; v0.3.4 also releases the wait once the executor has caught up; not yet replayed at the freezing places |
 | Audio crackle from output-queue resets | 🟡 Drift-controlled output queue on both hosts; listening check pending | 🟡 Windows run: 0 drops and 0 underruns; listening check pending |
 

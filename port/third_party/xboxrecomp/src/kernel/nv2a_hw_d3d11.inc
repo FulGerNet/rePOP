@@ -1442,6 +1442,15 @@ static int hw_mem_ok(uint32_t va, uint32_t bytes)
     return 0;
 }
 
+/* RE-SoT: the palette is read by hw_tex_hash and the decoders whenever it is
+ * set, and nothing bounded it. Android retail (2026-10-28, SM8650) faulted
+ * SEGV_ACCERR in hw_tex_hash from ng_texture after a misread stream: the
+ * address was outside guest RAM. 256 entries of 4 bytes, the most it names. */
+static int hw_palette_ok(const Texture *t)
+{
+    return !t->palette || hw_mem_ok(t->palette, 256u * 4u);
+}
+
 /* RE-SoT: retain sample_tex as the format fallback and scalar reference.
  * Demo's demo-hud-after-err.txt independently records P8 (0x0B) textures,
  * also covered by the bulk/scalar Morton comparison for rectangular sizes.
@@ -1521,7 +1530,8 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
             return best == target ? NULL : best->srv;
         }
     }
-    if (!hw_mem_ok(t->offset, t->cube ? 6 * tex_face_stride(t) : hw_tex_bytes(t)))
+    if (!hw_mem_ok(t->offset, t->cube ? 6 * tex_face_stride(t) : hw_tex_bytes(t))
+            || !hw_palette_ok(t))
         return NULL;
 
     slot = (t->offset >> 6) * 2654435761u >> 22;      /* 10 bits */

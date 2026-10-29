@@ -1,5 +1,70 @@
 # Validation log
 
+## 2026-10-29: retail flicker, black scenes, GPU-thread faults, Special Load Map
+
+User reports: in some retail maps (the dagger area among them) objects,
+shadows and textures flicker, then the scene goes black or plays without
+textures until the app restarts, or the game faults; some Special Load Map
+loads fault on Windows. Read: Android archives `resot-logs-20261028-234320`
+(OnePlus SM8650) and `New Folder` (Xiaomi SM8635), Windows `bin/logs`.
+
+Seen in the logs:
+- Both Android faults are on the executor thread (`resot-1002`). Symbolised
+  against the local build (same layout, offset +0x40BD0 for every frame):
+  SIGBUS BUS_ADRALN in `hw_visibility_complete` (InterlockedExchange on
+  report address 0x806DC793, from GET_REPORT) and SIGSEGV SEGV_ACCERR in
+  `hw_tex_hash` from `ng_texture` (an address outside guest RAM).
+- Every retail log, Windows and Android, has `[PB] walk left physical
+  memory ... after word 3F800000` (and other float words) in the ring and in
+  CALLs: vertex data decoded as commands, the signature the demo had with 4
+  or 16 submissions of asynchronous KickOff (2026-10-26, drew almost black).
+- Android: the executor is busy 9.5-9.9 s of every 10 s.
+- Windows: after Special Load Map 2601 Bridge and then 3101 Tower the
+  Prince's sector stayed 7489C160; loading 5102 next faulted in
+  sub_000DEB70+0x77 with ebx = 7489C160.
+
+Changes (RE-SoT, retail unless stated):
+- `xbox_memory_layout.c`: `RESOT_KICK_AHEAD` default 1 for retail (was 16).
+- `nv2a_pb_exec.c`: GET_REPORT to an unaligned address or one outside RAM
+  is dropped and logged (`[GPU] GET_REPORT ... is not a report slot`).
+- `nv2a_hw_d3d11.inc` / `nv2a_hw_native.inc` (both targets): a texture whose
+  palette is outside guest RAM is not sampled (`hw_palette_ok`).
+- `nv2a_hw_native.inc`: a render target sampled as a texture is retired when
+  the guest RAM it covers changed since the GPU last drew it (fingerprint as
+  `hw_tex_hash`, once a frame); before, any texture at an old target's
+  address showed the old host image for as long as the target stayed among
+  the 32. Logged: `[HW native] render target ... rewritten by the CPU`.
+- `resot_cheats.h`: 120 polls after a Special Load Map, a Prince's sector
+  equal to the one before the load is replaced by the checkpoint GAO's
+  [GAO +0x24] (through the LOA table) when that is a readable sector; logged
+  `[MAP] Prince's sector ... was the one before the load`. Whether +0x24 of
+  a checkpoint GAO is its sector was not checked in the XBE.
+
+Checks: `recomp.ps1 -BuildOnly` both targets and `build-android.ps1` pass
+(logs/fix041-*-build.txt): sot-xbox-retail.exe 50,469,376 bytes,
+sot-xbox-demo.exe 42,057,216, reSOT-android.apk 29,734,177. Not run: any of
+it in game, on either host; the frame rate with one submission ahead; the
+demo (only the palette bound reaches it).
+
+Follow-up, same day (user run, Windows D3D12, bin/logs 08:43-08:53): every
+Special Load Map loaded without a fault (31 loads). `[PB] walk left` no
+longer appears; no `render target ... rewritten` or `GET_REPORT` line. Three
+loads left the Prince on the sector the checkpoint GAO also names (the
+repair logged none). Back to the menu from 8101 Bridge Support the loading
+screen stayed: the loader thread ended, then 0 KickOffs for over a minute
+while kernel calls went on; the log does not say what the title waited for.
+Added (Windows host, `main.c`): one call-chain dump of every thread after
+20 s without a KickOff (`xbox_Nv2aKickTotal`, `RESOT_STALL_DUMP=0` off).
+Still reported, causes not found: pink/green surfaces for about a second on
+entering a level, objects flickering between black and visible during the
+opening camera, some vertices (the Prince's too) out of place for half a
+second (since the start of the project). Checked and consistent across the
+CPU interpreter, reference HLSL and translated GLSL: ARL (floor(x+0.001)),
+relative constant reads (out of range read c[0]); no x87/SSE instruction is
+left untranslated in the retail gen. The halo visibility code (0x000CE2C0)
+keeps its last ratio while a result is pending. Builds pass
+(logs/stall-*-build.txt); not run.
+
 ## 2026-10-28 (night, 2): HD menu font from the Atlantis face, logo opaque
 
 User requests: the menu logo back to full opacity; menu text of higher

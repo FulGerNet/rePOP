@@ -40,6 +40,9 @@ _Static_assert(sizeof(HwPsConst)==168*4 && offsetof(HwPsConst,ctl)==96*4 &&
 typedef struct {
     SDL_GPUTexture *color, *depth;
     uint32_t offset, w, h, sc, frame;
+    /* RE-SoT: guest RAM under the target when the GPU last drew it (see
+     * ng_surface_stale); the host image lives only on the host. */
+    uint32_t bytes, ram_hash, ram_frame, ram_checked;
 } NgSurface;
 typedef struct {
     SDL_GPUTexture *image;
@@ -806,6 +809,7 @@ static NgSurface *ng_surface(void)
     if (s_ng.largest == out) s_ng.largest = NULL;
     memset(out, 0, sizeof *out);
     out->offset = off; out->w = w; out->h = h; out->sc = hw_surface_scale(w);
+    out->bytes = s_gpu.pitch * h; /* RE-SoT: footprint for ng_surface_stale */
 
     out->color = ng_image(ng_px(w, out->sc), ng_py(h,out->sc), 0, 1,
         SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
@@ -820,8 +824,55 @@ static NgSurface *ng_surface(void)
     }
     return out;
 }
+#if RESOT_RUNTIME_RETAIL
+/* RE-SoT: a cheap fingerprint of the guest RAM a render target covers, as
+ * hw_tex_hash samples a texture: at most 2048 words. */
+static uint32_t ng_surface_ram_hash(const NgSurface *s)
+{
+    const uint32_t *p = (const uint32_t *)((const uint8_t *)xbox_GetMemoryOffset() + s->offset);
+    uint32_t n = s->bytes / 4, step = n > 2048 ? n / 2048 : 1, i, h = 2166136261u;
+    if (!n || !hw_mem_ok(s->offset, s->bytes)) return 0;
+    for (i = 0; i < n; i += step) h = (h ^ p[i]) * 16777619u;
+    return h;
+}
+/* RE-SoT: a texture at a render target's address is sampled from the host
+ * target, which never reaches guest RAM. That is right only while the CPU has
+ * not written there since the GPU drew it. Retail frees and reuses that
+ * memory when a map is loaded (user reports, 2026-10-28: textures flicker,
+ * then stay missing in the dagger area and after Special Load Map until the
+ * app restarts), and the 32 targets were never retired for that: the new
+ * map's texture at the old target's address showed the old host image.
+ * Last writer wins, at frame granularity: the RAM is fingerprinted the
+ * first time the GPU draws the target in a frame, and compared once a frame
+ * when it is sampled. A changed fingerprint retires the target. */
+static int ng_surface_stale(NgSurface *s)
+{
+    if (s->ram_checked == s_hw.frame + 1) return 0;
+    s->ram_checked = s_hw.frame + 1;
+    if (ng_surface_ram_hash(s) == s->ram_hash) return 0;
+    {
+        static unsigned told;
+        if (told++ < 16)
+            fprintf(stderr, "[HW native] render target %08X %ux%u rewritten by the CPU:"
+                    " sampled from guest RAM\n", s->offset, s->w, s->h);
+    }
+    ng_flush_draws(); /* RE-SoT: queued draws still own this image. */
+    SDL_ReleaseGPUTexture(s_ng.device, s->color);
+    if (s_ng.front == s) s_ng.front = NULL;
+    if (s_ng.largest == s) s_ng.largest = NULL;
+    memset(s, 0, sizeof *s);
+    return 1;
+}
+#endif
 static void ng_mark(NgSurface *s)
 {
+#if RESOT_RUNTIME_RETAIL
+    if (s->ram_frame != s_hw.frame + 1) {
+        s->ram_frame = s_hw.frame + 1;
+        s->ram_hash = ng_surface_ram_hash(s);
+        s->ram_checked = 0;
+    }
+#endif
     s->frame = s_hw.frame;
     if (!s_ng.largest || s->w*s->h >= s_ng.largest->w*s_ng.largest->h) s_ng.largest = s;
 }
@@ -897,11 +948,15 @@ static SDL_GPUTexture *ng_texture(int stage, NgSurface *target)
             (s->w == t->width && best->w != t->width) ||
             ((s->w == t->width) == (best->w == t->width) && s->frame > best->frame))) best = s;
     }
+#if RESOT_RUNTIME_RETAIL
+    if (best && best != target && ng_surface_stale(best)) best = NULL;
+#endif
     if (best) {
         hw_trace_effect_source(stage,best->offset,best->w,best->h,best->frame); /* RE-SoT */
         return best == target ? NULL : best->color;
     }
-    if (!hw_mem_ok(t->offset, t->cube ? 6*tex_face_stride(t) : hw_tex_bytes(t))) return NULL;
+    if (!hw_mem_ok(t->offset, t->cube ? 6*tex_face_stride(t) : hw_tex_bytes(t))
+            || !hw_palette_ok(t)) return NULL; /* RE-SoT: bounded palette, see hw_palette_ok. */
     slot = (t->offset >> 6)*2654435761u >> 22;
     for (i = 0; i < 16; i++) {
         NgTexture *e = &s_ng.textures[(slot+i) & (HW_MAX_TEXTURES-1)];

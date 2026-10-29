@@ -163,19 +163,18 @@ int resot_movie_skip_down(void)
  * stack is read. */
 #include <tlhelp32.h>
 
-static DWORD WINAPI resot_thread_dump_main(LPVOID param)
+static void resot_thread_dump_once(void)
 {
-    DWORD secs = (DWORD)(uintptr_t)param, self = GetCurrentThreadId();
+    DWORD self = GetCurrentThreadId();
     DWORD pid = GetCurrentProcessId();
 
-    for (;;) {
+    {
         HANDLE snap;
         THREADENTRY32 te;
 
-        Sleep(secs * 1000);
         snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
         if (snap == INVALID_HANDLE_VALUE)
-            continue;
+            return;
         fprintf(stderr, "[THREADS] call chains, innermost first\n");
         te.dwSize = sizeof te;
         if (Thread32First(snap, &te)) do {
@@ -232,6 +231,39 @@ static DWORD WINAPI resot_thread_dump_main(LPVOID param)
         } while (Thread32Next(snap, &te));
         CloseHandle(snap);
         fflush(stderr);
+    }
+}
+
+static DWORD WINAPI resot_thread_dump_main(LPVOID param)
+{
+    DWORD secs = (DWORD)(uintptr_t)param;
+    for (;;) {
+        Sleep(secs * 1000);
+        resot_thread_dump_once();
+    }
+}
+
+/* reSOT: one dump when the title has stopped kicking the GPU for 20 s
+ * (user run 2026-10-29: after about 30 Special Load Maps, back to the menu
+ * from 8101 Bridge Support, the loading screen stayed with 0 KickOffs and
+ * the log could not say what the title waited for). Re-armed once it
+ * kicks again; RESOT_STALL_DUMP=0 turns it off. */
+extern long xbox_Nv2aKickTotal(void);
+static DWORD WINAPI resot_stall_watch_main(LPVOID unused)
+{
+    long last = -1;
+    int still = 0, dumped = 0;
+    (void)unused;
+    for (;;) {
+        long now;
+        Sleep(5000);
+        now = xbox_Nv2aKickTotal();
+        if (now != last) { last = now; still = 0; dumped = 0; continue; }
+        if (now > 0 && !dumped && ++still >= 4) {
+            fprintf(stderr, "[THREADS] no KickOff for 20 s (total %ld): call chains follow\n", now);
+            resot_thread_dump_once();
+            dumped = 1;
+        }
     }
 }
 
@@ -408,9 +440,15 @@ static void resot_thread_dump_start(void)
     }
     {
     const char *e = getenv("RESOT_THREAD_DUMP_SECS");
+    const char *stall = getenv("RESOT_STALL_DUMP");
     int secs = e ? atoi(e) : 0;
     HANDLE th;
 
+    if (!(stall && *stall == '0')) {
+        th = CreateThread(NULL, 0, resot_stall_watch_main, NULL, 0, NULL);
+        if (th)
+            CloseHandle(th);
+    }
     if (secs <= 0)
         return;
     th = CreateThread(NULL, 0, resot_thread_dump_main, (LPVOID)(uintptr_t)secs, 0, NULL);

@@ -200,7 +200,15 @@ static int kick_ahead(void)
     static int ahead = -1;
     if (ahead < 0) {
         const char *e = getenv("RESOT_KICK_AHEAD");
-        ahead = e ? atoi(e) : (RESOT_RUNTIME_RETAIL ? 16 : 0);
+        /* RE-SoT: retail default 1, was 16. The 0.4.0 retail logs (Windows
+         * bin/logs 2026-10-28, Android OnePlus SM8650 and Xiaomi SM8635) all
+         * show the demo's 16-ahead symptom: float payloads read as JUMP/CALL
+         * words ([PB] walk left physical memory after 3F800000 and the like),
+         * then garbage texture, palette and report addresses, flicker, black
+         * scenes and faults. The GPU idle/empty bits always read idle, so the
+         * title may reuse what up to 16 queued submissions still name. One
+         * submission ahead is the depth the demo drew correctly with. */
+        ahead = e ? atoi(e) : (RESOT_RUNTIME_RETAIL ? 1 : 0);
         if (ahead < 0) ahead = 0;
         fprintf(stderr, "  [NV2A] KickOff: %s (%d submissions ahead)\n",
                 ahead ? "asynchronous" : "synchronous", ahead);
@@ -225,6 +233,9 @@ static LONGLONG s_kick_freq;
 static volatile LONG s_kick_waits, s_kick_calls;
 static volatile LONGLONG s_kick_wait_ticks, s_kick_wait_max;
 static LONGLONG s_exec_scan_ticks, s_exec_present_ticks, s_exec_segments;
+/* RE-SoT: KickOffs since start, never reset: a host stall watch reads it. */
+static volatile LONG s_kick_total;
+long xbox_Nv2aKickTotal(void) { return (long)s_kick_total; }
 
 static LONGLONG kick_now(void)
 {
@@ -244,6 +255,7 @@ void xbox_Nv2aWaitClear(uint32_t va, uint32_t mask)
     LONGLONG t0 = 0, waited;
     int ahead = kick_ahead();
     InterlockedIncrement(&s_kick_calls);
+    InterlockedIncrement(&s_kick_total);
     if (ahead) {
         LONG old;
         MemoryBarrier();   /* the write-combining flush itself */

@@ -41,12 +41,11 @@ static int resot_cheats_word(uint32_t va, uint32_t *out)
     return resot_guest_read_word(g_xbox_mem_offset, va, out);
 }
 
-/* The guest address of the switch, or 0 while the universe is not loaded. */
-static uint32_t resot_cheats_address(void)
+/* The loaded address of a key in the LOA table, or 0 when it is not loaded. */
+static uint32_t resot_loa_find(uint32_t key)
 {
-    const uint32_t key = RESOT_CHEATS_UNIVERSE_KEY;
     uint32_t bucket = RESOT_CHEATS_LOA_TABLE + (((key >> 8) + key) & 0xFFu) * 16u;
-    uint32_t pairs, count, lo, hi, inst = 0, model, vars, value;
+    uint32_t pairs, count, lo, hi, inst = 0;
     if (!resot_cheats_word(bucket, &pairs) || !resot_cheats_word(bucket + 4, &count) ||
             !pairs || !count || count > 0x100000u)
         return 0;
@@ -61,7 +60,14 @@ static uint32_t resot_cheats_address(void)
         }
         if (key < k) hi = mid; else lo = mid + 1;
     }
-    if (!inst || inst == 0xFFFFFFFFu || !resot_cheats_word(inst, &model) || !model ||
+    return inst == 0xFFFFFFFFu ? 0 : inst;
+}
+
+/* The guest address of the switch, or 0 while the universe is not loaded. */
+static uint32_t resot_cheats_address(void)
+{
+    uint32_t inst = resot_loa_find(RESOT_CHEATS_UNIVERSE_KEY), model, vars, value;
+    if (!inst || !resot_cheats_word(inst, &model) || !model ||
             !resot_cheats_word(inst + 0x44, &vars) || !vars ||
             !resot_cheats_word(vars + RESOT_CHEATS_VAR_OFFSET, &value))
         return 0;
@@ -184,6 +190,7 @@ static int resot_change_map(uint32_t key)
 #define RESOT_MAP_REQUEST_POLLS 45u            /* host values, not XBE constants */
 #define RESOT_MAP_FOLLOW_POLLS  20000u
 static uint32_t s_map_key, s_map_checkpoint, s_map_seen;   /* seen: +0 while playing */
+static uint32_t s_map_sector_before;    /* the Prince's [GAO +0x24] when the load was asked */
 static unsigned s_map_at, s_map_until, s_map_logged;
 static int s_map_state;                 /* 0 idle, 1 waiting, 2 loading, 3 loaded */
 
@@ -232,6 +239,12 @@ static void resot_map_frame(void)
         /* The map merges into MenuBoot's aggregate without a primary merge
          * (bin/logs, 1201): only its own costume must count. */
         resot_scene_costumes_reset();
+        {
+            uint32_t gao = 0;
+            s_map_sector_before = 0;
+            if (resot_cheats_word(RESOT_MAIN_ACTOR, &gao) && gao)
+                resot_cheats_word(gao + 0x24, &s_map_sector_before);
+        }
         fprintf(stderr, "[MAP] poll %u: load of %08X at checkpoint %08X (was +0 %08X, movie"
                         " %08X, map %08X)\n", s_cheats_frames, s_map_key, s_map_checkpoint,
                 v[0], v[RESOT_UNIV_LOAD_MOVIE / 4], v[RESOT_UNIV_CUR_MAP / 4]);
@@ -265,6 +278,27 @@ static void resot_map_frame(void)
         fprintf(stderr, "[MAP] poll %u: +0 %08X in %08X, Prince %08X sector %08X\n",
                 s_cheats_frames, v[0], v[RESOT_UNIV_CURRENT_WORLD / 4], gao, sector);
         s_map_logged = 0;
+        /* reSOT: the sector left from before the load. Windows bin/logs
+         * 2026-10-28: 2601 Bridge and then 3101 Tower both kept 7489C160,
+         * and the next load (5102) faulted in sub_000DEB70+0x77 with ebx =
+         * 7489C160: the freed world's sector. The Prince stands at the
+         * checkpoint GAO, so its sector ([GAO +0x24], through the LOA table
+         * as the title resolves it) is taken when it is a different, sane
+         * one: a readable sector count (+0x484) and list (+0x488). */
+        if (gao && sector && sector == s_map_sector_before && s_map_checkpoint != 0xFFFFFFFFu) {
+            uint32_t cp = resot_loa_find(s_map_checkpoint), cs = 0, n = 0, list = 0, first = 0;
+            if (cp && resot_cheats_word(cp + 0x24, &cs) && cs && cs != sector &&
+                    resot_cheats_word(cs + 0x484, &n) && n && n < 0x10000u &&
+                    resot_cheats_word(cs + 0x488, &list) && resot_cheats_word(list, &first)) {
+                *(volatile uint32_t *)((uintptr_t)g_xbox_mem_offset + gao + 0x24) = cs;
+                fprintf(stderr, "[MAP] Prince's sector %08X was the one before the load:"
+                                " checkpoint %08X (GAO %08X) sector %08X instead\n",
+                        sector, s_map_checkpoint, cp, cs);
+            } else
+                fprintf(stderr, "[MAP] Prince's sector %08X was the one before the load;"
+                                " checkpoint %08X gave none (GAO %08X, sector %08X)\n",
+                        sector, s_map_checkpoint, cp, cs);
+        }
     }
     /* The title's new game going on: its movie or its first map. */
     if (v[RESOT_UNIV_LOAD_MOVIE / 4] == RESOT_UNIV_NEW_GAME_MOVIE ||
