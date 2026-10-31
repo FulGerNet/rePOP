@@ -6,23 +6,9 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
-#define RESOT_PS_SPEC_WORDS 40
-static inline void resot_ps_spec_key(uint32_t key[RESOT_PS_SPEC_WORDS], const void *constants)
-{
-    uint32_t pc[168];
-    memcpy(pc,constants,sizeof pc);
-    memcpy(key,pc,32*sizeof(uint32_t));
-    memcpy(key+32,pc+96,4*sizeof(uint32_t));
-    key[36]=pc[100]; key[37]=pc[101]; key[38]=pc[103]; key[39]=pc[132];
-    /* RE-SoT: stale words past the active stage count cannot affect output;
-     * canonicalize them so they do not compile duplicate pipelines. */
-    {
-        uint32_t stages=key[32]&255;
-        if(stages<8) memset(key+stages*4,0,(8-stages)*4*sizeof(uint32_t));
-    }
-}
+#include "resot_native_combiner.h" /* RE-SoT: the key and its canonical form. */
 static inline uint32_t *resot_ps_specialize(const unsigned char *source, size_t bytes,
-                                         const uint32_t key[RESOT_PS_SPEC_WORDS])
+                                         const uint32_t key[RESOT_PS_KEY_WORDS])
 {
     size_t count=bytes/4, at;
     uint32_t *code, *ids;

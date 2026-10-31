@@ -34,7 +34,8 @@ static bool (SDLCALL *s_ng_cache_save)(SDL_GPUDevice *);
 #include "resot_native_specialize.h" /* RE-SoT: constant Vulkan combiner programs. */
 /* RE-SoT: the specialization key reads only these immutable program words. */
 _Static_assert(sizeof(HwPsConst)==168*4 && offsetof(HwPsConst,ctl)==96*4 &&
-               offsetof(HwPsConst,misc)==132*4,"Native fragment constant ABI changed");
+               offsetof(HwPsConst,tscale)==116*4 && offsetof(HwPsConst,misc)==132*4 &&
+               offsetof(HwPsConst,border_info)==152*4,"Native fragment constant ABI changed");
 
 typedef struct {
     SDL_GPUTexture *color, *depth;
@@ -67,7 +68,7 @@ typedef struct NgTranslatedVertex {
 } NgTranslatedVertex;
 typedef struct NgTranslatedFragment {
     struct NgTranslatedFragment *next;
-    uint32_t key[RESOT_PS_SPEC_WORDS];
+    uint32_t key[RESOT_PS_KEY_WORDS];
     SDL_Mutex *lock;
     SDL_GPUShader *shader;
     int attempted;
@@ -142,6 +143,10 @@ static struct {
     uint64_t reference_draws; /* RE-SoT: reference draws while translation pipelines compile. */
     uint64_t rejected_draws; /* RE-SoT: draws skipped because the driver rejected every program. */
     uint64_t pipeline_waits, pipeline_wait_ticks; /* RE-SoT: measure cold stalls while preserving geometry. */
+    Uint64 last_query_submit; /* RE-SoT: visibility submissions are batched. */
+    Uint64 last_flip_counter; /* RE-SoT: frame spikes, which a 5 s average hides. */
+    double worst_frame_ms;
+    uint32_t frames_over_33ms, frames_over_100ms;
     uint64_t flare_depth_draws; /* RE-SoT: observe the retail light-halo correction separately from queries. */
     uint32_t spec_ps_count;
     uint64_t spec_ps_draws; /* RE-SoT: measure specialization coverage. */
@@ -202,7 +207,11 @@ static struct {
  * 12 s in total (2026-10-20 device logs, "[HW native] pipeline N created in").
  * RE-SoT: translated jobs use reference PSOs while compiling; cold reference
  * jobs wait without dropping geometry. Cache saves also run off the executor. */
-#define NG_COMPILERS 2
+/* RE-SoT: the first worker takes only reference jobs. fxc spends 30-180 ms on a
+ * translated D3D12 vertex program; with two shared workers a cold reference
+ * draw waited for those, 556 ms within one 5 s window of the 2026-10-31 retail
+ * log (executor 24.7 ms/frame there, 3 ms before). */
+#define NG_COMPILERS 3
 static struct {
     SDL_Mutex *lock;
     SDL_Condition *cond;
@@ -310,6 +319,24 @@ static void ng_visibility_poll(void)
 {
     if (!ng_vis_poll(&s_ng_visibility,ng_visibility_complete,NULL)) ng_fail("native visibility polling");
 }
+/* Caller holds s_hw.lock. Submits queries waiting for one, at most every 8 ms
+ * unless forced. Earlier queued draws go first, so guest order holds. */
+static void ng_visibility_kick(int force)
+{
+    Uint64 now;
+    if (!s_ng_visibility.pending) return;
+    now = SDL_GetPerformanceCounter();
+    if (!force && now-s_ng.last_query_submit < SDL_GetPerformanceFrequency()/125) return;
+    ng_flush_draws();
+    ng_submit_encoded();
+    s_ng.last_query_submit = now;
+}
+void nv2a_hw_native_visibility_kick(void)
+{
+    EnterCriticalSection(&s_hw.lock);
+    if (ng_active()) { ng_visibility_kick(1); ng_visibility_poll(); }
+    LeaveCriticalSection(&s_hw.lock);
+}
 static void ng_visibility_method(uint32_t method, uint32_t value, uint64_t stamp)
 {
     ng_flush_draws(); /* State transitions follow preceding queued draws. */
@@ -318,8 +345,13 @@ static void ng_visibility_method(uint32_t method, uint32_t value, uint64_t stamp
     else {
         if (s_ftrace == 2) fprintf(stderr,"[FTRACE native] report addr=%08X stamp=%llu segments=%u\n",
             value,(unsigned long long)stamp,s_ng_visibility.count); /* RE-SoT: no fabricated light visibility. */
-        ng_submit_encoded(); /* Make the report's queries available to GPU execution. */
         if (!ng_vis_report(&s_ng_visibility,value,stamp)) ng_fail("native visibility report");
+        /* RE-SoT: retail issues dozens of reports a frame (9414 queries in 5 s at
+         * 70 fps), and a submission each dominated the executor. A report only needs
+         * its queries to reach the GPU soon: ng_vis_poll completes it after the
+         * fence of whichever submission carries them, and nothing waits for it
+         * (ng_visibility_kick covers a title polling without drawing). */
+        ng_visibility_kick(0);
     }
     ng_visibility_poll();
 }
@@ -381,25 +413,47 @@ static void ng_upload_cycle(SDL_GPUTexture *image, const uint32_t *pixels,
     if (mips) SDL_GenerateMipmapsForGPUTexture(ng_cmd(), image);
     s_hw.tex_uploads++;
 }
-static SDL_GPUShader *ng_shader(const unsigned char *dxil, size_t dxil_size,
+static SDL_GPUShader *ng_shader(const unsigned char *dxbc, size_t dxbc_size,
                                 const unsigned char *spirv, size_t spirv_size,
                                 const char *entry, int vertex, uint32_t samplers, uint32_t uniforms)
 {
     SDL_GPUShaderCreateInfo ci = {0};
-    ci.format = s_ng.active == 12 ? SDL_GPU_SHADERFORMAT_DXIL : SDL_GPU_SHADERFORMAT_SPIRV;
-    ci.code = s_ng.active == 12 ? dxil : spirv;
-    ci.code_size = s_ng.active == 12 ? dxil_size : spirv_size;
+    ci.format = s_ng.active == 12 ? SDL_GPU_SHADERFORMAT_DXBC : SDL_GPU_SHADERFORMAT_SPIRV;
+    ci.code = s_ng.active == 12 ? dxbc : spirv;
+    ci.code_size = s_ng.active == 12 ? dxbc_size : spirv_size;
     ci.entrypoint = entry;
     ci.stage = vertex ? SDL_GPU_SHADERSTAGE_VERTEX : SDL_GPU_SHADERSTAGE_FRAGMENT;
     ci.num_samplers = samplers; ci.num_uniform_buffers = uniforms;
     return SDL_CreateGPUShader(s_ng.device, &ci);
 }
-#define NG_SHADER(entry, vertex, samplers, uniforms) ng_shader(ng_##entry##_dxil, sizeof ng_##entry##_dxil, \
+#define NG_SHADER(entry, vertex, samplers, uniforms) ng_shader(ng_##entry##_dxbc, sizeof ng_##entry##_dxbc, \
     ng_##entry##_spirv, sizeof ng_##entry##_spirv, #entry, vertex, samplers, uniforms)
 
-/* RE-SoT: specialize only the generic Vulkan path; existing simple shaders
- * remain cheaper. Full-key equality prevents hash collisions changing math.
- * Constants, texture scales/borders and alpha reference remain uniforms. */
+/* RE-SoT: fxc output for D3D12; hw_compile_src's disk cache covers it. Failure
+ * leaves the entry on its reference program, as on Vulkan. */
+#if RESOT_HW_D3D11
+static SDL_GPUShader *ng_shader_hlsl(const char *body,size_t body_bytes,const char *entry,const char *profile,
+                                     int vertex,uint32_t samplers,uint32_t uniforms)
+{
+    SDL_GPUShaderCreateInfo ci = {0};
+    SDL_GPUShader *shader;
+    ID3DBlob *code = hw_compile_src(body,body_bytes,entry,profile);
+    if (!code) return NULL;
+    ci.format = SDL_GPU_SHADERFORMAT_DXBC;
+    ci.code = (const Uint8 *)ID3D10Blob_GetBufferPointer(code);
+    ci.code_size = ID3D10Blob_GetBufferSize(code);
+    ci.entrypoint = entry;
+    ci.stage = vertex ? SDL_GPU_SHADERSTAGE_VERTEX : SDL_GPU_SHADERSTAGE_FRAGMENT;
+    ci.num_samplers = samplers; ci.num_uniform_buffers = uniforms;
+    shader = SDL_CreateGPUShader(s_ng.device,&ci);
+    ID3D10Blob_Release(code);
+    return shader;
+}
+#endif
+/* RE-SoT: the generic combiner path gets its own program on Vulkan and D3D12;
+ * existing simple shaders remain cheaper. Full-key equality prevents hash
+ * collisions changing math. Constants, texture scales/borders and alpha
+ * reference remain uniforms. */
 static uint32_t ng_program_bucket(const uint32_t *words,uint32_t count)
 {
     uint32_t hash=2166136261u;
@@ -408,12 +462,14 @@ static uint32_t ng_program_bucket(const uint32_t *words,uint32_t count)
 }
 static NgTranslatedFragment *ng_specialized_ps(const HwPsConst *pc)
 {
-    uint32_t key[RESOT_PS_SPEC_WORDS],bucket;
+    uint32_t key[RESOT_PS_KEY_WORDS],bucket;
     NgTranslatedFragment *entry;
     static int enabled=-1;
     if(enabled<0) { const char *e=getenv("RESOT_NATIVE_SPECIALIZE"); enabled=!(e && *e=='0'); }
-    if(!enabled || s_ng_compat || s_ng.active!=100) return NULL; /* RE-SoT: driver workaround. */
-    resot_ps_spec_key(key,pc); bucket=ng_program_bucket(key,RESOT_PS_SPEC_WORDS);
+    if(!enabled || s_ng_compat) return NULL; /* RE-SoT: driver workaround. */
+    resot_ps_key(key,pc);
+    if(s_ng.active==100) key[RESOT_PS_FLAGS]=0; /* RE-SoT: those stay uniforms in the SPIR-V. */
+    bucket=ng_program_bucket(key,RESOT_PS_KEY_WORDS);
     for(entry=s_ng.spec_ps[bucket];entry;entry=entry->next)
         if(!memcmp(key,entry->key,sizeof key)) return entry;
     entry=(NgTranslatedFragment*)calloc(1,sizeof *entry);
@@ -432,7 +488,7 @@ static NgTranslatedVertex *ng_translated_vs(const uint32_t *words,uint32_t count
     NgTranslatedVertex *entry;
     static int enabled=-1;
     if(enabled<0) { const char *e=getenv("RESOT_NATIVE_TRANSLATE"); enabled=!(e && *e=='0'); }
-    if(!enabled || s_ng_compat || s_ng.active!=100) return NULL; /* RE-SoT: driver workaround. */
+    if(!enabled || s_ng_compat) return NULL; /* RE-SoT: driver workaround. */
     generation=nv2a_vsh_program_generation(); /* RE-SoT: same identity used by the immutable draw pool. */
     if(s_ng.last_translated_vs && s_ng.last_translated_generation==generation)
         return s_ng.last_translated_vs;
@@ -446,6 +502,11 @@ static NgTranslatedVertex *ng_translated_vs(const uint32_t *words,uint32_t count
     entry=(NgTranslatedVertex*)calloc(1,sizeof *entry);
     if(!entry) return NULL;
     entry->lock=SDL_CreateMutex();
+#if RESOT_HW_D3D11
+    if(s_ng.active==12) {
+        entry->source=resot_translate_vertex_dialect(ng_d3d12_vertex_hlsl,words,count,1);
+    } else
+#endif
     entry->source=resot_translate_vertex(ng_translated_vertex_head,words,count);
     if(!entry->lock || !entry->source) {
         if(entry->lock) SDL_DestroyMutex(entry->lock);
@@ -462,9 +523,16 @@ static SDL_GPUShader *ng_vertex_compile(NgTranslatedVertex *entry)
 {
     SDL_LockMutex(entry->lock);
     if(!entry->attempted) {
-        size_t bytes=0; uint32_t *code=resot_compile_vertex(entry->source,&bytes);
-        if(code) { entry->shader=ng_shader(NULL,0,(const unsigned char*)code,bytes,"main",1,0,2); free(code); }
-        if(entry->shader) fprintf(stderr,"[HW native] translated vertex: %u instructions, %zu SPIR-V bytes\n",entry->count,bytes);
+        size_t bytes=0;
+#if RESOT_HW_D3D11
+        if(s_ng.active==12) {
+            bytes=strlen(entry->source);
+            entry->shader=ng_shader_hlsl(entry->source,bytes,"vs_tr","vs_5_1",1,0,2);
+        } else
+#endif
+        { uint32_t *code=resot_compile_vertex(entry->source,&bytes);
+          if(code) { entry->shader=ng_shader(NULL,0,(const unsigned char*)code,bytes,"main",1,0,2); free(code); } }
+        if(entry->shader) fprintf(stderr,"[HW native] translated vertex: %u instructions, %zu source/SPIR-V bytes\n",entry->count,bytes);
         if(!entry->shader) fprintf(stderr,"[HW native] vertex translation failed; using reference interpreter\n");
         entry->attempted=1;
     }
@@ -474,6 +542,21 @@ static SDL_GPUShader *ng_vertex_compile(NgTranslatedVertex *entry)
 static SDL_GPUShader *ng_fragment_compile(NgTranslatedFragment *entry)
 {
     SDL_LockMutex(entry->lock);
+#if RESOT_HW_D3D11
+    if(!entry->attempted && s_ng.active==12) {
+        /* RE-SoT: straight-line HLSL; cube slots have their own samplers here. */
+        size_t head=strlen(ng_d3d12_hlsl), cap=head+65536, body;
+        char *text=(char*)malloc(cap);
+        if(text) {
+            memcpy(text,ng_d3d12_hlsl,head);
+            body=resot_ps_emit(text+head,cap-head,"ps_tr",entry->key,4);
+            if(body) entry->shader=ng_shader_hlsl(text,head+body,"ps_tr","ps_5_1",0,8,1);
+            free(text);
+        }
+        if(!entry->shader) fprintf(stderr,"[HW native] fragment translation failed; using reference combiner\n");
+        entry->attempted=1;
+    }
+#endif
     if(!entry->attempted) {
         size_t bytes,optimized_bytes=0;
         const unsigned char *source=ng_ps_specialized_source(entry->key[32]&255,&bytes);
@@ -565,7 +648,7 @@ static void ng_shutdown(void)
 }
 static int ng_init(const char *backend)
 {
-    /* RE-SoT: Vulkan only; D3D12's existing encoder and D3D11 reuse stay as-is. */
+    /* RE-SoT: both native APIs; D3D11 reuse stays as-is. */
     const char *geometry=getenv("RESOT_NATIVE_GEOMETRY_CACHE");
     s_ng.geometry_enabled=!(geometry && *geometry=='0');
     s_ng.geometry_generation=1;
@@ -1168,16 +1251,21 @@ static SDL_GPUGraphicsPipeline *ng_pipeline_build(const NgPipelineKey *key, int 
     return gpu;
 }
 
-static int SDLCALL ng_compiler(void *unused)
+static int ng_compiler_ready(int reference_only)
 {
-    (void)unused;
+    /* References enter at the head, so a translated head means no reference waits. */
+    return s_ngc.head && (!reference_only || (!s_ngc.head->key.translated_vs && !s_ngc.head->key.specialized_ps));
+}
+static int SDLCALL ng_compiler(void *reserved)
+{
+    int reference_only = reserved != NULL;
     SDL_LockMutex(s_ngc.lock);
     for (;;) {
         NgPipeline *p;
-        while (!s_ngc.quit && !s_ngc.head && !s_ngc.save)
+        while (!s_ngc.quit && !ng_compiler_ready(reference_only) && (reference_only || !s_ngc.save))
             SDL_WaitCondition(s_ngc.cond, s_ngc.lock);
         if (s_ngc.quit) break;
-        if (s_ngc.head) {
+        if (ng_compiler_ready(reference_only)) {
             p = s_ngc.head;
             s_ngc.head = p->job_next;
             if (!s_ngc.head) s_ngc.tail = NULL;
@@ -1203,9 +1291,10 @@ static int SDLCALL ng_compiler(void *unused)
     return 0;
 }
 
-/* RE-SoT: RESOT_ASYNC_PIPELINES=0 compiles on the executor; =1 forces
- * workers. Default on for Vulkan on both hosts: dedicated program compilation
- * must not stall the executor. D3D12 retains its existing default. */
+/* RE-SoT: RESOT_ASYNC_PIPELINES=0 compiles on the executor. Default on for
+ * every native API: fxc takes tens of milliseconds per translated D3D12 program
+ * (see hw_vsp_worker), and dedicated program compilation must not stall the
+ * executor. */
 static void ng_compiler_start(void)
 {
     const char *e = getenv("RESOT_ASYNC_PIPELINES");
@@ -1213,7 +1302,8 @@ static void ng_compiler_start(void)
 #if defined(__ANDROID__)
     s_ngc.async = !(e && *e == '0');
 #else
-    s_ngc.async = e && *e ? *e != '0' : s_ng.active == 100;
+    s_ngc.async = !(e && *e == '0');
+    (void)hw_shader_cache_dir(); /* RE-SoT: settled before the workers read it. */
 #endif
     if (!s_ngc.async && !s_ng_cache_save) return;
     s_ngc.lock = SDL_CreateMutex();
@@ -1221,7 +1311,9 @@ static void ng_compiler_start(void)
     if (!s_ngc.lock || !s_ngc.cond) { s_ngc.async = 0; return; }
     s_ngc.quit = 0;
     for (i = 0; i < (s_ngc.async ? NG_COMPILERS : 1); i++) {
-        s_ngc.thread[i] = SDL_CreateThread(ng_compiler, "resot-pso", NULL);
+        /* RE-SoT: Mali waits for compact keys, not references: nothing to reserve. */
+        s_ngc.thread[i] = SDL_CreateThread(ng_compiler, "resot-pso",
+            s_ngc.async && i == 0 && !s_ng_compact_pipelines ? (void *)&s_ngc : NULL);
         if (s_ngc.thread[i]) s_ngc.running++;
     }
     if (!s_ngc.running) s_ngc.async = 0;
@@ -1287,7 +1379,8 @@ static SDL_GPUGraphicsPipeline *ng_pipeline(const NgPipelineKey *key, int may_de
                 if (s_ngc.tail) s_ngc.tail->job_next = p; else s_ngc.head = p;
                 s_ngc.tail = p;
             }
-            SDL_SignalCondition(s_ngc.cond);
+            /* RE-SoT: a signal could wake only the reserved worker for a translated job. */
+            SDL_BroadcastCondition(s_ngc.cond);
             SDL_UnlockMutex(s_ngc.lock);
         } else {
             p->gpu = ng_pipeline_build(key, 0);
@@ -1531,7 +1624,14 @@ static void ng_flush_draws(void)
         }
         if (pipeline != bound_pipeline) {
             SDL_BindGPUGraphicsPipeline(pass,pipeline);
-            SDL_BindGPUVertexBuffers(pass,0,&vb,1); /* RE-SoT: D3D12 views inherit the selected vertex pitch. */
+            /* RE-SoT: SDL 3.4.18's D3D12 driver rebuilds its vertex view, with
+             * the current pipeline's stride, only when buffer or offset changed.
+             * Binding another offset first marks it without any driver call. */
+            if (s_ng.active == 12) {
+                SDL_GPUBufferBinding other = {s_ng.vertices,128};
+                SDL_BindGPUVertexBuffers(pass,0,&other,1);
+            }
+            SDL_BindGPUVertexBuffers(pass,0,&vb,1);
             bound_pipeline = pipeline; bound_textures = NULL;
         }
         if (!bound_dynamic || memcmp(&bound_dynamic->vp,&draw->vp,sizeof draw->vp))
@@ -1729,7 +1829,7 @@ static ResotGeometryEntry *ng_geometry_find(const uint8_t *inputs,uint32_t ninpu
                                            ResotGeometryKey *key)
 {
     uint32_t lo=65535,hi=0,n=s_gpu.idx_count;
-    if(s_ng.active!=100 || !s_ng.geometry_enabled || s_gpu.inline_active || ninputs>8) return NULL;
+    if(!s_ng.geometry_enabled || s_gpu.inline_active || ninputs>8) return NULL;
     memset(key,0,sizeof *key);
     key->primitive=s_gpu.prim; key->inputs=ninputs; key->stride=stride; key->indices=n;
     for(uint32_t i=0;i<n;i++) { if(s_gpu.idx[i]<lo) lo=s_gpu.idx[i]; if(s_gpu.idx[i]>hi) hi=s_gpu.idx[i]; }
@@ -1790,10 +1890,6 @@ static int ng_draw_program_batch(void)
      * This removes unused zero stores and cuts CPU/GPU transfer bytes for
      * small programs; formats still use the exact fetch_attr conversion. */
     slots = ninputs <= 1 ? 1 : ninputs <= 2 ? 2 : ninputs <= 4 ? 4 : 8;
-    /* RE-SoT: SDL 3.4.18 D3D12 caches vertex views by buffer/offset and
-     * does not invalidate their stride on pipeline changes. Keep its fixed
-     * pitch; Vulkan's input stride belongs to the selected pipeline. */
-    if (s_ng.active == 12) slots = 8;
     stride = slots * 16;
     if ((uint64_t)n * stride > HW_VB_BYTES || (uint64_t)n * 6 + 4 > HW_IB_BYTES) return 0;
     /* The same CPU checks hw_draw_program_batch makes: the glow composite's
@@ -2293,6 +2389,15 @@ static void ng_flip(void)
     if (s_hw.pending_present) nv2a_hw_flush_present();
     EnterCriticalSection(&s_hw.lock);
     {
+        Uint64 counter=SDL_GetPerformanceCounter();
+        if (s_ng.last_flip_counter) {
+            double ms=1000.0*(double)(counter-s_ng.last_flip_counter)/(double)SDL_GetPerformanceFrequency();
+            if (ms>s_ng.worst_frame_ms) s_ng.worst_frame_ms=ms;
+            s_ng.frames_over_33ms+=ms>33.0; s_ng.frames_over_100ms+=ms>100.0;
+        }
+        s_ng.last_flip_counter=counter;
+    }
+    {
         /* RE-SoT: keep new driver-compiled pipelines for the next run; the
          * save is skipped when nothing was created since the last one. */
         static DWORD last_save;
@@ -2337,6 +2442,9 @@ static void ng_flip(void)
                 s_ng.active == 12 ? "D3D12" : "Vulkan",frames*1000.0/(now-last_log),
                 frames ? (double)(s_hw.draws-last_draws)/frames : 0,(unsigned long long)s_hw.draws,
                 s_ng.gpu_vsh ? "GPU" : "CPU");
+        fprintf(stderr,"[HW native] frame spikes: worst %.1f ms, %u over 33 ms, %u over 100 ms\n",
+                s_ng.worst_frame_ms,s_ng.frames_over_33ms,s_ng.frames_over_100ms);
+        s_ng.worst_frame_ms=0; s_ng.frames_over_33ms=s_ng.frames_over_100ms=0;
         fprintf(stderr,"[HW native] simple combiners: %llu/%llu guest draws\n",
             (unsigned long long)s_ng.simple_draws,(unsigned long long)s_ng.guest_draws); /* RE-SoT: verify coverage, not assumed speedup. */
         fprintf(stderr,"[HW native] geometry cache %s: %llu hits, %llu misses, %llu bypasses, %u source bytes, gen %u, %llu upload bytes avoided\n",

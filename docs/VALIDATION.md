@@ -1,5 +1,95 @@
 # Validation log
 
+## 2026-10-31: user confirmation of the stutter corrections
+
+The user played the builds of 13:22 and reports excellent performance ("piu che
+ottime") on D3D11, Vulkan and the demo. Logs on this PC show retail D3D11 at
+104-161 fps and demo D3D11 at 137 fps in its last window, whose worst frame was
+229 ms (4 over 100 ms; cause not looked at). The Windows logs read here hold no
+Vulkan session after the 13:13 build, so Vulkan rests on the user's report.
+Android was not reported.
+
+## 2026-10-31: stutter corrections extended to D3D11, demo and Vulkan
+
+The user replayed retail on D3D12 ("molto meglio"). Log at 13:18: 93-114 fps,
+executor 3.75-5.78 ms/frame, frame spikes mostly under 40 ms and none over 100 ms
+in the windows read, cold reference waits 7.5 ms in total (683.5 ms before),
+geometry cache 1139043 hits, about 21 GB of uploads avoided. Same scene not
+guaranteed; the audio result rests on the user's report ([APU] still shows 0 starved).
+
+Target by target: the native changes have no target `#if`, so the demo and Vulkan
+already built them at 13:13; the demo issues no visibility queries, so the report
+batching does nothing there. Neither was played. New for D3D11 (both targets):
+report flushes at most every 8 ms with the idle tick forcing the rest, reuse of
+finished occlusion queries, vertex pitch 16/32/64/128 by program inputs, two
+compile workers and `frame spikes` in the log. It already falls back to the
+interpreter while compiling and already had batch reuse.
+
+Checks: `python tools/test-visibility.py` passed (WARP, real queries, with the
+forced flush and a reuse check); `python tools/check-hlsl.py` ok; `ctest` with
+`RESOT_GPU_BINDINGS_SMOKE=1` 14/14; `tools/recomp.ps1 -BuildOnly` both targets and
+`tools/build-android.ps1` built.
+
+Not checked: no test draws through the D3D11 compact vertices, and the game was
+not run with these builds, so D3D11 geometry and timing are unseen. Demo on any
+renderer, Vulkan and Android were not played with these changes.
+
+## 2026-10-31: retail D3D12 stutter in effect-heavy scenes
+
+User report on the combiner-translation build: no graphical faults on D3D12, but
+FPS drops, visual stutter and audio stutter where there are many effects.
+`bin/logs/xbox-retail-err.txt` (13:06, RTX 3060, i7-9700K, VSync off, no limit):
+135 fps and executor 2.94 ms/frame early; then 63-97 fps with executor 6-8 ms,
+320-390 draws/frame, ~100k vertices/frame and 9414 queries in 5 s. One 5 s window
+had executor 24.72 ms with 72 cold reference waits totalling 555 ms, while
+49 `vs_tr` compiles took 4815 ms on the two shared workers. Geometry cache:
+0 hits of 1112767 draws, disabled on D3D12. `[APU]` lines report 0 starved,
+late 0, block max 1.7 ms in every window, so the host audio output was not seen
+starving; the cause of the audible stutter is not established.
+
+Changes: a third pipeline worker reserved for reference jobs; translated D3D12
+vertex programs parse only the vertex half; compact vertex stride and the geometry
+cache on D3D12 (`SDL_BindGPUVertexBuffers` with another offset first refreshes
+SDL's view stride); visibility reports no longer submit each (at most every 8 ms,
+with presentation and the window thread's idle tick covering the rest). The FPS
+log gains `frame spikes` (worst frame, frames over 33 and 100 ms). The batching
+and the worker apply to Vulkan and Android too.
+
+Checks: `python tools/check-hlsl.py` ok; `ctest` with `RESOT_GPU_BINDINGS_SMOKE=1`
+14/14. `vertex_program_direct3d12` draws after a stride change inside a pass;
+removing the extra bind made it fail (`covered > 0`), and restoring it passed.
+`tools/recomp.ps1 -BuildOnly` both targets and `tools/build-android.ps1` built.
+
+Not checked: the game was not run with these builds, so no FPS, stutter or
+audio improvement is claimed. Report latency in play (halo fades) was not seen;
+Android and Vulkan were built, not run in play. `native_vulkan` without the smoke
+variable passed in 105.96 s.
+
+## 2026-10-31: combiner translation on D3D11 and D3D12, D3D12 vertex translation
+
+D3D11 and D3D12 draw each combiner state with its own straight-line shader
+(`resot_native_combiner.h`, compared with Black's per-state `PixelHlsl`; no Black
+code copied). D3D12 translates vertex programs too, compiles on the background
+pipeline workers by default, and moved from DXIL to DXBC SM 5.1: the first
+attempt failed with `STATE_CREATION ERROR #1046`, a pipeline cannot mix the two.
+All three APIs share a canonical combiner key.
+
+Checks: `python tools/check-hlsl.py` ok. `ctest --test-dir build/tests/native-gpu
+-C Release` with `RESOT_GPU_BINDINGS_SMOKE=1`: 14/14 in 32.86 s, including
+`native_direct3d12`, whose new `test_combiner_translate.inc` compares 400 random
+states with `ps_main`, pixel by pixel within one byte on this PC's GPU (112 of
+them compiled without a discard), and compiles each for `ps_4_0`. A deliberate
+error in the emitter failed it at case 3. `vertex_program_direct3d12` passed its
+112 translated/reference comparisons through fxc. `native_vulkan` without that
+variable: passed in 106.14 s. `tools/recomp.ps1 -BuildOnly` both targets and
+`tools/build-android.ps1`: built.
+
+Not checked: the game was not run with these builds on any renderer, so no FPS
+gain, hitch change or picture is claimed in demo or retail. D3D11 pixels were
+compiled, not drawn, by the test. `RESOT_ASYNC_PIPELINES` on D3D12 had no
+concurrent-compile test. Android shares only the canonical key and was built,
+not run.
+
 ## 2026-10-31: v0.4.2
 
 The user confirmed the retail HD logo and the name keyboard ("ottimo funziona").

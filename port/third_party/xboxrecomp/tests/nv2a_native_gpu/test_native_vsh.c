@@ -1,5 +1,8 @@
 /* RE-SoT: compare generic/small native vertex interpreters by GPU readback,
  * including compact input layouts and dead writes to omitted registers. */
+#define COBJMACROS
+#include <d3dcompiler.h>
+#pragma comment(lib,"d3dcompiler.lib")
 #include <SDL3/SDL.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -58,20 +61,20 @@ int main(int argc, char **argv)
     float constants[192][4] = {0};
     const float positions[3][4] = {{-16,-16,0.5f,1},{48,-16,0.5f,1},{-16,48,0.5f,1}};
     REQUIRE(SDL_Init(SDL_INIT_VIDEO));
-    device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_SPIRV,true,backend);
+    device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_DXBC | SDL_GPU_SHADERFORMAT_SPIRV,true,backend);
     REQUIRE(device);
-    shader.format = dx ? SDL_GPU_SHADERFORMAT_DXIL : SDL_GPU_SHADERFORMAT_SPIRV;
+    shader.format = dx ? SDL_GPU_SHADERFORMAT_DXBC : SDL_GPU_SHADERFORMAT_SPIRV;
     shader.stage = SDL_GPU_SHADERSTAGE_VERTEX; shader.num_uniform_buffers = 3;
     for (int variant = 0; variant < 2; variant++) {
         shader.entrypoint = variant ? "vs_uber_small" : "vs_uber";
-        shader.code = variant ? (dx ? ng_vs_uber_small_dxil : ng_vs_uber_small_spirv) : (dx ? ng_vs_uber_dxil : ng_vs_uber_spirv);
-        shader.code_size = variant ? (dx ? sizeof ng_vs_uber_small_dxil : sizeof ng_vs_uber_small_spirv) : (dx ? sizeof ng_vs_uber_dxil : sizeof ng_vs_uber_spirv);
+        shader.code = variant ? (dx ? ng_vs_uber_small_dxbc : ng_vs_uber_small_spirv) : (dx ? ng_vs_uber_dxbc : ng_vs_uber_spirv);
+        shader.code_size = variant ? (dx ? sizeof ng_vs_uber_small_dxbc : sizeof ng_vs_uber_small_spirv) : (dx ? sizeof ng_vs_uber_dxbc : sizeof ng_vs_uber_spirv);
         vertex[variant] = SDL_CreateGPUShader(device,&shader); REQUIRE(vertex[variant]);
     }
     shader.stage = SDL_GPU_SHADERSTAGE_FRAGMENT; shader.num_uniform_buffers = 0;
     shader.entrypoint = "ps_vertex_probe";
-    shader.code = dx ? ng_ps_vertex_probe_dxil : ng_ps_vertex_probe_spirv;
-    shader.code_size = dx ? sizeof ng_ps_vertex_probe_dxil : sizeof ng_ps_vertex_probe_spirv;
+    shader.code = dx ? ng_ps_vertex_probe_dxbc : ng_ps_vertex_probe_spirv;
+    shader.code_size = dx ? sizeof ng_ps_vertex_probe_dxbc : sizeof ng_ps_vertex_probe_spirv;
     fragment = SDL_CreateGPUShader(device,&shader); REQUIRE(fragment);
     for (int variant = 0; variant < 2; variant++) for (int layout = 0; layout < 4; layout++) {
         pipelines[variant][layout]=make_pipeline(device,vertex[variant],fragment,layout);
@@ -139,7 +142,21 @@ int main(int argc, char **argv)
         instructions[3][2] ^= 4u<<2;
         copy = SDL_BeginGPUCopyPass(command); REQUIRE(copy);
         SDL_UploadToGPUBuffer(copy,&source,&destination,true); SDL_EndGPUCopyPass(copy);
-        if(!dx) {
+        if(dx) {
+            /* RE-SoT: the production D3D12 route: vertex half, helpers, program, fxc. */
+            char *text=resot_translate_vertex_dialect(ng_d3d12_vertex_hlsl,&instructions[0][0],5,1);
+            ID3DBlob *code=NULL,*errors=NULL;
+            REQUIRE(text);
+            if(FAILED(D3DCompile(text,strlen(text),"vs_tr",NULL,NULL,"vs_tr","vs_5_1",(1<<14)|(1<<13),0,&code,&errors))) {
+                fprintf(stderr,"translated vertex: %s\n",errors?(const char*)ID3D10Blob_GetBufferPointer(errors):"?");
+                return 1;
+            }
+            free(text);
+            shader.code=(const unsigned char*)ID3D10Blob_GetBufferPointer(code); shader.code_size=ID3D10Blob_GetBufferSize(code);
+            shader.entrypoint="vs_tr"; shader.stage=SDL_GPU_SHADERSTAGE_VERTEX; shader.num_uniform_buffers=2;
+            translated=SDL_CreateGPUShader(device,&shader); ID3D10Blob_Release(code); REQUIRE(translated);
+            translated_pipeline=make_pipeline(device,translated,fragment,layout); REQUIRE(translated_pipeline);
+        } else {
             char *source=resot_translate_vertex(ng_translated_vertex_head,&instructions[0][0],5);
             size_t bytes=0;
             uint32_t *code=resot_compile_vertex(source,&bytes);
@@ -149,7 +166,7 @@ int main(int argc, char **argv)
             translated=SDL_CreateGPUShader(device,&shader); free(code); REQUIRE(translated);
             translated_pipeline=make_pipeline(device,translated,fragment,layout); REQUIRE(translated_pipeline);
         }
-        for (unsigned variant = 0; variant < (dx?2u:3u); variant++) {
+        for (unsigned variant = 0; variant < 3u; variant++) {
             SDL_GPUColorTargetInfo color = {0};
             SDL_GPUBufferBinding binding = {buffer,0};
             SDL_GPUTextureRegion region = {0};
@@ -157,7 +174,19 @@ int main(int argc, char **argv)
             SDL_GPURenderPass *pass;
             color.texture = target; color.load_op = SDL_GPU_LOADOP_CLEAR; color.store_op = SDL_GPU_STOREOP_STORE;
             pass = SDL_BeginGPURenderPass(command,&color,1,NULL); REQUIRE(pass);
-            SDL_BindGPUGraphicsPipeline(pass,variant==2?translated_pipeline:pipelines[variant][layout]); SDL_BindGPUVertexBuffers(pass,0,&binding,1);
+            if(dx) {
+                /* RE-SoT: production's stride change within a pass: an empty draw
+                 * leaves SDL's view at another pitch, as ng_flush_draws meets it. */
+                SDL_GPUBufferBinding other = {buffer,128};
+                SDL_BindGPUGraphicsPipeline(pass,pipelines[0][(layout+1)&3]); SDL_BindGPUVertexBuffers(pass,0,&binding,1);
+                SDL_PushGPUVertexUniformData(command,0,header,sizeof header);
+                SDL_PushGPUVertexUniformData(command,1,constants,sizeof constants);
+                SDL_PushGPUVertexUniformData(command,2,instructions,sizeof instructions);
+                SDL_DrawGPUPrimitives(pass,0,1,0,0);
+                SDL_BindGPUGraphicsPipeline(pass,variant==2?translated_pipeline:pipelines[variant][layout]);
+                SDL_BindGPUVertexBuffers(pass,0,&other,1);
+            } else SDL_BindGPUGraphicsPipeline(pass,variant==2?translated_pipeline:pipelines[variant][layout]);
+            SDL_BindGPUVertexBuffers(pass,0,&binding,1);
             SDL_PushGPUVertexUniformData(command,0,header,sizeof header);
             SDL_PushGPUVertexUniformData(command,1,constants,sizeof constants);
             SDL_PushGPUVertexUniformData(command,2,variant ? compact : instructions,variant ? compact_count*16 : sizeof instructions);
@@ -170,7 +199,7 @@ int main(int argc, char **argv)
         REQUIRE(SDL_WaitForGPUFences(device,true,&fence,1));
         const uint32_t *pixels = SDL_MapGPUTransferBuffer(device,download,false); REQUIRE(pixels);
         REQUIRE(!memcmp(pixels,pixels+256,1024));
-        if(!dx) {
+        {
             if(memcmp(pixels,pixels+512,1024)) {
                 fprintf(stderr,"Translated mismatch MAC=%u ILU=%u layout=%u\n",mac,ilu,layout);
                 for(unsigned q=0;q<256;q++) if(pixels[q]!=pixels[q+512]) { fprintf(stderr,"pixel %u: %08x vs %08x\n",q,pixels[q],pixels[q+512]); break; }
@@ -179,11 +208,11 @@ int main(int argc, char **argv)
         }
         covered += pixels[128] != 0;
         SDL_UnmapGPUTransferBuffer(device,download); SDL_ReleaseGPUFence(device,fence);
-        if(!dx) { SDL_ReleaseGPUGraphicsPipeline(device,translated_pipeline); SDL_ReleaseGPUShader(device,translated); }
+        SDL_ReleaseGPUGraphicsPipeline(device,translated_pipeline); SDL_ReleaseGPUShader(device,translated);
     }
     REQUIRE(covered > 0);
     puts("PASS: 112 generic/remapped vertex-program comparisons with compact input layouts");
-    if(!dx) puts("PASS: 112 translated/reference vertex-program comparisons");
+    puts("PASS: 112 translated/reference vertex-program comparisons");
     SDL_ReleaseGPUTexture(device,target); SDL_ReleaseGPUBuffer(device,buffer);
     SDL_ReleaseGPUTransferBuffer(device,upload); SDL_ReleaseGPUTransferBuffer(device,download);
     for (unsigned variant = 0; variant < 2; variant++) {

@@ -11,10 +11,10 @@ static int test_shadow_caster(SDL_GPUDevice *device, int dx,
     Uint32 reference[128*128];
     unsigned covered[3] = {0};
     float header[16] = {2.0f/128,2.0f/128,1.0f/65535,0, 0,0,0,0, 1,128,1,0};
-    si.format = dx ? SDL_GPU_SHADERFORMAT_DXIL : SDL_GPU_SHADERFORMAT_SPIRV;
+    si.format = dx ? SDL_GPU_SHADERFORMAT_DXBC : SDL_GPU_SHADERFORMAT_SPIRV;
     si.stage = SDL_GPU_SHADERSTAGE_FRAGMENT; si.entrypoint = "ps_shadow_coverage";
-    si.code = dx ? ng_ps_shadow_coverage_dxil : ng_ps_shadow_coverage_spirv;
-    si.code_size = dx ? sizeof ng_ps_shadow_coverage_dxil : sizeof ng_ps_shadow_coverage_spirv;
+    si.code = dx ? ng_ps_shadow_coverage_dxbc : ng_ps_shadow_coverage_spirv;
+    si.code_size = dx ? sizeof ng_ps_shadow_coverage_dxbc : sizeof ng_ps_shadow_coverage_spirv;
     ps = SDL_CreateGPUShader(device,&si); REQUIRE(ps);
     info.fragment_shader = ps; info.target_info.has_depth_stencil_target = false;
     memset(&info.depth_stencil_state,0,sizeof info.depth_stencil_state);
@@ -31,10 +31,10 @@ static int test_shadow_caster(SDL_GPUDevice *device, int dx,
         const Uint32 *pixels;
         si.stage = SDL_GPU_SHADERSTAGE_VERTEX; si.num_uniform_buffers = variant != 0;
         si.entrypoint = variant ? "vs_shadow_caster" : "vs_shadow_reference";
-        si.code = variant ? (dx ? ng_vs_shadow_caster_dxil : ng_vs_shadow_caster_spirv)
-                          : (dx ? ng_vs_shadow_reference_dxil : ng_vs_shadow_reference_spirv);
-        si.code_size = variant ? (dx ? sizeof ng_vs_shadow_caster_dxil : sizeof ng_vs_shadow_caster_spirv)
-                               : (dx ? sizeof ng_vs_shadow_reference_dxil : sizeof ng_vs_shadow_reference_spirv);
+        si.code = variant ? (dx ? ng_vs_shadow_caster_dxbc : ng_vs_shadow_caster_spirv)
+                          : (dx ? ng_vs_shadow_reference_dxbc : ng_vs_shadow_reference_spirv);
+        si.code_size = variant ? (dx ? sizeof ng_vs_shadow_caster_dxbc : sizeof ng_vs_shadow_caster_spirv)
+                               : (dx ? sizeof ng_vs_shadow_reference_dxbc : sizeof ng_vs_shadow_reference_spirv);
         vs = SDL_CreateGPUShader(device,&si); REQUIRE(vs); info.vertex_shader = vs;
         pipeline = SDL_CreateGPUGraphicsPipeline(device,&info); REQUIRE(pipeline);
         cmd = SDL_AcquireGPUCommandBuffer(device); REQUIRE(cmd);

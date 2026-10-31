@@ -19,13 +19,13 @@ static int test_simple_combiner(SDL_GPUDevice *device, SDL_GPUTexture *target,
     SDL_GPUTextureSamplerBinding bindings[8];
     int run,i,iteration;
     Uint8 reference[128*128*4]; /* RE-SoT: compare separately, including discard coverage. */
-    si.format=dx?SDL_GPU_SHADERFORMAT_DXIL:SDL_GPU_SHADERFORMAT_SPIRV;
-    si.code=dx?ng_vs_combiner_probe_dxil:ng_vs_combiner_probe_spirv;
-    si.code_size=dx?sizeof ng_vs_combiner_probe_dxil:sizeof ng_vs_combiner_probe_spirv;
+    si.format=dx?SDL_GPU_SHADERFORMAT_DXBC:SDL_GPU_SHADERFORMAT_SPIRV;
+    si.code=dx?ng_vs_combiner_probe_dxbc:ng_vs_combiner_probe_spirv;
+    si.code_size=dx?sizeof ng_vs_combiner_probe_dxbc:sizeof ng_vs_combiner_probe_spirv;
     si.entrypoint="vs_combiner_probe"; si.stage=SDL_GPU_SHADERSTAGE_VERTEX;
     vs=SDL_CreateGPUShader(device,&si); REQUIRE(vs);
-    si.code=dx?ng_ps_combiner_compare_dxil:ng_ps_combiner_compare_spirv;
-    si.code_size=dx?sizeof ng_ps_combiner_compare_dxil:sizeof ng_ps_combiner_compare_spirv;
+    si.code=dx?ng_ps_combiner_compare_dxbc:ng_ps_combiner_compare_spirv;
+    si.code_size=dx?sizeof ng_ps_combiner_compare_dxbc:sizeof ng_ps_combiner_compare_spirv;
     si.entrypoint="ps_combiner_compare"; si.stage=SDL_GPU_SHADERSTAGE_FRAGMENT;
     si.num_samplers=8; si.num_uniform_buffers=1;
     ps=SDL_CreateGPUShader(device,&si); REQUIRE(ps);
@@ -74,7 +74,7 @@ static int test_simple_combiner(SDL_GPUDevice *device, SDL_GPUTexture *target,
         pc.f[116]=pc.f[117]=1; pc.f[118]=run>=288?0:1; pc.u[132]=1;
         if(run&16) { for(i=136;i<140;i++)pc.f[i]=1; pc.f[152]=pc.f[153]=4; pc.f[154]=pc.f[155]=1; }
         if(specialized) {
-            uint32_t key[RESOT_PS_SPEC_WORDS], *code;
+            uint32_t key[RESOT_PS_KEY_WORDS], *code;
             size_t bytes;
             const unsigned char *source;
             /* RE-SoT: independent/paired factors, fog/final combiners,
@@ -92,7 +92,7 @@ static int test_simple_combiner(SDL_GPUDevice *device, SDL_GPUTexture *target,
             if(run&16) pc.u[98]=pc.u[99]=0;
             if(run>=24) { pc.u[100]=1; pc.u[101]=0x200+(run%8); pc.u[102]=96; } /* RE-SoT: compare discard masks too. */
             if(run>=60) { pc.u[132]=0; pc.u[96]=0; } /* RE-SoT: non-combiner fallback and zero stages. */
-            resot_ps_spec_key(key,&pc);
+            resot_ps_key(key,&pc);
             source=ng_ps_specialized_source(key[32]&255,&bytes);
             code=resot_ps_specialize(source,bytes,key);
             REQUIRE(code);

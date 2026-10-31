@@ -12,10 +12,10 @@ static int test_depth_clip(SDL_GPUDevice *device, int dx,
     Uint32 reference[128*128];
     unsigned covered = 0, mismatches = 0;
     float header[16] = {2.0f/128,2.0f/128,1,0, 0,0,0,0, 1,128,1,0};
-    si.format = dx ? SDL_GPU_SHADERFORMAT_DXIL : SDL_GPU_SHADERFORMAT_SPIRV;
+    si.format = dx ? SDL_GPU_SHADERFORMAT_DXBC : SDL_GPU_SHADERFORMAT_SPIRV;
     si.stage = SDL_GPU_SHADERSTAGE_FRAGMENT; si.entrypoint = "ps_depth_probe";
-    si.code = dx ? ng_ps_depth_probe_dxil : ng_ps_depth_probe_spirv;
-    si.code_size = dx ? sizeof ng_ps_depth_probe_dxil : sizeof ng_ps_depth_probe_spirv;
+    si.code = dx ? ng_ps_depth_probe_dxbc : ng_ps_depth_probe_spirv;
+    si.code_size = dx ? sizeof ng_ps_depth_probe_dxbc : sizeof ng_ps_depth_probe_spirv;
     ps = SDL_CreateGPUShader(device,&si); REQUIRE(ps);
     info.fragment_shader = ps;
     info.target_info.has_depth_stencil_target = false;
@@ -33,10 +33,10 @@ static int test_depth_clip(SDL_GPUDevice *device, int dx,
         const Uint32 *pixels;
         si.stage = SDL_GPU_SHADERSTAGE_VERTEX; si.num_uniform_buffers = variant;
         si.entrypoint = variant ? "vs_depth_screen" : "vs_depth_reference";
-        si.code = variant ? (dx ? ng_vs_depth_screen_dxil : ng_vs_depth_screen_spirv)
-                          : (dx ? ng_vs_depth_reference_dxil : ng_vs_depth_reference_spirv);
-        si.code_size = variant ? (dx ? sizeof ng_vs_depth_screen_dxil : sizeof ng_vs_depth_screen_spirv)
-                               : (dx ? sizeof ng_vs_depth_reference_dxil : sizeof ng_vs_depth_reference_spirv);
+        si.code = variant ? (dx ? ng_vs_depth_screen_dxbc : ng_vs_depth_screen_spirv)
+                          : (dx ? ng_vs_depth_reference_dxbc : ng_vs_depth_reference_spirv);
+        si.code_size = variant ? (dx ? sizeof ng_vs_depth_screen_dxbc : sizeof ng_vs_depth_screen_spirv)
+                               : (dx ? sizeof ng_vs_depth_reference_dxbc : sizeof ng_vs_depth_reference_spirv);
         vs = SDL_CreateGPUShader(device,&si); REQUIRE(vs);
         info.vertex_shader = vs;
         pipeline = SDL_CreateGPUGraphicsPipeline(device,&info); REQUIRE(pipeline);

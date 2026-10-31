@@ -139,6 +139,7 @@ int main(void) {
     CHECK(done == 0);
     deadline = GetTickCount() + 3000;
     while (done < 8 && (int32_t)(deadline - GetTickCount()) > 0) {
+        nv_hw_vis_kick(&v, ctx, 1); /* RE-SoT: what the window thread's idle tick does. */
         nv_hw_vis_poll(&v, ctx, complete, NULL);
         if (done < 8)
             Sleep(1);
@@ -155,6 +156,7 @@ int main(void) {
     }
     nv_hw_vis_poll(&v, ctx, complete, NULL);
     CHECK(done == 8);
+    CHECK(v.idle_count > 0); /* RE-SoT: finished queries return for reuse. */
     nv_hw_vis_destroy(&v, ctx);
     ID3D11DeviceContext_ClearState(ctx);
     ID3D11RasterizerState_Release(rs);

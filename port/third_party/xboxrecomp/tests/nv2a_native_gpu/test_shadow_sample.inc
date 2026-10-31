@@ -17,10 +17,10 @@ static int test_shadow_sample(SDL_GPUDevice *device, int dx,
     SDL_GPUCopyPass *copy;
     SDL_GPUFence *fence;
     const Uint32 *pixels;
-    si.format = dx ? SDL_GPU_SHADERFORMAT_DXIL : SDL_GPU_SHADERFORMAT_SPIRV;
+    si.format = dx ? SDL_GPU_SHADERFORMAT_DXBC : SDL_GPU_SHADERFORMAT_SPIRV;
     si.stage = SDL_GPU_SHADERSTAGE_FRAGMENT; si.entrypoint = "ps_shadow_probe";
-    si.code = dx ? ng_ps_shadow_probe_dxil : ng_ps_shadow_probe_spirv;
-    si.code_size = dx ? sizeof ng_ps_shadow_probe_dxil : sizeof ng_ps_shadow_probe_spirv;
+    si.code = dx ? ng_ps_shadow_probe_dxbc : ng_ps_shadow_probe_spirv;
+    si.code_size = dx ? sizeof ng_ps_shadow_probe_dxbc : sizeof ng_ps_shadow_probe_spirv;
     ps = SDL_CreateGPUShader(device,&si); REQUIRE(ps);
     info.fragment_shader = ps;
     info.target_info.has_depth_stencil_target = false;

@@ -84,6 +84,7 @@ static int ng_init(const char *backend);
 static int ng_active(void);
 static void ng_visibility_poll(void);
 static void ng_visibility_method(uint32_t method, uint32_t value, uint64_t stamp);
+void nv2a_hw_native_visibility_kick(void);
 
 static void ng_clear(uint32_t param);
 static void ng_compose(void);
@@ -202,7 +203,7 @@ static struct {
     uint32_t bb_w, bb_h;
     ID3D11VertexShader *vs, *vs_blit;
     ID3D11PixelShader *ps, *ps_blit, *ps_solid;
-    ID3D11InputLayout *layout, *layout_prog;
+    ID3D11InputLayout *layout, *layout_prog[4]; /* RE-SoT: 16, 32, 64 and 128 byte vertices. */
     ID3D11Buffer *vb, *ib, *vs_cb, *ps_cb;
     uint32_t vb_off, ib_off;
     HwVsp vsp[HW_VSP_MAX];
@@ -415,8 +416,8 @@ static const char s_hw_hlsl_vsp_tail[] =
 "  return vs_finish(R[12], o[3], o[4], vsh_fog(o[5].x), o[9], o[10], o[11], o[12]); }\n";
 
 /* RE-SoT: vs_uber is the native SDL GPU encoders' reference/fallback path.
- * Vulkan translates programs with the shared compiler in port/render;
- * D3D12, disabled translation and failed translations retain this interpreter.
+ * Vulkan translates programs with the shared compiler in port/render, D3D12
+ * with fxc; disabled and failed translations retain this interpreter.
  * vs_uber is compiled once, offline, and interprets the program instead:
  * nv2a_vsh_pack_gpu's words in VUP, the constants in VUC, the vertex's
  * inputs in eight slots. Every vertex of a draw runs the same instructions,
@@ -885,6 +886,64 @@ static ID3DBlob *hw_compile(const char *entry, const char *target)
         memcpy(src + sizeof s_hw_hlsl_vs_common - 1, s_hw_hlsl, sizeof s_hw_hlsl);
     }
     return hw_compile_src(src, len, entry, target);
+}
+
+/* RE-SoT: one pixel shader per combiner state (resot_native_combiner.h), as
+ * Black's D3D12 backend generates one per PixelKey, and with the same uniforms
+ * as the interpreter ps_main, which draws until the compile lands in the
+ * background. RESOT_PS_TRANSLATE=0 keeps ps_main for A/B tests. */
+#include "resot_native_combiner.h"
+_Static_assert(sizeof(HwPsConst)==168*4 && offsetof(HwPsConst,ctl)==96*4 &&
+               offsetof(HwPsConst,tscale)==116*4 && offsetof(HwPsConst,misc)==132*4 &&
+               offsetof(HwPsConst,border_info)==152*4,"Pixel constant ABI changed");
+typedef struct HwTrPs {
+    struct HwTrPs *next;
+    uint32_t key[RESOT_PS_KEY_WORDS];
+    ID3D11PixelShader *ps;              /* NULL: ps_main */
+    volatile LONG pending;
+    ID3DBlob *volatile ready;
+} HwTrPs;
+static HwTrPs *s_trps[256], *s_hw_trps_now;
+static int hw_vsp_async(void);
+static int hw_trps_queue(HwTrPs *e, char *src, size_t len);
+static void hw_trps_finish(HwTrPs *e, ID3DBlob *b)
+{
+    if (!b) return;
+    ID3D11Device_CreatePixelShader(s_hw.dev, ID3D10Blob_GetBufferPointer(b),
+                                   ID3D10Blob_GetBufferSize(b), NULL, &e->ps);
+    ID3D10Blob_Release(b);
+}
+/* Only when the constants changed: lookups must not cost a hash per draw. */
+static HwTrPs *hw_trps_get(const HwPsConst *pc)
+{
+    static int enabled = -1;
+    uint32_t key[RESOT_PS_KEY_WORDS], bucket = 2166136261u, i;
+    size_t head = sizeof s_hw_hlsl_vs_common - 1 + sizeof s_hw_hlsl - 1, body;
+    HwTrPs *e;
+    char *src;
+    ID3DBlob *b;
+    if (enabled < 0) { const char *v = getenv("RESOT_PS_TRANSLATE"); enabled = !(v && *v == '0'); }
+    if (!enabled) return NULL;
+    resot_ps_key(key, pc);
+    for (i = 0; i < RESOT_PS_KEY_WORDS; i++) bucket = (bucket ^ key[i]) * 16777619u;
+    bucket &= 255;
+    for (e = s_trps[bucket]; e; e = e->next)
+        if (!memcmp(e->key, key, sizeof key)) return e;
+    e = (HwTrPs *)calloc(1, sizeof *e);
+    src = (char *)malloc(head + 65536);
+    if (!e || !src) { free(e); free(src); return NULL; }
+    memcpy(e->key, key, sizeof key);
+    e->next = s_trps[bucket]; s_trps[bucket] = e;
+    memcpy(src, s_hw_hlsl_vs_common, sizeof s_hw_hlsl_vs_common - 1);
+    memcpy(src + sizeof s_hw_hlsl_vs_common - 1, s_hw_hlsl, sizeof s_hw_hlsl - 1);
+    body = resot_ps_emit(src + head, 65536, "ps_tr", key, 0);
+    if (!body) { free(src); return e; }
+    b = hw_shader_cache_load(src, head + body, "ps_tr", "ps_4_0");
+    if (!b && hw_vsp_async() && hw_trps_queue(e, src, head + body)) return e; /* src is the worker's now. */
+    if (!b) b = hw_compile_src(src, head + body, "ps_tr", "ps_4_0");
+    hw_trps_finish(e, b);
+    free(src);
+    return e;
 }
 
 #endif /* RESOT_HW_D3D11 */
@@ -1842,6 +1901,9 @@ static void hw_color4(uint32_t argb, float out[4])
 /* Bind everything a batch needs and return the surface, or NULL. prog is the
  * translated vertex program to run, or NULL for vertices the interpreter has
  * already transformed. */
+/* RE-SoT: a program's vertex pitch, 1/2/4/8 float4 by its inputs as on the native
+ * encoders; ~100k vertices a frame at a fixed 128 bytes filled the ring. */
+static uint32_t s_hw_prog_stride = sizeof(HwVertex);
 static HwSurface *hw_bind_draw_state(const HwVsp *prog)
 {
     HwSurface *s = hw_surface();
@@ -1857,7 +1919,7 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
      * before the program constants. */
     float hdr[16 + NV_VERTEX_ATTRS * 4], bf[4];
     int st, i, halo, probe;
-    UINT stride = sizeof(HwVertex), zero = 0;
+    UINT stride = prog ? s_hw_prog_stride : sizeof(HwVertex), zero = 0;
     uint32_t area;
 
     if (!s)
@@ -1943,6 +2005,7 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     if (halo) hw_halo_emission(pc.fac0[0]);
     /* Consecutive batches mostly share their combiner set-up. */
     if (!s_hw.ps_last_valid || memcmp(&pc, &s_hw.ps_last, sizeof pc)) {
+        s_hw_trps_now = hw_trps_get(&pc); /* RE-SoT: only a control-word change can select another. */
         if (SUCCEEDED(ID3D11DeviceContext_Map(s_hw.ctx, (ID3D11Resource *)s_hw.ps_cb, 0,
                                               D3D11_MAP_WRITE_DISCARD, 0, &map))) {
             memcpy(map.pData, &pc, sizeof pc);
@@ -2007,12 +2070,16 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
             }
         }
     }
-    ID3D11DeviceContext_IASetInputLayout(s_hw.ctx, prog ? s_hw.layout_prog : s_hw.layout);
+    ID3D11DeviceContext_IASetInputLayout(s_hw.ctx, !prog ? s_hw.layout :
+        s_hw.layout_prog[stride == 16 ? 0 : stride == 32 ? 1 : stride == 64 ? 2 : 3]);
     ID3D11DeviceContext_IASetPrimitiveTopology(s_hw.ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ID3D11DeviceContext_IASetVertexBuffers(s_hw.ctx, 0, 1, &s_hw.vb, &stride, &zero);
     ID3D11DeviceContext_VSSetShader(s_hw.ctx, prog ? prog->vs : s_hw.vs, NULL, 0);
     ID3D11DeviceContext_VSSetConstantBuffers(s_hw.ctx, 0, 1, &s_hw.vs_cb);
-    ID3D11DeviceContext_PSSetShader(s_hw.ctx, s_hw.ps, NULL, 0);
+    if (s_hw_trps_now && s_hw_trps_now->ready) /* RE-SoT: a background compile landed. */
+        hw_trps_finish(s_hw_trps_now, (ID3DBlob *)InterlockedExchangePointer(
+                                          (PVOID volatile *)&s_hw_trps_now->ready, NULL));
+    ID3D11DeviceContext_PSSetShader(s_hw.ctx, s_hw_trps_now && s_hw_trps_now->ps ? s_hw_trps_now->ps : s_hw.ps, NULL, 0);
     ID3D11DeviceContext_PSSetConstantBuffers(s_hw.ctx, 0, 1, &s_hw.ps_cb);
     ID3D11DeviceContext_PSSetShaderResources(s_hw.ctx, 0, 8, srv);
     ID3D11DeviceContext_PSSetSamplers(s_hw.ctx, 0, 4, smp);
@@ -2242,23 +2309,28 @@ static void hw_vsp_finish(HwVsp *e, ID3DBlob *b)
         return;
     ID3D11Device_CreateVertexShader(s_hw.dev, ID3D10Blob_GetBufferPointer(b),
                                     ID3D10Blob_GetBufferSize(b), NULL, &e->vs);
-    if (!s_hw.layout_prog) {
+    if (!s_hw.layout_prog[3]) {
         D3D11_INPUT_ELEMENT_DESC il[HW_VSP_SLOTS];
-        for (i = 0; i < HW_VSP_SLOTS; i++) {
-            memset(&il[i], 0, sizeof il[i]);
-            il[i].SemanticName = "ATTR";
-            il[i].SemanticIndex = (UINT)i;
-            il[i].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-            il[i].AlignedByteOffset = (UINT)i * 16;
-            il[i].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA;
+        int size;
+        for (size = 0; size < 4; size++) {
+            for (i = 0; i < HW_VSP_SLOTS; i++) {
+                memset(&il[i], 0, sizeof il[i]);
+                il[i].SemanticName = "ATTR";
+                il[i].SemanticIndex = (UINT)i;
+                il[i].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+                /* RE-SoT: slots past the pitch alias the first; the mapping
+                 * (hw_vsp_get) reads only the batch's own slots. */
+                il[i].AlignedByteOffset = i < (1 << size) ? (UINT)i * 16 : 0;
+                il[i].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA;
+            }
+            ID3D11Device_CreateInputLayout(s_hw.dev, il, HW_VSP_SLOTS,
+                                           ID3D10Blob_GetBufferPointer(b),
+                                           ID3D10Blob_GetBufferSize(b),
+                                           &s_hw.layout_prog[size]);
         }
-        ID3D11Device_CreateInputLayout(s_hw.dev, il, HW_VSP_SLOTS,
-                                       ID3D10Blob_GetBufferPointer(b),
-                                       ID3D10Blob_GetBufferSize(b),
-                                       &s_hw.layout_prog);
     }
     ID3D10Blob_Release(b);
-    if (!s_hw.layout_prog && e->vs) {
+    if ((!s_hw.layout_prog[0] || !s_hw.layout_prog[1] || !s_hw.layout_prog[2] || !s_hw.layout_prog[3]) && e->vs) {
         ID3D11VertexShader_Release(e->vs);
         e->vs = NULL;
     }
@@ -2283,7 +2355,7 @@ static void hw_vsp_finish(HwVsp *e, ID3DBlob *b)
  * while its cold programs compile too. RESOT_ASYNC_VSH=0 compiles in place
  * as before. This addresses cold-program hitches, not sustained scene cost. */
 #if RESOT_RUNTIME_DEMO || RESOT_RUNTIME_RETAIL
-typedef struct { HwVsp *e; char *src; size_t len; } HwVspJob;
+typedef struct { HwVsp *e; char *src; size_t len; HwTrPs *ps; } HwVspJob; /* RE-SoT: ps: a pixel shader job. */
 static HwVspJob s_vsp_jobs[HW_VSP_MAX];
 static LONG s_vsp_job_head, s_vsp_job_tail;   /* under s_vsp_job_cs */
 static HANDLE s_vsp_job_ev;
@@ -2293,7 +2365,7 @@ static DWORD WINAPI hw_vsp_worker(LPVOID unused)
 {
     (void)unused;
     for (;;) {
-        HwVspJob job = { NULL, NULL, 0 };
+        HwVspJob job = { NULL, NULL, 0, NULL };
         int have = 0;
         EnterCriticalSection(&s_vsp_job_cs);
         if (s_vsp_job_tail != s_vsp_job_head) {
@@ -2306,7 +2378,12 @@ static DWORD WINAPI hw_vsp_worker(LPVOID unused)
             WaitForSingleObject(s_vsp_job_ev, INFINITE);
             continue;
         }
-        {
+        if (job.ps) {
+            ID3DBlob *b = hw_compile_src(job.src, job.len, "ps_tr", "ps_4_0");
+            free(job.src);
+            InterlockedExchangePointer((PVOID volatile *)&job.ps->ready, b);
+            InterlockedExchange(&job.ps->pending, 0);
+        } else {
             ID3DBlob *b = hw_compile_src(job.src, job.len, "vs_prog", "vs_4_0");
             free(job.src);
             InterlockedExchangePointer((PVOID volatile *)&job.e->ready, b);
@@ -2327,12 +2404,17 @@ static int hw_vsp_async(void)
             if (!s_vsp_job_ev) {
                 on = 0;
             } else {
-                HANDLE th = CreateThread(NULL, 0, hw_vsp_worker, NULL, 0, NULL);
-                if (th) {
-                    SetThreadPriority(th, THREAD_PRIORITY_BELOW_NORMAL);
-                    CloseHandle(th);
-                } else {
-                    on = 0;
+                /* RE-SoT: two, so a slow program (up to 180 ms) does not hold up
+                 * the next ones while they run on the interpreter. */
+                int w;
+                for (w = 0; w < 2; w++) {
+                    HANDLE th = CreateThread(NULL, 0, hw_vsp_worker, NULL, 0, NULL);
+                    if (th) {
+                        SetThreadPriority(th, THREAD_PRIORITY_BELOW_NORMAL);
+                        CloseHandle(th);
+                    } else if (w == 0) {
+                        on = 0;
+                    }
                 }
             }
         }
@@ -2349,7 +2431,23 @@ static int hw_vsp_queue(HwVsp *e, char *src, size_t len)
     EnterCriticalSection(&s_vsp_job_cs);
     if (s_vsp_job_head - s_vsp_job_tail < HW_VSP_MAX) {
         HwVspJob *j = &s_vsp_jobs[s_vsp_job_head % HW_VSP_MAX];
-        j->e = e; j->src = src; j->len = len;
+        j->e = e; j->src = src; j->len = len; j->ps = NULL;
+        e->pending = 1;
+        s_vsp_job_head++;
+        ok = 1;
+    }
+    LeaveCriticalSection(&s_vsp_job_cs);
+    if (ok)
+        SetEvent(s_vsp_job_ev);
+    return ok;
+}
+static int hw_trps_queue(HwTrPs *e, char *src, size_t len)
+{
+    int ok = 0;
+    EnterCriticalSection(&s_vsp_job_cs);
+    if (s_vsp_job_head - s_vsp_job_tail < HW_VSP_MAX) {
+        HwVspJob *j = &s_vsp_jobs[s_vsp_job_head % HW_VSP_MAX];
+        j->e = NULL; j->src = src; j->len = len; j->ps = e;
         e->pending = 1;
         s_vsp_job_head++;
         ok = 1;
@@ -2361,6 +2459,11 @@ static int hw_vsp_queue(HwVsp *e, char *src, size_t len)
 }
 #else
 static int hw_vsp_async(void) { return 0; }
+static int hw_trps_queue(HwTrPs *e, char *src, size_t len)
+{
+    (void)e; (void)src; (void)len;
+    return 0;
+}
 static int hw_vsp_queue(HwVsp *e, char *src, size_t len)
 {
     (void)e; (void)src; (void)len;
@@ -2844,9 +2947,9 @@ static int hw_draw_program_batch(void)
     D3D11_MAPPED_SUBRESOURCE vmap, imap;
     uint8_t slot_attr[HW_VSP_SLOTS];
     const HwVsp *prog;
-    uint32_t n = s_gpu.idx_count, mask = 0, nslot = 0, a, i, nv = 0, ni = 0;
+    uint32_t n = s_gpu.idx_count, mask = 0, nslot = 0, a, i, nv = 0, ni = 0, stride, slots;
     HwSurface *bound;
-    float (*vout)[4];
+    uint8_t *vout;
     uint16_t *iout;
     LARGE_INTEGER t0, t1;
     HwReuse *reuse = NULL;                  /* RE-SoT: see HwReuse */
@@ -2962,7 +3065,10 @@ static int hw_draw_program_batch(void)
 
     QueryPerformanceCounter(&t0);
     reuse_ok = hw_reuse_key(slot_attr, nslot, &reuse_key, &reuse_content);
+    slots = nslot <= 1 ? 1 : nslot <= 2 ? 2 : nslot <= 4 ? 4 : HW_VSP_SLOTS;
+    stride = slots * 16;
     EnterCriticalSection(&s_hw.lock);
+    s_hw_prog_stride = stride;
     if (!(bound = hw_bind_draw_state(prog))) {
         LeaveCriticalSection(&s_hw.lock);
         return 1;
@@ -2976,7 +3082,7 @@ static int hw_draw_program_batch(void)
             hw_glow_dump_check(bound, 0);
             hw_trace_begin();
             ID3D11DeviceContext_DrawIndexed(s_hw.ctx, reuse->ni, reuse->ib_off / 2,
-                                            (INT)(reuse->vb_off / (uint32_t)sizeof(HwVertex)));
+                                            (INT)(reuse->vb_off / stride));
             hw_trace_end();
             s_hw.draws++;
             s_hw.gpu_vsh_batches++;
@@ -2991,7 +3097,7 @@ static int hw_draw_program_batch(void)
     }
     if (reuse) s_hw_reuse_misses++;
     if (!hw_ring_map(s_hw.vb, &s_hw.vb_off, HW_VB_BYTES,
-                        n * (uint32_t)sizeof(HwVertex), sizeof(HwVertex), &vmap)) {
+                        n * stride, sizeof(HwVertex), &vmap)) { /* RE-SoT: every pitch divides 128. */
         LeaveCriticalSection(&s_hw.lock);
         return 1;
     }
@@ -3000,7 +3106,7 @@ static int hw_draw_program_batch(void)
         LeaveCriticalSection(&s_hw.lock);
         return 1;
     }
-    vout = (float (*)[4])((uint8_t *)vmap.pData + s_hw.vb_off);
+    vout = (uint8_t *)vmap.pData + s_hw.vb_off;
     iout = (uint16_t *)((uint8_t *)imap.pData + s_hw.ib_off);
 
     if (++batch_id == 0) {
@@ -3016,9 +3122,9 @@ static int hw_draw_program_batch(void)
         remap[ix] = (uint16_t)nv;
         for (a = 0; a < nslot; a++)
             fetch_attr(&s_gpu.attr[slot_attr[a]], ix, in[a]);
-        for (; a < HW_VSP_SLOTS; a++)
+        for (; a < slots; a++)
             in[a][0] = in[a][1] = in[a][2] = in[a][3] = 0.0f;
-        memcpy(vout[nv * HW_VSP_SLOTS], in, sizeof in);   /* write-combined: no reads */
+        memcpy(vout + (size_t)nv * stride, in, stride);   /* write-combined: no reads */
         nv++;
     }
 #define HW_IDX(x, y, z) do { iout[ni] = remap[s_gpu.idx[x]]; \
@@ -3059,7 +3165,7 @@ static int hw_draw_program_batch(void)
         hw_glow_dump_check(bound, 0);
         hw_trace_begin();
         ID3D11DeviceContext_DrawIndexed(s_hw.ctx, ni, s_hw.ib_off / 2,
-                                        (INT)(s_hw.vb_off / (uint32_t)sizeof(HwVertex)));
+                                        (INT)(s_hw.vb_off / stride));
         hw_trace_end();
         s_hw.draws++;
         s_hw.gpu_vsh_batches++;
@@ -3077,7 +3183,7 @@ static int hw_draw_program_batch(void)
         for (a = 0; a < nslot; a++)
             reuse->attr[a] = s_gpu.attr[slot_attr[a]];
     }
-    s_hw.vb_off += nv * (uint32_t)sizeof(HwVertex);
+    s_hw.vb_off += nv * stride;
     s_hw.ib_off += ni * 2;
     s_hw_stat_verts += nv;
     LeaveCriticalSection(&s_hw.lock);
@@ -3643,6 +3749,18 @@ static void hw_flip(void)
     hw_diag_sample(); /* RE-SoT: F6 diagnostics */
     {
         /* Every five seconds: what a frame costs, so "slow" has a reason. */
+        /* RE-SoT: spikes too, which the average hides, as on the native encoders. */
+        static LONGLONG spike_last;
+        static double spike_worst;
+        static uint32_t spike_33, spike_100;
+        LARGE_INTEGER spike_now, spike_f;
+        QueryPerformanceCounter(&spike_now); QueryPerformanceFrequency(&spike_f);
+        if (spike_last) {
+            double spike_ms = 1000.0 * (double)(spike_now.QuadPart - spike_last) / (double)spike_f.QuadPart;
+            if (spike_ms > spike_worst) spike_worst = spike_ms;
+            spike_33 += spike_ms > 33.0; spike_100 += spike_ms > 100.0;
+        }
+        spike_last = spike_now.QuadPart;
         static DWORD t0;
         static uint64_t d0, tr0, up0, vs0, dr0, vx0, pr0, ex0, gb0, cb0;
         LARGE_INTEGER qf;
@@ -3676,6 +3794,9 @@ static void hw_flip(void)
                         exec_ms - (xbox_FramebufferDeferPresent() ? 0.0 : present_ms),
                         present_ms, frame_ms - exec_ms
                             - (xbox_FramebufferDeferPresent() ? present_ms : 0.0));
+                fprintf(stderr, "  [HW] frame spikes: worst %.1f ms, %u over 33 ms, %u over 100 ms\n",
+                        spike_worst, spike_33, spike_100);
+                spike_worst = 0; spike_33 = spike_100 = 0;
                 /* RE-SoT: cumulative batch reuse (HwReuse). */
                 fprintf(stderr, "  [HW] batch reuse: %llu hits, %llu misses\n",
                         (unsigned long long)s_hw_reuse_hits,
@@ -3713,7 +3834,8 @@ void nv2a_hw_idle_present(void)
         uint32_t movie_w, movie_h, movie_rect[4], movie_serial;
         DWORD interval = xbox_FramebufferOverlayGet(&movie_pixels,&movie_w,&movie_h,
                                                     movie_rect,&movie_serial) ? 0 : 100;
-        EnterCriticalSection(&s_hw.lock); ng_visibility_poll(); LeaveCriticalSection(&s_hw.lock);
+        /* RE-SoT: a title polling a report without drawing still gets it. */
+        nv2a_hw_native_visibility_kick();
         if (GetTickCount()-s_hw.last_flip_ms < interval) return;
         EnterCriticalSection(&s_hw.lock);
         if (!s_hw.pending_present && GetTickCount()-s_hw.last_flip_ms >= interval) { ng_compose(); ng_present(0); }
@@ -3725,8 +3847,10 @@ void nv2a_hw_idle_present(void)
         return;
 #if RESOT_RUNTIME_RETAIL
     /* RE-SoT: the title may be polling a report without submitting another
-     * frame. Nonblocking polling here lets that report finish independently. */
+     * frame. Nonblocking polling here lets that report finish independently,
+     * and the flush reports no longer force each (nv_hw_vis_kick) reaches it. */
     EnterCriticalSection(&s_hw.lock);
+    nv_hw_vis_kick(&s_hw_visibility, s_hw.ctx, 1);
     hw_visibility_poll();
     LeaveCriticalSection(&s_hw.lock);
 #endif

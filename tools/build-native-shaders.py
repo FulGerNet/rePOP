@@ -1,8 +1,9 @@
-"""Compile the shared NV2A shaders to DXIL and SPIR-V for SDL GPU.
+"""Compile the shared NV2A shaders to DXBC and SPIR-V for SDL GPU.
 
 No game data is used. Output is an ignored build artifact embedded in the host.
 """
 import argparse
+import ctypes
 import re
 import struct
 import subprocess
@@ -27,6 +28,26 @@ def require_core_spirv(path, data):
             name = data[(at + 1) * 4:(at + count) * 4].split(b"\0")[0].decode("ascii")
             raise RuntimeError(f"{path}: SPIR-V extension {name} needs a Vulkan device extension")
         at += count
+
+
+def compile_dxbc(dll, source, entry, profile):
+    """RE-SoT: a D3D12 pipeline cannot mix SM 5.1 with 6.0 (STATE_CREATION #1046),
+    and translated programs are fxc output, so every native D3D12 shader is SM 5.1."""
+    data = re.sub(r"\[\[vk::[^\]]*\]\]", "", source).encode("ascii")
+    code, errors = ctypes.c_void_p(), ctypes.c_void_p()
+    # OPTIMIZATION_LEVEL1 | IEEE_STRICTNESS, as hw_compile_src passes.
+    result = dll.D3DCompile(data, ctypes.c_size_t(len(data)), b"nv2a_hw", None, None, entry.encode(),
+                            profile.encode(), (1 << 14) | (1 << 13), 0, ctypes.byref(code), ctypes.byref(errors))
+    def blob(pointer):
+        # ID3DBlob: GetBufferPointer is vtable slot 3, GetBufferSize slot 4.
+        vtable = ctypes.cast(ctypes.cast(pointer, ctypes.POINTER(ctypes.c_void_p))[0],
+                             ctypes.POINTER(ctypes.c_void_p))
+        at = ctypes.WINFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)(vtable[3])(pointer)
+        size = ctypes.WINFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p)(vtable[4])(pointer)
+        return ctypes.string_at(at, size)
+    if result & 0x80000000:
+        raise RuntimeError(f"{entry} {profile}: {blob(errors).decode(errors='replace') if errors else '?'}")
+    return blob(code)
 
 
 def main():
@@ -88,6 +109,16 @@ def main():
     # A solid fill consumes no interpolants; DXC retains unused VO parameters
     # in DXIL signatures, which cannot link against the fullscreen BO vertex.
     hlsl = hlsl.replace("float4 ps_solid(VO i)", "float4 ps_solid()")
+    # RE-SoT: D3D12 compiles translated programs at run time (DXBC, SM 5.1) from
+    # this same layout; the Vulkan attributes below are not fxc syntax.
+    d3d12_source = hlsl
+    head = check.embedded(text, "s_hw_hlsl_vsp_head")
+    # RE-SoT: a translated program needs only the vertex half: fxc parses all of
+    # its source for each of the title's programs, at 30-180 ms each.
+    d3d12_vertex = (d3d12_source[:d3d12_source.index("struct VI")]
+                    + re.search(r"cbuffer VUC[^\n]*\n", d3d12_source)[0]
+                    + d3d12_source[d3d12_source.index("struct UI"):d3d12_source.index("static const float UB_INF")]
+                    + head[head.index("static const float VSH_INF"):head.index("VO vs_prog")])
     hlsl = re.sub(r"(Texture(?:2D|Cube)|SamplerState) (\w+) : register\(([ts])(\d+), space2\)",
                   lambda m: (f"[[vk::combinedImageSampler]][[vk::binding({m[4]}, 2)]] "
                              + m[0]), hlsl)
@@ -96,7 +127,7 @@ def main():
     if args.test_border:
         hlsl += "\nfloat4 ps_border_probe(BO i) : SV_Target { return guest_border(float4(0,0,0,1), i.uv*4.0-1.5, border_info[0], border[0]); }\n"
         hlsl += "\nVO vs_combiner_probe(uint id : SV_VertexID) { BO b=vs_blit(id); VO o=(VO)0; o.pos=b.pos; o.d0=float4(0.23,0.51,0.81,0.67); o.fog=float4(0.37,0,0,0); o.t0=float4(b.uv*1.5-0.25,0,1); return o; }\n"
-        hlsl += "\nfloat4 ps_combiner_compare(VO i) : SV_Target { return saturate(abs(ps_main(i)-(atest.x!=0?ps_simple_alpha(i):ps_simple(i)))*255.0); }\n"
+        hlsl += "\nfloat4 ps_combiner_compare(VO i) : SV_Target { float4 a=ps_main(i),b; if(atest.x!=0) b=ps_simple_alpha(i); else b=ps_simple(i); return saturate(abs(a-b)*255.0); }\n"
         hlsl += "\nfloat4 ps_vertex_probe(VO i) : SV_Target { return float4(i.d0.x,i.fog.x,i.t0.x,i.t0.y); }\n"
         # RE-SoT: compare screen-space reconstruction against homogeneous
         # clipping for a surface crossing the eye (negative w).
@@ -201,20 +232,23 @@ def main():
         entries += [("vs_depth_reference", "vs_4_0"), ("vs_depth_screen", "vs_4_0"), ("ps_depth_probe", "ps_4_0")]
         entries += [("ps_shadow_probe", "ps_4_0")] # RE-SoT: test-only production shadow helper.
         entries += [("vs_shadow_reference", "vs_4_0"), ("vs_shadow_caster", "vs_4_0"), ("ps_shadow_coverage", "ps_4_0")]
+    fxc = ctypes.WinDLL("d3dcompiler_47.dll")
     for entry, old_profile in entries:
-        for fmt in ("dxil", "spirv"):
+        source_path = small_src if entry == "vs_uber_small" else src
+        for fmt in ("dxbc", "spirv"):
             binary = output / f"{entry}.{fmt}"
-            cmd = [args.dxc, str(small_src if entry == "vs_uber_small" else src), "-E", entry, "-T", old_profile.replace("4_0", "6_0"),
-                   "-O2", "-Ges", "-Wno-ignored-attributes", "-Fo", str(binary)]
-            if fmt == "spirv":
+            if fmt == "dxbc":
+                data = compile_dxbc(fxc, source_path.read_text(encoding="ascii"), entry, old_profile.replace("4_0", "5_1"))
+                binary.write_bytes(data)
+            else:
                 # RE-SoT: no -fspv-reflect. It only adds SPV_GOOGLE_hlsl_functionality1
                 # and SPV_GOOGLE_user_type, which Vulkan allows only with the matching
                 # VK_GOOGLE_* device extensions SDL never enables. Mali r26/r32 (GitHub
                 # #8, #9) reject every pipeline with them; bindings are unchanged.
-                cmd += ["-spirv", "-fspv-target-env=vulkan1.0", "-fvk-use-dx-layout"]
-            subprocess.run(cmd, check=True)
-            data = binary.read_bytes()
-            if fmt == "spirv":
+                subprocess.run([args.dxc, str(source_path), "-E", entry, "-T", old_profile.replace("4_0", "6_0"),
+                                "-O2", "-Ges", "-Wno-ignored-attributes", "-Fo", str(binary),
+                                "-spirv", "-fspv-target-env=vulkan1.0", "-fvk-use-dx-layout"], check=True)
+                data = binary.read_bytes()
                 require_core_spirv(binary, data)
             header.append(f"static const unsigned char ng_{entry}_{fmt}[] = {{\n")
             header.extend(",".join(str(b) for b in data[i:i+32]) + ",\n" for i in range(0, len(data), 32))
@@ -228,6 +262,11 @@ def main():
         require_core_spirv(binary, data)
         header.append(f"static const unsigned char ng_ps_specialized_{limit}_spirv[] = {{\n")
         header.extend(",".join(str(b) for b in data[i:i+32]) + ",\n" for i in range(0,len(data),32))
+        header.append("};\n")
+    for name, value in (("ng_d3d12_hlsl", d3d12_source), ("ng_d3d12_vertex_hlsl", d3d12_vertex)):
+        data = value.encode("ascii") + b"\0"  # An array: the text passes C's string length limit.
+        header.append(f"static const char {name}[] = {{\n")
+        header.extend(",".join(str(b) for b in data[i:i+32]) + ",\n" for i in range(0, len(data), 32))
         header.append("};\n")
     header.append("static const unsigned char *ng_ps_specialized_source(unsigned stages, size_t *bytes) {\n")
     for limit in (1,2,4,8):

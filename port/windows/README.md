@@ -154,7 +154,7 @@ keyboard/mouse and controller look, including full deflection above 100%;
 the Android counterpart applies the same setting to touch look too.
 F7 Graphics selects `Direct3D 11`, `D3D12 (native)` or `Vulkan (native)`
 after restarting the game. The two native modes use SDL GPU's D3D12/Vulkan
-command encoders, with DXIL/SPIR-V shaders, native GPU resources and GPU draws.
+command encoders, with DXBC/SPIR-V shaders, native GPU resources and GPU draws.
 They do not create a D3D11 device or use D3D11On12/DXVK. Supported NV2A vertex
 programs run on the GPU; unsupported programs retain the CPU interpreter.
 

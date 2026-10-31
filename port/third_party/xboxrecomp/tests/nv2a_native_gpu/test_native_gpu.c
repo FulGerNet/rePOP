@@ -128,9 +128,9 @@ static int test_texture_border(SDL_GPUDevice *device, SDL_GPUShader *vs,
     SDL_GPUShader *ps;
     SDL_GPUGraphicsPipeline *pipeline;
     int run;
-    si.format=dx ? SDL_GPU_SHADERFORMAT_DXIL : SDL_GPU_SHADERFORMAT_SPIRV;
-    si.code=dx ? ng_ps_border_probe_dxil : ng_ps_border_probe_spirv;
-    si.code_size=dx ? sizeof ng_ps_border_probe_dxil : sizeof ng_ps_border_probe_spirv;
+    si.format=dx ? SDL_GPU_SHADERFORMAT_DXBC : SDL_GPU_SHADERFORMAT_SPIRV;
+    si.code=dx ? ng_ps_border_probe_dxbc : ng_ps_border_probe_spirv;
+    si.code_size=dx ? sizeof ng_ps_border_probe_dxbc : sizeof ng_ps_border_probe_spirv;
     si.entrypoint="ps_border_probe"; si.stage=SDL_GPU_SHADERSTAGE_FRAGMENT; si.num_uniform_buffers=1;
     ps=SDL_CreateGPUShader(device,&si); REQUIRE(ps);
     pi.vertex_shader=vs; pi.fragment_shader=ps; pi.primitive_type=SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
@@ -176,6 +176,7 @@ static int test_texture_border(SDL_GPUDevice *device, SDL_GPUShader *vs,
     return 0;
 }
 #include "test_simple_combiner.inc" /* RE-SoT: native shader differential readbacks. */
+#include "test_combiner_translate.inc" /* RE-SoT: HLSL combiner translation against ps_main. */
 #include "test_depth_clip.inc" /* RE-SoT: screen-space depth must survive eye-plane clipping. */
 #include "test_shadow_sample.inc" /* RE-SoT: keep the sampler's affine Q convention. */
 #include "test_shadow_caster.inc" /* RE-SoT: afc13cc must not clip depthless caster maps to empty. */
@@ -398,13 +399,13 @@ int main(int argc, char **argv)
     REQUIRE(SDL_ClaimWindowForGPUDevice(device,window));
     REQUIRE(SDL_ShowWindow(window));
     SDL_PumpEvents();
-    shader.format = dx ? SDL_GPU_SHADERFORMAT_DXIL : SDL_GPU_SHADERFORMAT_SPIRV;
-    shader.code = dx ? ng_vs_blit_dxil : ng_vs_blit_spirv;
-    shader.code_size = dx ? sizeof ng_vs_blit_dxil : sizeof ng_vs_blit_spirv;
+    shader.format = dx ? SDL_GPU_SHADERFORMAT_DXBC : SDL_GPU_SHADERFORMAT_SPIRV;
+    shader.code = dx ? ng_vs_blit_dxbc : ng_vs_blit_spirv;
+    shader.code_size = dx ? sizeof ng_vs_blit_dxbc : sizeof ng_vs_blit_spirv;
     shader.entrypoint = "vs_blit"; shader.stage = SDL_GPU_SHADERSTAGE_VERTEX;
     vs = SDL_CreateGPUShader(device,&shader); REQUIRE(vs);
-    shader.code = dx ? ng_ps_solid_dxil : ng_ps_solid_spirv;
-    shader.code_size = dx ? sizeof ng_ps_solid_dxil : sizeof ng_ps_solid_spirv;
+    shader.code = dx ? ng_ps_solid_dxbc : ng_ps_solid_spirv;
+    shader.code_size = dx ? sizeof ng_ps_solid_dxbc : sizeof ng_ps_solid_spirv;
     shader.entrypoint = "ps_solid"; shader.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
     shader.num_uniform_buffers = 1;
     ps = SDL_CreateGPUShader(device,&shader); REQUIRE(ps);
@@ -438,6 +439,7 @@ int main(int argc, char **argv)
     REQUIRE(!test_shadow_caster(device,dx,&pipeline,target,transfer));
     REQUIRE(!test_texture_border(device,vs,target,transfer,dx)); /* RE-SoT: actual shader on both GPUs. */
     REQUIRE(!test_simple_combiner(device,target,transfer,dx,0)); /* RE-SoT: specialization matches full interpreter. */
+    if(dx) REQUIRE(!test_combiner_translate(device,target,transfer));
     /* RE-SoT: targeted binding changes can run the real pass/texture/query
      * checks without repeating the unrelated 64-program optimizer stress. */
     if(!dx && !getenv("RESOT_GPU_BINDINGS_SMOKE")) REQUIRE(!test_simple_combiner(device,target,transfer,dx,2)); /* RE-SoT: frozen/optimized reference comparisons. */
