@@ -121,7 +121,7 @@ NTSTATUS __stdcall xbox_XeUnloadSection(PXBE_SECTION_HEADER Section)
  * SMBus. For recompilation, we return sensible defaults:
  *   - Region: North America
  *   - Video: NTSC, widescreen+HDTV enabled
- *   - Language: selected in reSOT Options / Launcher (English or Spanish)
+ *   - Language: selected in reSOT Options / Launcher (Xbox language ID 1-9)
  *   - Audio: Stereo, Dolby Digital
  *   - DVD Region: Region 1 (North America)
  * ============================================================================ */

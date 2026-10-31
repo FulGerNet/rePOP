@@ -9,16 +9,29 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
-/** The game-language values currently confirmed by the checked retail ISO. */
+/** Xbox EEPROM language IDs exposed for retail-ISO compatibility testing. */
 final class GameLanguage {
-    static final int ENGLISH = 1;
+    static final int ENGLISH = 1, LAST = 9;
     static final int SPANISH = 5;
 
-    static int next(int current) { return current == ENGLISH ? SPANISH : ENGLISH; }
+    static int next(int current) { return current >= LAST ? ENGLISH : Math.max(ENGLISH, current + 1); }
 
     static String label(int language) {
-        return language == SPANISH ? "Español" : "English";
+        switch (language) {
+        case 1: return "English";
+        case 2: return "Japanese";
+        case 3: return "German";
+        case 4: return "French";
+        case 5: return "Spanish";
+        case 6: return "Italian";
+        case 7: return "Korean";
+        case 8: return "Chinese";
+        case 9: return "Portuguese";
+        default: return "English";
+        }
     }
+
+    static boolean supported(int language) { return language >= ENGLISH && language <= LAST; }
 
     static int read(File directory, int fallback) {
         File ini = new File(directory, "resot-options.ini");
@@ -31,7 +44,7 @@ final class GameLanguage {
                     game = "[Game]".equalsIgnoreCase(trimmed);
                 } else if (game && trimmed.regionMatches(true, 0, "Language=", 0, 9)) {
                     int value = Integer.parseInt(trimmed.substring(9).trim());
-                    return value == ENGLISH || value == SPANISH ? value : fallback;
+                    return supported(value) ? value : fallback;
                 }
             }
         } catch (IOException | NumberFormatException ignored) { }
@@ -39,7 +52,7 @@ final class GameLanguage {
     }
 
     static boolean write(File directory, int language) {
-        if (language != ENGLISH && language != SPANISH) return false;
+        if (!supported(language)) return false;
         File ini = new File(directory, "resot-options.ini");
         File temp = new File(directory, "resot-options.ini.tmp");
         try {
