@@ -69,7 +69,7 @@
 #define BTN_H 56
 #define BTN_GAP 64
 #define BTN_Y 368
-#define MESSAGE_Y 510
+#define MESSAGE_Y 526
 #define FOOT_RULE_Y 560
 #define BAR_Y 420             /* installing: the progress bar */
 #define CANCEL_W 240
@@ -81,7 +81,7 @@
 #define WM_APP_EXTRACTED (WM_APP + 2)
 
 enum { GAME_NONE, GAME_DEMO, GAME_RETAIL, GAME_KINDS };
-enum { BTN_DEMO, BTN_GAME, BTN_ISO, BTN_GITHUB, BTN_CLOSE, BTN_CANCEL, BTN_COUNT };
+enum { BTN_DEMO, BTN_GAME, BTN_ISO, BTN_GITHUB, BTN_LANGUAGE, BTN_CLOSE, BTN_CANCEL, BTN_COUNT };
 
 typedef struct {
     int kind;                /* GAME_* */
@@ -120,6 +120,7 @@ static struct {
     int sub_w, head_w, badge_w;       /* widths of the spaced capitals */
     Button btn[BTN_COUNT];
     int hover, pressed, focus, tracking;
+    int game_language;
     Grain sand[N_SAND];
     uint32_t rng;
     ULONGLONG last_tick;
@@ -893,6 +894,7 @@ static void layout(void)
     SetRect(&L.btn[BTN_GAME].r, x0 + BTN_W + BTN_GAP, BTN_Y, x0 + 2 * BTN_W + BTN_GAP, BTN_Y + BTN_H);
     SetRect(&L.btn[BTN_ISO].r, WIN_W - 250, WIN_H - 62, WIN_W - 40, WIN_H - 34);
     SetRect(&L.btn[BTN_GITHUB].r, 40, WIN_H - 62, 330, WIN_H - 34);
+    SetRect(&L.btn[BTN_LANGUAGE].r, (WIN_W - 360) / 2, 490, (WIN_W + 360) / 2, 514);
     SetRect(&L.btn[BTN_CLOSE].r, WIN_W - 58, 18, WIN_W - 24, 52);
     SetRect(&L.btn[BTN_CANCEL].r, (WIN_W - CANCEL_W) / 2, CANCEL_Y, (WIN_W + CANCEL_W) / 2, CANCEL_Y + BTN_H);
     L.btn[BTN_CANCEL].visible = L.extracting;
@@ -904,6 +906,7 @@ static void layout(void)
     L.btn[BTN_GAME].enabled = L.inst[GAME_RETAIL].dir[0]
         && (L.this_kind == GAME_RETAIL || L.sibling_exists);
     L.btn[BTN_ISO].enabled = L.btn[BTN_GITHUB].enabled = 1;
+    L.btn[BTN_LANGUAGE].enabled = 1;
     L.btn[BTN_CLOSE].enabled = L.btn[BTN_CANCEL].enabled = 1;
     if (!L.btn[L.focus].enabled || !L.btn[L.focus].visible) {
         int mine = L.this_kind == GAME_DEMO ? BTN_DEMO : BTN_GAME;
@@ -976,6 +979,12 @@ static void render(void)
         twin((float)(cx + half), HEAD_Y + 9.0f, 4, 1);
         draw_button(BTN_DEMO);
         draw_button(BTN_GAME);
+        {
+            wchar_t language[96];
+            swprintf(language, 96, L"Game language: %ls  \x25C2  \x25B8",
+                     L.game_language == 5 ? L"Espa\x00F1ol" : L"English");
+            link_at(BTN_LANGUAGE, language, DT_CENTER);
+        }
         for (i = BTN_ISO; i <= BTN_GITHUB; ++i)
             if (L.hover == i || L.focus == i) {
                 RECT r = L.btn[i].r;
@@ -1498,6 +1507,20 @@ static void activate(int id)
     case BTN_GAME: start(GAME_RETAIL); break;
     case BTN_ISO: begin_install(); break;
     case BTN_GITHUB: ShellExecuteW(L.hwnd, L"open", GITHUB_URL, NULL, NULL, SW_SHOWNORMAL); break;
+    case BTN_LANGUAGE: {
+        char ini[MAX_PATH], value[8];
+        int next = L.game_language == 1 ? 5 : 1;
+        ini_path(ini, sizeof ini);
+        sprintf_s(value, sizeof value, "%d", next);
+        if (ini[0] && WritePrivateProfileStringA("Game", "Language", value, ini)) {
+            L.game_language = next;
+            L.error[0] = 0;
+        } else {
+            wcscpy_s(L.error, 400, L"Could not save the language in resot-options.ini.");
+        }
+        InvalidateRect(L.hwnd, NULL, FALSE);
+        break;
+    }
     case BTN_CLOSE:
         if (L.extracting) { cancel_install(); if (!L.cancel) break; }
         L.result = RESOT_LAUNCH_QUIT;
@@ -1518,7 +1541,7 @@ static int hit(int x, int y)
 
 static void move_focus(int step)
 {
-    static const int order[] = {BTN_DEMO, BTN_GAME, BTN_ISO, BTN_GITHUB};
+    static const int order[] = {BTN_DEMO, BTN_GAME, BTN_LANGUAGE, BTN_ISO, BTN_GITHUB};
     int i, at = 0, n = (int)(sizeof order / sizeof order[0]);
     for (i = 0; i < n; ++i) if (order[i] == L.focus) at = i;
     for (i = 1; i <= n; ++i) {
@@ -1569,8 +1592,13 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wp, LPARAM l
     case WM_KEYDOWN:
         if (wp == VK_ESCAPE) activate(BTN_CLOSE);
         else if (wp == VK_RETURN || wp == VK_SPACE) activate(L.extracting ? BTN_CANCEL : L.focus);
-        else if (wp == VK_LEFT || (wp == VK_TAB && GetKeyState(VK_SHIFT) < 0)) move_focus(-1);
-        else if (wp == VK_RIGHT || wp == VK_TAB) move_focus(1);
+        else if (wp == VK_LEFT || (wp == VK_TAB && GetKeyState(VK_SHIFT) < 0)) {
+            if (L.focus == BTN_LANGUAGE && wp != VK_TAB) activate(BTN_LANGUAGE);
+            else move_focus(-1);
+        } else if (wp == VK_RIGHT || wp == VK_TAB) {
+            if (L.focus == BTN_LANGUAGE && wp != VK_TAB) activate(BTN_LANGUAGE);
+            else move_focus(1);
+        }
         return 0;
     case WM_TIMER: {
         if(!L.extracting && InterlockedCompareExchange(&s_update.ready,0,1)==1) {
@@ -1695,6 +1723,12 @@ int resot_launcher_run(const char *target_id, char *game_dir, size_t game_dir_si
     if (!GetModuleFileNameW(NULL, L.exe_path, MAX_PATH) || !(slash = wcsrchr(L.exe_path, L'\\')))
         return RESOT_LAUNCH_HERE;   /* nothing to show this from: keep the old path */
     wcsncpy_s(L.exe_dir, MAX_PATH, L.exe_path, (size_t)(slash - L.exe_path));
+    {
+        char ini[MAX_PATH];
+        ini_path(ini, sizeof ini);
+        L.game_language = ini[0] ? (int)GetPrivateProfileIntA("Game", "Language", 1, ini) : 1;
+        if (L.game_language != 1 && L.game_language != 5) L.game_language = 1;
+    }
     /* The other target's executable: this one's name with the other ID
      * (sot-xbox-demo.exe <-> sot-xbox-retail.exe, -abi builds alike). */
     {

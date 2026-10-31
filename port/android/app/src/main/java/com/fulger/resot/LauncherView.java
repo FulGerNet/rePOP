@@ -46,12 +46,13 @@ import java.util.Random;
  * belongs in launcher.c too, and the reverse.
  */
 final class LauncherView extends View {
-    static final int BTN_DEMO = 0, BTN_GAME = 1, BTN_ISO = 2, BTN_GITHUB = 3, BTN_CLOSE = 4, BTN_CANCEL = 5, BTN_DRIVER = 6, BTN_LOGS = 7, BTN_COUNT = 8;
+    static final int BTN_DEMO = 0, BTN_GAME = 1, BTN_ISO = 2, BTN_GITHUB = 3, BTN_CLOSE = 4,
+        BTN_CANCEL = 5, BTN_DRIVER = 6, BTN_LOGS = 7, BTN_LANGUAGE = 8, BTN_COUNT = 9;
     // launcher.c's layout, on its 1000 x 640 plane
     private static final float BASE_W = 1000, BASE_H = 640;
     private static final float LOGO_Y = 0, LOGO_SIZE = 132, TEAL_X = 182, TITLE_Y = 122, TITLE_H = 124, SUB_Y = 256,
         BADGE_Y = 272, BADGE_H = 26, HEAD_RULE_Y = 320, HEAD_Y = 336, BTN_W = 300, BTN_H = 56, BTN_GAP = 64,
-        BTN_Y = 368, MESSAGE_Y = 510, BAR_Y = 420, CANCEL_W = 240, CANCEL_Y = 498;
+        BTN_Y = 368, MESSAGE_Y = 516, BAR_Y = 420, CANCEL_W = 240, CANCEL_Y = 498;
     private static final String BADGE_TEXT = "Recompiled", SUB_TEXT = "the sands of time";
     private final String versionLabel;
     // the ornament of the ground (launcher.c, ornament())
@@ -71,6 +72,7 @@ final class LauncherView extends View {
         final String[] line = new String[2], dir = new String[2];
         final boolean[] installed = new boolean[2], exact = new boolean[2];
         String error = "", note = "";
+        int gameLanguage = GameLanguage.SPANISH;
         boolean extracting;
         String isoName = "", status = "";
         long done, total;
@@ -171,6 +173,7 @@ final class LauncherView extends View {
         buttons[BTN_DRIVER].set(cx - 120, H - 62, cx + 120, H - 34);
         buttons[BTN_CLOSE].set(W - 58 - insetRight, 18, W - 24 - insetRight, 52);
         buttons[BTN_CANCEL].set(cx - CANCEL_W / 2, top + CANCEL_Y, cx + CANCEL_W / 2, top + CANCEL_Y + BTN_H);
+        buttons[BTN_LANGUAGE].set(cx - 180, top + 490, cx + 180, top + 514);
         buttons[BTN_LOGS].set(insetLeft+24,20,insetLeft+132,48);
     }
 
@@ -186,6 +189,7 @@ final class LauncherView extends View {
         enabled[BTN_ISO] = enabled[BTN_GITHUB] = enabled[BTN_CLOSE] = enabled[BTN_CANCEL] = true;
         enabled[BTN_DRIVER] = true;
         enabled[BTN_LOGS] = true;
+        enabled[BTN_LANGUAGE] = true;
         if (!enabled[focus] || !visible(focus))
             focus = state.extracting ? BTN_CANCEL : enabled[BTN_DEMO] ? BTN_DEMO : enabled[BTN_GAME] ? BTN_GAME : BTN_ISO;
         invalidate();
@@ -563,7 +567,8 @@ final class LauncherView extends View {
      *  gold plate with navy lettering. */
     private void button(Canvas c, int id, String label) {
         RectF r = buttons[id];
-        float w = r.width(), h = r.height(), tip = h * 0.32f, size = atlantis ? 28 : 24;
+        float w = r.width(), h = r.height(), tip = h * 0.32f,
+              size = id == BTN_LANGUAGE ? 16 : atlantis ? 28 : 24;
         boolean on = enabled[id], hot = on && (hover == id || pressed == id), focused = on && focus == id;
         if (!on) {
             plateFill(c, r.left, r.top, w, h, tip, 0x0C1424, 0x080E1A, 0.85f);
@@ -680,6 +685,7 @@ final class LauncherView extends View {
             twin(canvas, cx + half, head, 4, true);
             button(canvas, BTN_DEMO, "Start Demo");
             button(canvas, BTN_GAME, "Start Game");
+            button(canvas, BTN_LANGUAGE, "Game language: " + GameLanguage.label(state.gameLanguage) + "  ◂  ▸");
             installText(canvas, 0, buttons[BTN_DEMO]);
             installText(canvas, 1, buttons[BTN_GAME]);
             String message = !state.error.isEmpty() ? state.error : state.note;
@@ -760,7 +766,8 @@ final class LauncherView extends View {
     @Override public boolean performClick() { super.performClick(); return true; }
 
     private void moveFocus(int step) {
-        int[] order = state.extracting ? new int[] { BTN_CANCEL, BTN_LOGS } : new int[] { BTN_DEMO, BTN_GAME, BTN_ISO, BTN_DRIVER, BTN_GITHUB, BTN_LOGS };
+        int[] order = state.extracting ? new int[] { BTN_CANCEL, BTN_LOGS }
+            : new int[] { BTN_DEMO, BTN_GAME, BTN_LANGUAGE, BTN_ISO, BTN_DRIVER, BTN_GITHUB, BTN_LOGS };
         int at = 0;
         for (int i = 0; i < order.length; i++) if (order[i] == focus) at = i;
         for (int i = 1; i <= order.length; i++) {
@@ -771,8 +778,14 @@ final class LauncherView extends View {
 
     @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
         switch (keyCode) {
-        case KeyEvent.KEYCODE_DPAD_LEFT: case KeyEvent.KEYCODE_DPAD_UP: moveFocus(-1); return true;
-        case KeyEvent.KEYCODE_DPAD_RIGHT: case KeyEvent.KEYCODE_DPAD_DOWN: case KeyEvent.KEYCODE_TAB: moveFocus(1); return true;
+        case KeyEvent.KEYCODE_DPAD_LEFT:
+            if (focus == BTN_LANGUAGE) listener.onActivate(BTN_LANGUAGE); else moveFocus(-1);
+            return true;
+        case KeyEvent.KEYCODE_DPAD_RIGHT:
+            if (focus == BTN_LANGUAGE) listener.onActivate(BTN_LANGUAGE); else moveFocus(1);
+            return true;
+        case KeyEvent.KEYCODE_DPAD_UP: moveFocus(-1); return true;
+        case KeyEvent.KEYCODE_DPAD_DOWN: case KeyEvent.KEYCODE_TAB: moveFocus(1); return true;
         case KeyEvent.KEYCODE_DPAD_CENTER: case KeyEvent.KEYCODE_ENTER: case KeyEvent.KEYCODE_BUTTON_A:
         case KeyEvent.KEYCODE_BUTTON_START: case KeyEvent.KEYCODE_SPACE:
             listener.onActivate(focus); return true;

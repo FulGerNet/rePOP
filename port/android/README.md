@@ -1,13 +1,13 @@
 # reSOT for Android
 
-Local experiment (2026-10-31): Android now reports Xbox language Spanish
-(`XC_LANGUAGE=5`); Windows keeps English. This requests the game's Spanish
-text table and does not translate missing assets. The ISO has the supported
-retail XBE hash and was already confirmed by the user to run in the released
-APK. Gradle assembled the debug APK; its first packaging attempt stopped at
-the official-certificate check. The local debug pin and side-by-side package
-ID are configured. The user installed the experimental APK and confirms that
-it runs in Spanish; broader gameplay coverage was not recorded.
+The launcher now lets the player choose English or Español for the game.
+It saves the Xbox language ID (English `1`, Spanish `5`) in
+`resot-options.ini` under `[Game] Language`; the selected text takes effect
+when the next game session starts. Android defaults to Español and Windows to
+English. These are the two languages confirmed in the supported retail ISO;
+this requests the game's own text and does not translate missing assets. The
+user confirms that the Spanish build starts and runs in Spanish; broader
+gameplay coverage was not recorded.
 
 After 0.3.4: the Vulkan shaders no longer declare the SPIR-V extensions
 `SPV_GOOGLE_hlsl_functionality1` / `SPV_GOOGLE_user_type`, which older Mali
