@@ -7,9 +7,10 @@ import java.security.cert.X509Certificate;
 
 /** Offline verification, shared with the release packaging regression test. */
 public final class ReleaseTrust {
-    // Public certificate fingerprint, not a key. Preserve existing update identity.
+    // Local debug certificate fingerprint for the Spanish experiment. Do not
+    // use this fork's pin for an official release or publisher update.
     public static final String CERT_SHA256 =
-        "d96fbfb5607a0fa189f1422d061d071e050910b7c478c5bf4ebd98cae6d92bb4";
+        "395a300d8e49ecff2b4f90d2f9138267925d77f5dbb4e5dfd7562375a632f8f3";
     public enum Status { TRUSTED, MODIFIED, UNAVAILABLE }
 
     public static Status verify(File apk, int platform) {

@@ -120,7 +120,7 @@ NTSTATUS __stdcall xbox_XeUnloadSection(PXBE_SECTION_HEADER Section)
  * SMBus. For recompilation, we return sensible defaults:
  *   - Region: North America
  *   - Video: NTSC, widescreen+HDTV enabled
- *   - Language: English
+ *   - Language: English on Windows; Spanish in the experimental Android build
  *   - Audio: Stereo, Dolby Digital
  *   - DVD Region: Region 1 (North America)
  * ============================================================================ */
@@ -136,9 +136,14 @@ NTSTATUS __stdcall xbox_ExQueryNonVolatileSetting(
 
     switch (ValueIndex) {
     case XC_LANGUAGE:
-        /* English = 1 */
+        /* RE-SoT: Xbox language IDs are English = 1, Spanish = 5. Keep
+         * Windows at its existing default; request Spanish on Android. */
         if (ValueLength >= sizeof(ULONG)) {
+#if defined(__ANDROID__)
+            *(PULONG)Value = 5;
+#else
             *(PULONG)Value = 1;
+#endif
             if (Type) *Type = 4; /* REG_DWORD */
             if (ResultLength) *ResultLength = sizeof(ULONG);
         }
