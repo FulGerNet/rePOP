@@ -12,7 +12,6 @@
 #include "nv2a_native_compat.h" /* RE-SoT: bounded device workaround; environment override for A/B. */
 #include "nv2a_texture_probe.h" /* RE-SoT: separate source/upload/mip corruption using readbacks. */
 #include "resot_geometry_cache.h" /* RE-SoT: reuse immutable input geometry, keep per-draw constants live. */
-#include "resot_hd_font.h" /* RE-SoT: an HD menu font made from the title's sheet. */
 #include "nv2a_hw_native_visibility.inc"
 static NgVisibility s_ng_visibility; /* RE-SoT: retail-only counting, shared native drivers. */
 static int s_ng_compat; /* RE-SoT: reference GPU shaders, not the CPU vertex interpreter. */
@@ -43,6 +42,7 @@ typedef struct {
     /* RE-SoT: guest RAM under the target when the GPU last drew it (see
      * ng_surface_stale); the host image lives only on the host. */
     uint32_t bytes, ram_hash, ram_frame, ram_checked;
+    int ram_stale; /* RE-SoT: RAM alias validity is independent of the displayed GPU image. */
 } NgSurface;
 typedef struct {
     SDL_GPUTexture *image;
@@ -173,7 +173,6 @@ static struct {
     int vc_valid, pc_valid;
     /* RE-SoT: overlay and F5/F6 panel images, kept while their size holds. */
     SDL_GPUTexture *overlay, *panel;
-    SDL_GPUTexture *e3logo; /* RE-SoT: demo menu logo (ng_compose) */
     uint32_t overlay_w, overlay_h, overlay_serial, panel_w, panel_h;
     DWORD movie_log;
     uint32_t movie_composes; /* RE-SoT: distinguish movie repaint cadence from guest flips. */
@@ -685,11 +684,12 @@ static int ng_init(const char *backend)
             SDL_SetError("retail requires reSOT native queries; run tools/setup-native-gpu.ps1"); goto fail;
         }
         s_ng_visibility.device = s_ng.device; s_ng_visibility.api = api;
-        /* RE-SoT: user reports a slowdown after the Vulkan pooling revision;
-         * same-scene A/B has substantial drift and no reproducible pool win.
-         * Restore Vulkan allocation/retirement; D3D12 retains heap reuse.
-         * Developer control can still compare both without dropping queries. */
-        s_ng_visibility.pool_disabled = s_ng.active == 100;
+        /* RE-SoT: the same-scene A/B found no reproducible pool win or loss,
+         * while the only two NVIDIA driver faults (nvoglv64+0xED6415, 2026-10-30)
+         * came with one VkQueryPool created and destroyed per query, ~2400/s.
+         * Not proven the cause: reuse removes that churn from the driver, and
+         * the developer control below still selects the old policy (bit 1). */
+        s_ng_visibility.pool_disabled = 0;
         probe = api->create(s_ng.device);
         if (!probe) goto fail;
         api->destroy(s_ng.device,probe);
@@ -844,23 +844,30 @@ static uint32_t ng_surface_ram_hash(const NgSurface *s)
  * map's texture at the old target's address showed the old host image.
  * Last writer wins, at frame granularity: the RAM is fingerprinted the
  * first time the GPU draws the target in a frame, and compared once a frame
- * when it is sampled. A changed fingerprint retires the target. */
+ * when it is sampled. A changed fingerprint retires only the sampling alias:
+ * the completed GPU image can still be the scanout source. */
 static int ng_surface_stale(NgSurface *s)
 {
-    if (s->ram_checked == s_hw.frame + 1) return 0;
+    /* RE-SoT: current-frame GPU work is the producer for render-to-texture
+     * effects. Guest RAM can already be prepared for a later submission.
+     * The 2026-10-30 retail Vulkan log repeatedly invalidated 80104000,
+     * including the front image, causing alternating black presentations. */
+    if (s->frame == s_hw.frame) return 0;
+    if (s->ram_checked == s_hw.frame + 1) return s->ram_stale;
     s->ram_checked = s_hw.frame + 1;
+    if (s->ram_stale) return 1;
     if (ng_surface_ram_hash(s) == s->ram_hash) return 0;
+    s->ram_stale = 1;
     {
         static unsigned told;
         if (told++ < 16)
             fprintf(stderr, "[HW native] render target %08X %ux%u rewritten by the CPU:"
                     " sampled from guest RAM\n", s->offset, s->w, s->h);
     }
-    ng_flush_draws(); /* RE-SoT: queued draws still own this image. */
-    SDL_ReleaseGPUTexture(s_ng.device, s->color);
-    if (s_ng.front == s) s_ng.front = NULL;
-    if (s_ng.largest == s) s_ng.largest = NULL;
-    memset(s, 0, sizeof *s);
+    /* RE-SoT: ng_texture now decodes the guest image at this address, but
+     * queued draws and presentation retain their completed GPU resource.
+     * ng_surface reuses/evicts it normally; a new GPU write restores its
+     * sampling alias in ng_mark. Never clear front/largest here. */
     return 1;
 }
 #endif
@@ -871,6 +878,7 @@ static void ng_mark(NgSurface *s)
         s->ram_frame = s_hw.frame + 1;
         s->ram_hash = ng_surface_ram_hash(s);
         s->ram_checked = 0;
+        s->ram_stale = 0; /* RE-SoT: this GPU producer owns the alias again. */
     }
 #endif
     s->frame = s_hw.frame;
@@ -930,10 +938,6 @@ static SDL_GPUTexture *ng_depth(NgSurface *s)
     depth->offset = s_gpu.zeta_offset; depth->w = w; depth->h = h;
     return s->depth;
 }
-#if RESOT_RUNTIME_DEMO
-static uint32_t s_e3_logo[256*64]; /* RE-SoT: the E3 logo texture, upright */
-static int s_e3_logo_ready;
-#endif
 static SDL_GPUTexture *ng_texture(int stage, NgSurface *target)
 {
     const Texture *t = &s_gpu.texs[stage];
@@ -989,45 +993,14 @@ static SDL_GPUTexture *ng_texture(int stage, NgSurface *target)
     for (face = 0; face < layers; face++)
         hw_decode_texture(t, t->cube ? face*tex_face_stride(t) : 0,
             px + (size_t)face*t->width*t->height);
-    /* RE-SoT: the menu font sheet becomes an HD image with the same layout,
-     * made from it (resot_hd_font.h); the image is decoded first so its size
-     * is known before the host image is made. */
+    /* RE-SoT: same HD font and original menu-logo policy as D3D11. */
     {
-        int hd = t->cube ? 0 : resot_hd_font_match(px, t->width, t->height);
-        uint32_t *big = hd ? resot_hd_font_pixels(px) : NULL;
-        if (big) { free(px); px = big; w = RESOT_HD_FONT_W; h = RESOT_HD_FONT_H; }
-        else { hd = 0; w = t->width; h = t->height; }
+        int hd;
+        w = t->width; h = t->height;
+        px = resot_ui_texture_pixels(px, &w, &h, t->cube, &hd);
         if (reuse_image && c->hd != hd) reuse_image = 0;
         c->hd = hd;
     }
-#if RESOT_RUNTIME_DEMO
-    /* RE-SoT: the E3 "Prince of Persia" logo is hidden, at the user's request:
-     * with reSOT's menu entries it was drawn partly past the right edge, and
-     * neither the cause nor its draw was found. Texture 0x0B0044F9 (256x64
-     * BGRA8 in GameInterface, CameraAndGlobal, Menu and _Start_Demo, beside
-     * the GAO E3_WorkInProgress 0x0B0044F7), recognised by the FNV-1a hash
-     * of its decoded pixels, is uploaded fully transparent. Every draw of it
-     * goes, including any menu use. */
-    if (!t->cube && t->width == 256 && t->height == 64) {
-        static unsigned told;
-        uint32_t fnv = 2166136261u;
-        const uint8_t *b = (const uint8_t *)px;
-        size_t k;
-        for (k = 0; k < (size_t)256*64*4; k++) fnv = (fnv ^ b[k]) * 16777619u;
-        if (fnv == 0x72C687A6u) {
-            /* Kept, upright (the sheet is stored bottom-up), for the menu
-             * logo ng_compose draws; then hidden in the game's own draws. */
-            uint32_t row;
-            for (row = 0; row < 64; row++)
-                memcpy(s_e3_logo + (size_t)row*256, px + (size_t)(63 - row)*256, 256*4);
-            s_e3_logo_ready = 1;
-            memset(px, 0, (size_t)256*64*4);
-        }
-        if (told++ < 8)
-            fprintf(stderr, "[LOGO] 256x64 texture %08X: hash %08X%s\n", t->offset, fnv,
-                    fnv == 0x72C687A6u ? ", the E3 logo: hidden" : "");
-    }
-#endif
     if (c->image && !reuse_image) SDL_ReleaseGPUTexture(s_ng.device, c->image);
     if (t->levels > 1 && tex_size_from_format(t->color)) {
         uint32_t extent = w > h ? w : h;
@@ -1690,6 +1663,7 @@ static void ng_draw_state(NgSurface *s, SDL_GPUTexture *depth, NgDraw *out)
     key.depth = depth ? 2 | (s_gpu.depth_test ? 1 : 0) : 0;
     key.write = depth && s_gpu.depth_test && s_gpu.depth_mask;
     key.cmp = s_gpu.depth_func;
+    float halo_max_depth = 1.0f;
     key.ccw = s_hw.front_face == 0x901;
     key.cull = s_hw.cull_enable && !s_hw.nocull ? s_hw.cull_face == 0x404 ? 2 : s_hw.cull_face == 0x405 ? 1 : 0 : 0;
 #if RESOT_RUNTIME_RETAIL
@@ -1706,18 +1680,19 @@ static void ng_draw_state(NgSurface *s, SDL_GPUTexture *depth, NgDraw *out)
      * their query probes remain excluded by the shared retail predicate. */
     if (hw_retail_halo(s->w,s->h,depth != NULL,s_ng_visibility.enabled)) {
         key.cmp = 0x203; s_ng.flare_depth_draws++;
+        halo_max_depth = hw_halo_max_depth(); /* RE-SoT: same as D3D11. */
         /* RE-SoT: the captured DXT1 image has a soft star-shaped falloff.
          * This material doubles RGB (OCW 0x00010C00) before ONE/ONE and
          * the bloom chain, clipping that falloff into a white disc. Keep
          * its original image and visibility modulation, but reduce only
          * this final halo's emission (net 0.5x texture RGB). This is a
          * presentation adjustment, not a general combiner correction. */
-        out->pc.fac0[0][0] *= 0.25f;
-        out->pc.fac0[0][1] *= 0.25f;
-        out->pc.fac0[0][2] *= 0.25f;
+        hw_halo_emission(out->pc.fac0[0]);
     }
+    else if (hw_retail_halo_probe(s->w,s->h,depth != NULL,s_ng_visibility.enabled))
+        halo_max_depth = hw_halo_max_depth(); /* RE-SoT: same as D3D11. */
 #endif
-    vp.x = vp.y = 0; vp.w = (float)ng_px(s->w,s->sc); vp.h = (float)ng_py(s->h,s->sc); vp.min_depth = 0; vp.max_depth = 1;
+    vp.x = vp.y = 0; vp.w = (float)ng_px(s->w,s->sc); vp.h = (float)ng_py(s->h,s->sc); vp.min_depth = 0; vp.max_depth = halo_max_depth;
     sc.x = ng_px(s_gpu.clip_x,s->sc); sc.y = ng_py(s_gpu.clip_y,s->sc);
     sc.w = ng_px(s_gpu.clip_x+s_gpu.clip_w,s->sc)-sc.x; sc.h = ng_py(s_gpu.clip_y+s_gpu.clip_h,s->sc)-sc.y;
     out->key = key; out->vp = vp; out->sc = sc;
@@ -2115,42 +2090,6 @@ static void ng_clear(uint32_t param)
     }
     s_gpu.clears++;
 }
-#if RESOT_RUNTIME_DEMO
-/* RE-SoT: the E3 build's menu showed the "Prince of Persia / The Sands of
- * Time" logo at the top left (user's screenshot); this demo's menu does
- * not draw it. While a menu is up (resot_menu_scene 1, main or pause), the
- * game's own logo texture, kept by ng_texture, is drawn over the picture
- * (px, py, pw, ph in s_ng.composed), in the 4:3 frame: x 9..57 %, from
- * 8.5 % down. Full opacity by the user's choice: the sheet's alpha times
- * RESOT_E3_LOGO_ALPHA (0..1, default 1). */
-static void ng_e3_logo(float px, float py, float pw, float ph)
-{
-    extern int resot_menu_scene(void);
-    float mw = ph*(4.0f/3.0f), mx = px+(pw-mw)*0.5f;
-    SDL_GPUViewport lv;
-    if (!s_e3_logo_ready || resot_menu_scene() != 1) return;
-    if (!s_ng.e3logo) {
-        const char *env = getenv("RESOT_E3_LOGO_ALPHA");
-        float k = env ? (float)atof(env) : 1.0f;
-        uint32_t i, amin = 255, amax = 0;
-        if (k < 0) k = 0; if (k > 1) k = 1;
-        for (i = 0; i < 256*64; i++) {
-            uint32_t a = s_e3_logo[i] >> 24;
-            if (a < amin) amin = a; if (a > amax) amax = a;
-            s_e3_logo[i] = (s_e3_logo[i] & 0x00FFFFFFu) | ((uint32_t)(a*k + 0.5f) << 24);
-        }
-        s_ng.e3logo = ng_image(256,64,0,1,SDL_GPU_TEXTUREUSAGE_SAMPLER,
-                               SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
-        ng_upload(s_ng.e3logo, s_e3_logo, 256, 64, 1, 0);
-        fprintf(stderr, "[LOGO] E3 logo drawn over the menu: sheet alpha %u..%u, x %.2f\n",
-                amin, amax, k);
-    }
-    lv.x = mx + 0.09f*mw; lv.y = py + 0.085f*ph;
-    lv.w = 0.48f*mw; lv.h = lv.w * 64.0f/256.0f;
-    lv.min_depth = 0; lv.max_depth = 1;
-    ng_blit(s_ng.composed,SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,s_ng.e3logo,&lv,NULL,3,15,NULL,0);
-}
-#endif
 static void ng_compose(void)
 {
     ng_flush_draws(); /* RE-SoT: snapshot the completed guest surface. */
@@ -2200,12 +2139,6 @@ static void ng_compose(void)
             if(!copy) ng_fail("frame snapshot");
             SDL_CopyGPUTextureToTexture(copy,&from,&to,fw,fh,1,true);
             SDL_EndGPUCopyPass(copy);
-#if RESOT_RUNTIME_DEMO
-            /* RE-SoT: the menu logo goes on the snapshot too; it showed only
-             * when this path was skipped (frame larger than the display, the
-             * 1440 setting on the user's phone). */
-            ng_e3_logo(0, 0, (float)fw, (float)fh);
-#endif
             s_ng.movie_log=0; s_ng.movie_composes=0;
             s_hw.pending_present=1;
             return;
@@ -2233,9 +2166,6 @@ static void ng_compose(void)
     vp.x = px; vp.y = py; vp.w = pw; vp.h = ph; vp.min_depth = 0; vp.max_depth = 1;
     if (s_ng.front)
         ng_blit(s_ng.composed, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, s_ng.front->color, &vp, NULL, 1, 15, NULL, 1);
-#if RESOT_RUNTIME_DEMO
-    if (s_ng.front) ng_e3_logo(px, py, pw, ph); /* RE-SoT */
-#endif
     if (xbox_FramebufferOverlayGet(&pixels, &w, &h, rect, &serial) && w && h) {
         /* RE-SoT: movies often issue no FLIP_STALL; guest FPS cannot measure
          * their presenter. Report compositions, not claimed decoded frames. */
@@ -2480,7 +2410,11 @@ static int ng_readback(uint32_t *dst, uint32_t w, uint32_t h)
     if (s_ng_visibility.pending) ng_submit_encoded(); /* RE-SoT: query fences retain their own ownership. */
     copy = SDL_BeginGPUCopyPass(ng_cmd()); SDL_DownloadFromGPUTexture(copy,&src,&out); SDL_EndGPUCopyPass(copy);
     fence = SDL_SubmitGPUCommandBufferAndAcquireFence(s_ng.cmd);
-    s_ng.cmd = NULL; s_ng.vertex_offset = s_ng.index_offset = 0; s_ng.command_samplers = 0;
+    /* RE-SoT: readback submits commands, it does not retire cached geometry.
+     * Keep append positions, as ng_submit_encoded does. Resetting them here
+     * reused cached offsets after cycling/overwriting their buffers, causing
+     * intermittent distorted geometry and colors during screenshot capture. */
+    s_ng.cmd = NULL; s_ng.command_samplers = 0;
     s_ng.vc_valid = s_ng.pc_valid = 0;
     s_ng.last_cslot = s_ng.last_pslot = -1;
     if (!fence) ng_fail("readback fence");

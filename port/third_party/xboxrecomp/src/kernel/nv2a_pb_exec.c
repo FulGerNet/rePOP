@@ -2203,6 +2203,132 @@ extern uint64_t g_nv2a_exec_ticks;      /* nv2a_pb_scan.c: time spent executing 
 /* RE-SoT: the Direct3D 11 rasteriser, which reads the state above. */
 #include "nv2a_hw_d3d11.inc"
 
+#if RESOT_RUNTIME_RETAIL && (defined(_WIN32) || defined(__ANDROID__))
+/* RE-SoT: bounded provenance for the two missing Farah Room door draws.
+ * The retail hook publishes the original resources' Data/stride, not fixed
+ * allocations. 0x00310325 -> 0x000D5C10 binds GEO+0x4C; 0x003751FB reads
+ * resource+4 into the NV2A array offset. This observes, never changes draws. */
+static struct { uint32_t start, stride, hits, printed; } s_gate_draw_probe[4]; /* door leaves, curtains */
+/* Who last wrote the current diffuse (attribute 3), in draw order. */
+static struct { uint32_t value, flip, draw; } s_gate_color_writes[8];
+static uint32_t s_gate_color_next;
+static float s_gate_raw_alpha = 1.0f;
+static volatile int s_gate_draw_lock;
+static void gate_probe_lock(void)
+{
+#if defined(_WIN32)
+    while (InterlockedCompareExchange((volatile LONG *)&s_gate_draw_lock,1,0)) {}
+#else
+    while (__atomic_exchange_n(&s_gate_draw_lock,1,__ATOMIC_ACQUIRE)) {}
+#endif
+}
+static void gate_probe_unlock(void)
+{
+#if defined(_WIN32)
+    InterlockedExchange((volatile LONG *)&s_gate_draw_lock,0);
+#else
+    __atomic_store_n(&s_gate_draw_lock,0,__ATOMIC_RELEASE);
+#endif
+}
+void nv2a_gate_probe_range(uint32_t index, uint32_t data, uint32_t stride)
+{
+    if (index >= 4 || !data || !stride || stride > 256) return;
+    data &= 0x0FFFFFFFu;
+    if (data >= XBOX_CONTIG_SIZE) return;
+    gate_probe_lock();
+    if (s_gate_draw_probe[index].start != data || s_gate_draw_probe[index].stride != stride) {
+        s_gate_draw_probe[index].start = data;
+        s_gate_draw_probe[index].stride = stride;
+        s_gate_draw_probe[index].hits = s_gate_draw_probe[index].printed = 0;
+    }
+    gate_probe_unlock();
+}
+void nv2a_gate_probe_report(void)
+{
+    uint32_t start[4], stride[4], hits[4];
+    gate_probe_lock();
+    for (unsigned i=0;i<4;i++) {
+        start[i]=s_gate_draw_probe[i].start; stride[i]=s_gate_draw_probe[i].stride;
+        hits[i]=s_gate_draw_probe[i].hits;
+    }
+    gate_probe_unlock();
+    for (unsigned i=0;i<4;i++)
+        fprintf(stderr,"[GATE-DRAW] leaf=%u resource-data=%08X stride=%u matched-batches=%u\n",
+                i,start[i],stride[i],hits[i]);
+}
+/* Returns the matched published range (0,1 door leaves; 2,3 curtains), else 4. */
+static uint32_t gate_probe_draw(void)
+{
+    uint32_t at, leaf=4, matched=4, hit=0;
+    if (s_gpu.inline_active || !s_gpu.idx_count) return 4;
+    at=(s_gpu.attr[0].offset+s_gpu.idx[0]*s_gpu.attr[0].stride)&0x0FFFFFFFu;
+    gate_probe_lock();
+    for (unsigned i=0;i<4;i++) {
+        uint32_t start=s_gate_draw_probe[i].start;
+        /* Both original leaves have 60 vertices; a small envelope also
+         * accepts an attribute's component offset within the same stream. */
+        if (start && at>=start && at-start<64u*s_gate_draw_probe[i].stride) {
+            hit=++s_gate_draw_probe[i].hits; matched=i;
+            /* The first draws only cover entering the room: also sample later
+             * ones, about every 4 s, for the camera the user actually stands at. */
+            if(s_gate_draw_probe[i].printed<8) { s_gate_draw_probe[i].printed++; leaf=i; }
+            else if(!(hit&255)) leaf=i;
+            break;
+        }
+    }
+    gate_probe_unlock();
+    if(leaf==4) return matched;
+    fprintf(stderr,"[GATE-DRAW] leaf=%u hit=%u flip=%u prim=%u indices=%u first=%u"
+            " position=%08X/%u/%u/%u mask=%08X alpha=%u/%X/%08X"
+            " blend=%u/%X/%X depth=%u/%X/%u cull=%u/%X/%X"
+            " rc=%08X final=%08X/%08X\n",leaf,hit,s_gpu.flips,s_gpu.prim,s_gpu.idx_count,
+            s_gpu.idx[0],s_gpu.attr[0].offset,s_gpu.attr[0].stride,s_gpu.attr[0].type,
+            s_gpu.attr[0].size,s_gpu.color_mask,s_gpu.alpha_test,s_gpu.alpha_func,s_gpu.alpha_ref,
+            s_gpu.blend_enable,s_gpu.blend_sfactor,s_gpu.blend_dfactor,
+            s_gpu.depth_test,s_gpu.depth_func,s_gpu.depth_mask,
+            s_hw.cull_enable,s_hw.cull_face,s_hw.front_face,
+            s_gpu.rc.control,s_gpu.rc.final0,s_gpu.rc.final1);
+    fprintf(stderr,"[GATE-DRAW] current-diffuse attr3 size=%u stride=%u offset=%08X raw-alpha=%g draw=%u writes:",
+            s_gpu.attr[3].size,s_gpu.attr[3].stride,s_gpu.attr[3].offset,s_gate_raw_alpha,s_gpu.draws);
+    for(unsigned w=0;w<8;w++) {
+        uint32_t at_write=(s_gate_color_next+w)&7;
+        fprintf(stderr," %08X@%u/%u",s_gate_color_writes[at_write].value,
+                s_gate_color_writes[at_write].flip,s_gate_color_writes[at_write].draw);
+    }
+    fprintf(stderr,"\n");
+    fprintf(stderr,"[GATE-DRAW] target color=%08X zeta=%08X clip=%ux%u fog=%u/%X/%g/%g color=%08X\n",
+            s_gpu.color_offset,s_gpu.zeta_offset,s_gpu.clip_w,s_gpu.clip_h,
+            s_gpu.fog_enable,s_gpu.fog_mode,s_gpu.fog_param[0],s_gpu.fog_param[1],s_gpu.fog_color);
+    for(unsigned st=0;st<8 && st<(s_gpu.rc.control&255u);st++)
+        fprintf(stderr,"[GATE-DRAW] combiner%u color=%08X/%08X alpha=%08X/%08X factor=%08X/%08X stages=%08X\n",
+                st,s_gpu.rc.color_icw[st],s_gpu.rc.color_ocw[st],
+                s_gpu.rc.alpha_icw[st],s_gpu.rc.alpha_ocw[st],
+                s_gpu.rc.factor0[st],s_gpu.rc.factor1[st],s_gpu.rc.stage_program);
+    for(unsigned i=0;i<4;i++)
+        fprintf(stderr,"[GATE-DRAW] texture%u=%08X %ux%u fmt=%X valid=%d address=%u/%u border=%08X filter=%08X cube=%d\n",i,
+                s_gpu.texs[i].offset,s_gpu.texs[i].width,s_gpu.texs[i].height,
+                s_gpu.texs[i].color,s_gpu.texs[i].valid,s_gpu.texs[i].addr_u,
+                s_gpu.texs[i].addr_v,s_gpu.texs[i].border_color,s_gpu.texs[i].filter,s_gpu.texs[i].cube);
+    {
+        int ok; uint32_t key=nv2a_vsh_program_key(&ok);
+        fprintf(stderr,"[GATE-DRAW] vertex-program=%08X gpu-eligible=%d\n",key,ok);
+        if(ok) for(unsigned j=0;j<3 && j<s_gpu.idx_count;j++) {
+            float in[NV2A_VSH_INPUTS][4]; Nv2aVshOutput out;
+            for(unsigned a=0;a<NV2A_VSH_INPUTS;a++)
+                fetch_attr(&s_gpu.attr[a],s_gpu.idx[j],in[a]);
+            if(nv2a_vsh_run((const float (*)[4])in,&out))
+                fprintf(stderr,"[GATE-DRAW] v%u input=%g,%g,%g,%g output=%g,%g,%g,%g"
+                    " diffuse=%g,%g,%g,%g fog=%g uv=%g,%g,%g,%g\n",j,
+                    in[0][0],in[0][1],in[0][2],in[0][3],
+                    out.pos[0],out.pos[1],out.pos[2],out.pos[3],
+                    out.d0[0],out.d0[1],out.d0[2],out.d0[3],fog_factor(out.fog[0]),
+                    out.tex[0][0],out.tex[0][1],out.tex[0][2],out.tex[0][3]);
+        }
+    }
+    return matched;
+}
+#endif
+
 static Nv2aVshOutput s_xf[NV_MAX_INDICES];
 
 static int transform_vertex(uint32_t index, Nv2aVshOutput *out)
@@ -2644,7 +2770,63 @@ static void frame_trace_flip(void)
     }
 }
 
+static void draw_primitive_body(void);
+#if RESOT_RUNTIME_RETAIL && (defined(_WIN32) || defined(__ANDROID__))
+/* RE-SoT: Farah Room door. An opaque alpha-tested batch with no colour array
+ * whose combiner alpha is t0.a * v0.a reads the current diffuse, and that value
+ * can be left by an earlier effect: 0x000D37D0 and others set it through
+ * 0x00375E50, and the logged door alpha was 0.407843, so t0.a * v0.a stays below
+ * ALPHA_REF 0x80 and every pixel is rejected. Not established: why the console
+ * would differ. RESOT_STALE_ALPHA=0 restores the raw value for comparison. */
+static int stale_diffuse_alpha(void)
+{
+    static int enabled=-1;
+    static uint32_t seen[16], count;
+    const VertexAttr *a=&s_gpu.attr[3];
+    uint32_t i;
+    if(enabled<0) { const char *e=getenv("RESOT_STALE_ALPHA"); enabled=!(e && *e=='0'); }
+    if(!enabled || s_gpu.inline_active || !s_gpu.alpha_test || s_gpu.blend_enable
+       || (a->size && a->stride && a->offset) || s_gpu.imm_attr[3][3]>=1.0f
+       || (s_gpu.rc.control&255u)!=1 || s_gpu.rc.alpha_icw[0]!=0x18140000u) return 0;
+    for(i=0;i<count;i++) if(seen[i]==s_gpu.texs[0].offset) break;
+    if(i==count && count<16) {
+        seen[count++]=s_gpu.texs[0].offset;
+        fprintf(stderr,"[STALE-ALPHA] raw=%g texture0=%08X %ux%u indices=%u\n",s_gpu.imm_attr[3][3],
+                s_gpu.texs[0].offset,s_gpu.texs[0].width,s_gpu.texs[0].height,s_gpu.idx_count);
+    }
+    return 1;
+}
+#endif
 static void draw_primitive(void)
+{
+#if RESOT_RUNTIME_RETAIL && (defined(_WIN32) || defined(__ANDROID__))
+    /* RE-SoT: manual diagnostic for the Farah Room door, off unless the user
+     * sets RESOT_GATE_TINT. Bit 0: paint the door leaves magenta, keeping alpha
+     * and depth, to separate "drawn but dark" from "rejected". Bit 1: also pass
+     * alpha test and depth (placement only). Bit 2: omit the curtain quads, to
+     * test whether they occlude. Only these matched draws change, for one draw. */
+    static int tint=-1;
+    uint32_t leaf;
+    if(!s_gpu.prim || !s_gpu.idx_count) return;
+    if(tint<0) { const char *e=getenv("RESOT_GATE_TINT"); tint=e?atoi(e):0; }
+    s_gate_raw_alpha=s_gpu.imm_attr[3][3];
+    if(stale_diffuse_alpha()) s_gpu.imm_attr[3][3]=1.0f;
+    leaf=gate_probe_draw();
+    if(leaf<2 && (tint&3)) {
+        uint32_t factor=s_gpu.rc.factor0[0], alpha=s_gpu.alpha_test, depth=s_gpu.depth_func;
+        s_gpu.rc.factor0[0]=0xFFFF00FFu;
+        if(tint&2) { s_gpu.alpha_test=0; s_gpu.depth_func=0x207; }
+        draw_primitive_body();
+        s_gpu.rc.factor0[0]=factor; s_gpu.alpha_test=alpha; s_gpu.depth_func=depth;
+    }
+    else if(!((tint&4) && leaf>=2 && leaf<4)) draw_primitive_body();
+    s_gpu.imm_attr[3][3]=s_gate_raw_alpha;
+#else
+    draw_primitive_body();
+#endif
+}
+
+static void draw_primitive_body(void)
 {
     float v[4];
     uint32_t i;
@@ -3022,6 +3204,14 @@ static int imm_vertex_method(uint32_t method, uint32_t param)
         a[1] = (float)((param >>  8) & 0xFF) / 255.0f;
         a[2] = (float)((param >> 16) & 0xFF) / 255.0f;
         a[3] = (float)( param >> 24        ) / 255.0f;
+#if RESOT_RUNTIME_RETAIL && (defined(_WIN32) || defined(__ANDROID__))
+        if (attr == 3) { /* RE-SoT: read-only history for the door diagnostic. */
+            s_gate_color_writes[s_gate_color_next&7].value = param;
+            s_gate_color_writes[s_gate_color_next&7].flip = s_gpu.flips;
+            s_gate_color_writes[s_gate_color_next&7].draw = s_gpu.draws;
+            s_gate_color_next = (s_gate_color_next+1)&7;
+        }
+#endif
         s_gpu.imm_used |= (uint16_t)(1u << attr);
         if (attr == 0)
             imm_emit_vertex();

@@ -28,7 +28,22 @@ int main(void)
         CHECK(!nv_hw_retail_forming_tank(widen,left,right,240,252));
         CHECK(!nv_hw_retail_forming_tank(widen,left,right,180,220));
         CHECK(!nv_hw_retail_forming_tank(widen,left,right+64,192,204));
+        /* Sand column: the traced 16:9 x, every 21 px, past the old y=240. */
+#define SAND_X(x) (320+((x)-320)*(4.0f/3.0f)/widen)
+        for(int k=0;k<17;k++) {
+            float y=104.531f+21*k;
+            CHECK(nv_hw_retail_sand_column(widen,SAND_X(109.931f),SAND_X(135.531f),y,y+21,32,32,6,1));
+            CHECK(nv_hw_retail_sand_column(widen,SAND_X(109.931f),SAND_X(135.531f),y,y+21,64,32,6,1));
+            CHECK(nv_hw_retail_sand_column(widen,SAND_X(133.131f),SAND_X(141.531f),y,y+21,16,16,6,1));
+            CHECK(nv_hw_retail_sand_column(widen,SAND_X(113.487f),SAND_X(133.398f),y,y+16.333f,32,32,6,1));
+            /* Traced lookalikes: opaque 32x32 quads, 128x128 DXT, other columns. */
+            CHECK(!nv_hw_retail_sand_column(widen,SAND_X(109.931f),SAND_X(135.531f),y,y+21,32,32,6,0));
+            CHECK(!nv_hw_retail_sand_column(widen,SAND_X(109.931f),SAND_X(135.531f),y,y+21,128,128,0x0F,1));
+            CHECK(!nv_hw_retail_sand_column(widen,SAND_X(200),SAND_X(226),y,y+21,32,32,6,1));
+        }
+#undef SAND_X
     }
+    CHECK(!nv_hw_retail_sand_column(1,109.931f,135.531f,230.531f,251.531f,32,32,6,1));
     CHECK(!nv_hw_retail_forming_tank(1,120,132,192,204));
     puts("Retail forming-tank ring: 16:9/ultrawide recognition and edge anchoring pass");
     return 0;

@@ -1,5 +1,338 @@
 # Validation log
 
+## 2026-10-31: v0.4.2
+
+The user confirmed the retail HD logo and the name keyboard ("ottimo funziona").
+The demo logo, 6201_PrisonA and the sand column were not reported on. Version
+0.4.2, Android versionCode 12. Final checks: `python tools/check-hlsl.py`;
+`python tools/test-menu-pointer.py`; `python tools/test-native-surface-alias.py`;
+`ctest -R retail_forming_tank_layout`; `tools/recomp.ps1 -BuildOnly` both targets
+and `tools/build-android.ps1` (`logs/v042-*`). The agent did not run the game.
+
+## 2026-10-31: demo HD menu logo
+
+`python tools/hd-logo.py xbox-demo <image>` fits the user's white 6928x1732
+`demologohd.png` to 1024x256 (ignored `port/game/resot_hd_logo_xbox_demo.h`).
+`resot_hd_logo.h` replaces texture 0x0B0044F9 by its exact hash, in menus only;
+in play the existing rule still hides it. The draw's yellow tint is kept.
+
+Checks: `tools/recomp.ps1 -BuildOnly` both targets, `tools/build-android.ps1`
+(`logs/demologo-*-build.txt`). Not checked: the game was not run with these
+builds, so the logo has not been seen on any renderer or on Android.
+
+## 2026-10-31: demo 6201_PrisonA, Prince only a head
+
+User report: the Special Load Map entry shows the Prince as a head. The user's
+log (`bin/logs/xbox-demo-err.txt`) merges only 6201_PrisonA, 6201_PrisonB and
+6201_CouloirHaut for 0x2200E124, with no PrinceCostume0N and no Prince set-up
+line. The BF's WOL has 12 dependencies against the 17 of the 08_GP62 maps.
+08_GP62_E3_Cour (0x0F0053EF) merges the same areas with 08_GP62_Prison and
+PrinceCostume05, and set the Prince up (`logs/history/20261028-000147-167-4868`
+"costume 3 not loaded, PrinceCostume05 instead"). The menu entry now loads that
+key, the same treatment as retail's maps without a usable checkpoint.
+
+Checks: `tools/recomp.ps1 -Target xbox-demo -BuildOnly`, `tools/build-android.ps1`
+(`logs/prison-*-build.txt`). Not checked: the game was not run with this build;
+the spawn point and any scripted E3 content of this map in place of a plain
+Prison A start.
+
+The demo's logo (texture 0x0B0044F9, 256x64, in GameInterface and four other
+worlds) was exported with the PoP BF Lab reader, used as a tool only, to the
+user's Desktop; its FNV matches the runtime's 0x72C687A6 upright. Not committed.
+
+## 2026-10-31: retail HD menu logo, pointer on the name keyboard
+
+**Logo.** `tools/hd-logo.py` fits the user's `logomenu.png` (1018x255, kept in
+ignored `Assets/ui/`) to 1024x256 in the ignored
+`port/game/resot_hd_logo_xbox_retail.h`. `resot_hd_logo.h` swaps it for the
+256x64 ARGB logo texture on all encoders. The original pixels' hash was never
+logged, so the texture is recognised by coverage against the image (at most 0.6
+difference, upright or upside down). That threshold is a choice, not measured
+against the real texture: the first run's `[HDLOGO]` lines give the value.
+
+**Name keyboard.** The pointer bridge pressed only up/down, by child order. The
+grid is built in nested loops (0x002C5FB0..0x002C7072, 19 choices in
+`logs/retail-menu-trace-err.txt`), so that could not leave a column, which fits
+the report. Retail pages with 12 or more choices now walk to the row, then along
+it. Inferred statically: no `RESOT_POINTER_TRACE` of this page exists, and that
+this grid is the profile-name keyboard the user means, and that its cells answer
+left/right, were not observed.
+
+Checks: `python tools/test-menu-pointer.py` passes both layouts (synthetic 4x3
+grid: click, leftward click, hover); `tools/recomp.ps1 -BuildOnly` for both
+targets and `tools/build-android.ps1` build (`logs/hdlogo-*-build.txt`).
+
+Not checked: the game was not run with these builds, so neither the logo on
+screen nor typing a name has been seen on Windows or Android. The demo's
+keyboard is unchanged and not traced.
+
+## 2026-10-31: retail sand column stays at the HUD edge past y=240
+
+The user reported empty forming rings and, after many upgrades, full sand tanks
+back in the old centred 4:3 position. Existing traces
+(`logs/history/20261020-144739-536-12584-xbox-retail-err.txt`, four tanks, 16:9)
+show tanks every 21 px from y=104.531, x=109.931..141.531, and the ring below
+the last one at y=190.865..207.198. Only y<=192, the forming-tank exception
+(bottom<=240) and top>=288 were classified as HUD, so by that spacing the
+seventh tank and the ring after six tanks fall in the gap. This is computed
+from the spacing: no trace with more than four tanks exists.
+
+`nv_hw_retail_sand_column` (`nv2a_hud_layout.h`) now anchors blended ARGB 64x32,
+32x32 and 16x16 pieces in that column, at any height, on all encoders. Retail
+only. The same traces hold opaque 32x32 quads and 128x128 DXT quads in this
+column, which the rule rejects.
+
+Checks: `python tools/check-hlsl.py`; `ctest --test-dir build/tests/native-gpu
+-C Release -R retail_forming_tank_layout` passes (17 column positions at four
+ratios); `tools/recomp.ps1 -Target xbox-retail -BuildOnly` and
+`tools/build-android.ps1` build (`logs/hud-column-*-build.txt`).
+
+Not checked: the game was not run with this build, so the move itself has not
+been seen; the real number of tanks and whether the column keeps this spacing
+beyond four; other flat blended UI with these texture sizes in this column
+(for example menus); the demo, unchanged and not traced in this state. xbox-demo
+was not rebuilt, since its code is under `RESOT_RUNTIME_RETAIL`.
+
+## 2026-10-31: retail light halos, candidate and evidence
+
+User reports: on D3D11 no torch or lantern shows a halo; on Vulkan only some do, they
+flash, and they vanish as the camera moves.
+
+Read: 0x000CE2C0 draws an ALWAYS and a LEQUAL probe for each light and keeps
+LEQUAL/ALWAYS as its ratio; 0x000CE780 passes it to the final quad. Both hosts force that
+quad to LEQUAL (an earlier user-requested correction). Implemented and built, not
+run: that test is compared at a depth pulled up to 1.5 units nearer the camera
+(`hw_halo_max_depth`, `RESOT_HALO_DEPTH_PULL=0` disables), and `[HALO-REPORT]` and
+`[HALO-DRAW]` samples on all renderers. Not established: why D3D11 shows none.
+
+User test of that build: still none on D3D11; on Vulkan only some lights, not those
+beside them. Logs: the same probe counts appear on D3D11 and Vulkan (for example
+5227/4296, 16093/12290), so the queries work on both. Many pairs read n/0 or 0/0, which
+makes the ratio 0. 0x00067DA1 multiplies the light colour by flicker and ratio, so
+factor0 ranged from FF000000 and FF20140B to FFCBFFFF. Second candidate, built, not run:
+the LEQUAL probe gets the same depth pull as the final quad, and dim halos are raised
+by a square root (`hw_halo_emission`, same peak as the old 0.25). `[HALO-DRAW]` and
+`[HALO-REPORT]` now list every light of one frame each 600 flips. Still not established:
+why D3D11 shows none.
+
+## 2026-10-31: Farah Room gate evidence, Vulkan driver fault, query reuse
+
+Neither problem is claimed fixed. No gameplay was run by the agent.
+
+Farah Room door: the user confirms both leaves visible with the stale-alpha build
+on D3D11 (screenshot). Vulkan, D3D12, Android and other scenes are not checked.
+
+User test `RESOT_GATE_TINT=1`, D3D11: no magenta, so the door is rejected, not merely
+dark. The 09:32 log shows the door still drawn near the camera (w 4.3..9) with diffuse
+1,1,1,0.407843 (also 0.94902 and 1 in earlier samples). With t0.a * v0.a the alpha is
+at most 104, below ALPHA_REF 0x80, so the test rejects every pixel; this fits the
+report. Whether attribute 3 is the source was inferred, not read: the log adds it now.
+Candidate correction, implemented and built, NOT confirmed in game: an opaque
+alpha-tested batch with no colour array and combiner alpha t0.a * v0.a uses current
+diffuse alpha 1 for that draw (`stale_diffuse_alpha`, nv2a_pb_exec.c);
+`RESOT_STALE_ALPHA=0` disables it, `[STALE-ALPHA]` lists each affected texture. Not
+established: why the console would not see the same value.
+
+Correction after the user's D3D11 screenshot in front of the door: the side panels
+are also dark and the background behind the door is bright, so a near-black lattice
+would be visible. The dark material colour does not explain the missing door. The
+user also reports the order vizier, doors, curtains, so the curtains are behind the
+doors from that side and should not occlude them. Offline, the BF mesh 3F001EC3 with its
+102 indices and the bound texture rasterizes to a complete door (51% of pixels above
+alpha 128), with an ornament like the side panels: mesh, UV and texture are coherent.
+The logged door draws cover only about the first 8 s in the room, not the moment
+in front of the door. Added and built, not run: door draw samples about every 4 s and
+a door state line every 300 polls.
+
+Gate, observed in the 17:21 log (`bin/logs/history/20261030-174543-272-13060-*-err.txt`;
+the current `xbox-retail-err.txt` has no `GATE` line):
+- Combiner: ICW 08010000/18140000, OCW 00010C00/00000C00, factor0 FF101010,
+  final 130C0300/00001C80. So r0.rgb = 2 * t0.rgb * factor0, r0.a = t0.a * v0.a,
+  colour = lerp(fog, r0, fog.a), alpha = r0.a. The alpha expression is correct
+  (diffuse alpha 1, test GREATER 0x80), so this expression does not reject the door.
+- The door is dark by data, not by the renderer: BF material 3F001ED3 holds colour
+  66101010 and flags 4017 (ColorOp in bits 13-15 for material version 6 = 2; the
+  bits 12-15 conversion at 0x0032C712 runs only for version <= 4). Case
+  0x0030DC85 reads material+8 & 0xFFFFFF, and 0x0030DD0D sets alpha FF. The other
+  submaterials read from pack 3F001EE9 hold E5E5E5; that this explains the bright side panels is inferred.
+  Result: 0.125 * the gold texture, near black. Not checked: how this looks on
+  an original console, and whether near black is what the user sees.
+- Curtain quads 6600D76B/C use meshes 6600D738/39 and pack 66007DB2. Its submaterial
+  66007DAC holds the same gold texture with colour 0F0F0F, flags 4417, alpha ref
+  0x19. Which submaterial these quads use, and their depth writes, was not read.
+- Mip chain tested and rejected: box filtering the texture keeps its mean alpha at
+  0.39 and 36-59% of texels above 128 down to 16x16 (8x8 and below were not
+  meaningful for the strip).
+
+New manual diagnostic, off by default: `RESOT_GATE_TINT` (retail, all renderers).
+Bit 0 paints the door leaves magenta, keeping alpha and depth; bit 1 also passes
+alpha test and depth; bit 2 omits the curtain draws. `[GATE-DRAW]` now also logs the
+target, fog state, per-vertex fog factor and curtain draws. Implemented and built,
+not run.
+
+Vulkan fault, nvoglv64.dll+0xED6415 reading 0x108:
+- Both crashes (312568 and 817888 queries) were at steady 60 fps. Background pipeline
+  counts stayed flat over the last logged intervals (214, 207), so compilation was
+  not visibly active. The query totals differ, so there is no fixed count limit.
+- The pipeline-cache init in `resot_pipeline_cache_vulkan.inc` has a real race: two
+  compilers can each create a cache, leaking one or using NULL briefly. It can only
+  occur at the first creation, so it does not explain a fault minutes later. Not changed.
+- Candidate tested and not reproduced: with pooling off a VkQueryPool is destroyed once
+  its fence signals, before SDL resets the command buffer naming it.
+  `native_gpu_smoke.exe vulkan --query-churn <pool_disabled> <total> [present]`:
+  pooling off 3000000 queries in 24 s (`logs/query-churn-off.txt`); with present,
+  pooling off and on, 3000000 each in 51.5 s (`logs/query-churn-present-pool*.txt`).
+  All exit 0, all reports complete. The cause is not established. The synthetic
+  frame lacks the game's textures, geometry and shaders.
+- Change without proof of cause: Vulkan query reuse is on again, as D3D12 already was,
+  removing about 2400 create/destroy pairs/s from the driver. The earlier A/B found no
+  reproducible gain or loss. Pooled retail sessions in the logs reached only 255918
+  reused queries, below the 312568 of the first crash, so they do not show pooling is
+  immune. To compare: `RESOT_PB_PAYLOAD_CONTROL=<file>` holding `2` turns it off.
+- The crash report now names the thread, and lists stack words pointing into loaded
+  modules (candidates, not a verified chain). Built; not yet seen on a real fault.
+
+Run: `recomp.ps1 -Target xbox-retail -BuildOnly` and `-Target xbox-demo -BuildOnly`
+exit 0; `build-android.ps1` exit 0; `check-hlsl.py` ok; `native_vulkan` CTest passed
+in 106.71 s; `test-native-surface-alias.py` passed. Not checked: any of
+this in the game on any renderer, Android on a device, D3D12 regression suite.
+
+## 2026-10-30 (later): Vulkan black flashes, retail shader hitches, Farah Room main gate
+
+User confirms the earlier demo/font/logo, Reception Hall and Tower fixes.
+New reports: Vulkan repeatedly alternates gameplay with a fully black screen
+for about half a second in certain places; the main gate of retail 9101
+Farah Room is invisible on every renderer; large FPS drops in some sections.
+The user requests manual testing only, with no scripted controller runs.
+
+Read the latest manual logs under `bin/logs/` and its history. The latest
+12:03 log is D3D11 in Farah Room, not Vulkan. The preceding Vulkan session
+is `20261030-120318-158-11880-xbox-retail-err.txt` (Reception Hall, Tower).
+Original logs and the performance analysis are retained under ignored
+`research/xbox-retail/perf-20261030/`.
+
+Implemented:
+- Retail native target alias lifetime: the Vulkan log repeatedly says
+  `render target 80104000 640x480 rewritten by the CPU`. The previous RAM
+  fingerprint policy released the whole GPU surface, including `front` and
+  `largest`; `ng_compose` then explicitly cleared the frame to black when
+  no front image remained. A GPU image drawn this frame now remains the
+  sampling producer. An older image whose RAM was reused loses only its
+  texture alias: it stays owned for queued draws/display until normal
+  surface reuse/eviction. All samples in a frame retain the stale result;
+  a new GPU draw restores the alias. Demo policy is unchanged (no evidence
+  from its XBE for this retail alias heuristic). Shared native D3D12/Vulkan
+  code, including Android; the user confirms the black flashes are resolved on Windows.
+- Retail D3D11 cold vertex shaders use the existing demo background compiler
+  and CPU vertex fallback while pending. The latest retail log has 23 cold
+  compilations, 28.05-153.93 ms each, 2181.80 ms total, on the executor;
+  KickOff waits reach 626.9 ms. `RESOT_ASYNC_VSH=0` retains synchronous mode.
+  This removes the in-thread compile path; no measured FPS improvement is
+  claimed without a new run. Sustained Vulkan cost is separate: example
+  133.8 FPS/229 draws/42365 vertices/2.82 ms executor versus 73.8 FPS/543
+  draws/80191 vertices/5.42 ms executor, with higher title cost as well.
+  Cold-reference wait counters did not increase across those slow intervals.
+- Farah Room investigation: the BF has separate collision-only main-door
+  leaves 6600D769/6600D76A, and renderable action-kit prototypes
+  3F001EF1/3F001EF2, mesh 3F001EC3/3F001EC4, placement 3F001EB8.
+  The assets are present; this does not prove the live draw is correct.
+  Added a bounded read-only `[GATE]` report only while this map is current,
+  sampling original LOA objects and actual world objects near the gate
+  immediately, +120 and +600 pad polls after the load. This distinguishes
+  missing/inactive kit instances from a renderer defect. No visibility flag
+  or guessed door geometry is forced. Gate fix remains unresolved.
+
+Checks: `python tools/test-native-surface-alias.py` passes the production
+alias/producer functions against synthetic guest RAM: current-frame writes,
+RAM reuse, repeated-stage samples, retained scanout ownership and restoration
+by a later GPU producer. No game data, window or input is used. This test
+checks ownership policy, not visual rendering on a GPU. `python
+tools/check-hlsl.py`: all ten entries pass. `tools/recomp.ps1 -BuildOnly`
+both targets and `tools/build-android.ps1` pass; logs
+`logs/flash-perf-{demo,retail,android}-build.txt`. No game was launched by
+the agent. User informed the rebuilt retail exe is ready for manual tests.
+
+Manual follow-up: the user ran D3D11 then Vulkan, confirmed the black
+flashes are resolved, and confirmed both front gate leaves are still invisible
+(the sides remain visible). Logs retained automatically under
+`bin/logs/history/20261030-121229-248-4680-xbox-retail-err.txt` (D3D11) and
+`20261030-121452-139-11444-xbox-retail-err.txt` (Vulkan). The gate report shows
+actual kit clones in the aggregate world, at the expected front-door positions;
+this rules out the initial hypothesis that no visual instances were created.
+The original LOA objects are prototypes, separate from these live clones.
+
+Pending: new FPS observations; Farah Room gate draw/culling correction;
+Android device verification.
+
+## 2026-10-30: shared HD font, original demo logo, Vulkan capture corruption, retail checkpoints
+
+User reports: D3D11 did not replace the font and retained the misplaced
+in-game demo logo; D3D12/Vulkan showed a white menu logo. The demo's closing
+movie was silent. Retail Special Load Map 1501 Reception Hall and 3101 Tower
+spawned the menu Prince (head only) in the void.
+
+Changes and evidence:
+- `resot_ui_textures.h` applies the existing per-target pixel-hash HD font
+  replacement to D3D11/D3D12/Vulkan and Android Vulkan. D3D11 allocates the
+  larger host sheet while preserving guest UV dimensions.
+- Demo: preserve the original logo's guest draw and yellow tint in menus;
+  remove the white host overlay. Hide only the exact logo pixel hash outside
+  menus; include menu/game state in the texture-cache hash for its dimensions.
+- Vulkan capture glitch: `ng_readback` reset vertex/index ring offsets without
+  changing the geometry-cache generation. Later uploads could overwrite or
+  cycle cached absolute ranges. Readback now preserves append offsets as
+  ordinary submission does. The user confirms the distortion/colors are fixed.
+- Retail BF WOLInfo and checkpoint GAOs: Reception Hall's base WOL only has
+  FRH 0F00425D, with no Prince setup call in the user's 31-load log. Its
+  Enemies WOL 2B014DDD includes TEC 0F00425C; use that pair. Tower WOL
+  41002456 includes the Bridge world; use TEC 2B006896 instead of FRH
+  41005E82. Tower's spawn is on the bridge approach. No generated C changed.
+- `Assets/xbox-demo/video/e3_end.int`: BIKi, 467 frames at 30000/1001 fps,
+  zero audio tracks (header +0x28). Demo XBE 0x00014043/0x0001405E queue
+  e3_end (name 0x00322FD8), exit state 3 at 0x0064D018. The long trailer
+  e3_trail.int has one track. No unrelated replacement audio was added.
+
+Checks:
+- `python tools/check-hlsl.py`: all ten embedded shader entries pass.
+- `tools/recomp.ps1 -Target xbox-demo -BuildOnly`, same for xbox-retail,
+  and `tools/build-android.ps1`: final builds pass, logs
+  `logs/ui-build-{demo,retail,android}.txt`. MSBuild/Gradle initialization
+  failed inside the sandbox; unrestricted retries passed.
+- Demo, each renderer: `tools/run.ps1 -Target xbox-demo -Windowed -Seconds 32
+  -SnapshotEvery 4 -Set @{RESOT_RENDERER='<d3d11|d3d12|vulkan>';
+  RECOMP_PAD_SCRIPT='2000:a:200,6000:a:200,12000:a:200,18000:start:300'}`.
+  Runtime recognises the demo HD font hash 3372CC85; original yellow logo
+  visible. User confirms demo appearance. Final Vulkan rerun adds
+  `RESOT_FB_BURST='900,180'`, unique dump prefix
+  `logs/ui-20261030/vulkan-fixed`: 180 consecutive captures, no corruption
+  seen in the sampled contact sheet; user confirms the fix.
+- Retail Reception Hall: 60 s D3D11 run, startup A inputs as above,
+  `RESOT_TEST_MAP='2B014DDD,1500,0F00425C'`; map loads, Prince setup
+  costume 1/mask 6 and new sector. User also selected the UI entry and
+  confirms Reception Hall is correct. Capture shows the Farah cinematic.
+  Retail HD font hash BF3884F3 recognised. Evidence under
+  `logs/ui-20261030/retail-1501*` and `logs/ui-retail-1501-run.txt`.
+
+- Tower Vulkan: first run used `RESOT_TEST_MAP='41002456,1500,2B006896'`
+  in addition to the user's UI choice, causing a second load. Repeated as
+  a single manual UI selection with no RESOT_TEST_MAP, 90 s. Body and initial
+  position are restored, but the user reports a fall on the first entry;
+  Retry spawns correctly and the level continues. Evidence under
+  `logs/ui-20261030/retail-3101*`. Do not call initial Tower entry fixed yet.
+- At the user's request, added a one-time +0.005 world-unit vertical offset
+  to the first Special Load Map spawn for Tower, at load completion. The
+  retail actor's world matrix is [GAO+0x0C], translation xyz at +0x30:
+  0x000309B5..0x000309E3 reads it for sector distances and
+  0x0003D7A9..0x0003D7CE updates it for displacement. Only z (+0x38) is
+  changed, with finite/bounded coordinate checks; no continuous lifting or
+  change to normal Retry. Diagnostic: `[MAP] Tower first spawn: z ...`.
+  Final Windows builds and Android APK pass with this change. The user
+  requested no further scripted-pad tests and will verify the new spawn.
+
+Pending: user verification of Tower's 0.005-unit spawn lift; longer gameplay
+and transitions on each renderer; Android device verification (the APK build
+is not a play test).
+
 ## 2026-10-29 (later): v0.4.1
 
 Version 0.4.1 (versionCode 11): `resot_version.h`, `build.gradle`, READMEs,

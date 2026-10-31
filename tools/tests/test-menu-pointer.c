@@ -94,6 +94,37 @@ int main(void)
     _putenv_s("RECOMP_HW_ASPECT","4:3"); resot_menu_pointer_viewport(4.0f/3);
     real(0x18100+0x20,.4f); // unrelated four-label group must not get arrows
     tap(.875f,.5f); poll(pad); CHECK(!pad[4] && !pad[6]);
+    /* Name keyboard grid: to the row first, then along it, then A only there. */
+    {
+        uint32_t grid=0x30000,cell=0x40000;
+        put(page+PAGE_CHILDREN,grid); put(page+PAGE_CHILDREN+4,grid+12*4);
+        for(i=0;i<12;i++) {
+            uint32_t c=cell+i*0x1000,t=c+0x200,v=c+0x400,a=c+0x600;
+            put(grid+i*4,c); put(c+0x98,1); put(c+0x9C,t);
+            put(t+0xC,v); put(t+0x10,v+4); put(v,a); put(a,LITERAL_VTABLE);
+            real(a+0x1C,.2f+(i%4)*.2f); real(a+0x20,.3f+(i/4)*.1f);
+        }
+        put(page+PAGE_SELECTED,cell); poll(pad); poll(pad);
+        tap(.8f,.5f);                                   /* row 2, column 3 */
+        poll(pad); CHECK(pad[4]==2 && !pad[6]);
+        put(page+PAGE_SELECTED,cell+4*0x1000); poll(pad); CHECK(!pad[4]);
+        poll(pad); CHECK(pad[4]==2 && !pad[6]);
+        put(page+PAGE_SELECTED,cell+8*0x1000); poll(pad); CHECK(!pad[4]);
+        poll(pad); CHECK(pad[4]==8 && !pad[6]);
+        put(page+PAGE_SELECTED,cell+11*0x1000); poll(pad); CHECK(!pad[4]);
+        poll(pad); CHECK(pad[6]==255 && !pad[4]);
+        poll(pad);
+        tap(.2f,.5f);                                   /* same row, leftwards */
+        poll(pad); CHECK(pad[4]==4 && !pad[6]);
+        put(page+PAGE_SELECTED,cell+8*0x1000); poll(pad); poll(pad); CHECK(pad[6]==255);
+        poll(pad);
+        /* Hovering selects without typing. */
+        resot_menu_pointer_event(.4f,.3f,0);
+        poll(pad); CHECK(pad[4]==1 && !pad[6]);
+        put(page+PAGE_SELECTED,cell+4*0x1000); poll(pad); poll(pad); CHECK(pad[4]==1);
+        put(page+PAGE_SELECTED,cell); poll(pad); poll(pad); CHECK(pad[4]==8);
+        put(page+PAGE_SELECTED,cell+0x1000); poll(pad); poll(pad); CHECK(!pad[4] && !pad[6]);
+    }
 #else
     CHECK(!pad[4] && !pad[6]);
 #endif

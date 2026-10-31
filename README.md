@@ -10,7 +10,7 @@
 
 **Prince of Persia: The Sands of Time, recompiled from Xbox to native Windows and Android.**
 
-**Current version: v0.4.1.** reSOT is an advanced, playable recompilation and
+**Current version: v0.4.2.** reSOT is an advanced, playable recompilation and
 port of the original Xbox retail game and E3 2003 demo. Both games now run
 well on Windows and Android in the configurations tested by the user, with
 working gameplay, menus, movies, audio and controller support. The project
@@ -148,13 +148,16 @@ The release also retains the v0.3.0 features below.
   HUD clearance, repaired log-source selection, and retained the shared
   graphics, input and diagnostic options.
 
+Version 0.4.2 adds HD main menu logos to both games and fixes the retail name
+keyboard with mouse and touch, the sand tanks' HUD position, Vulkan black
+flashes and the demo's 6201 PrisonA entry ([release notes](docs/releases/v0.4.2.md)).
 Version 0.4.1 fixes retail flicker, black scenes and GPU-thread crashes,
 Special Load Map crashes and a loading-screen hang after many loads, and
 adds a logs tip to the Android launcher ([release notes](docs/releases/v0.4.1.md)).
 Version 0.4.0 adds Special Load Map, the built-in cheats switch, the F7
 Game behavior section and an HD menu font for both games (see the status
 table and [the release notes](docs/releases/v0.4.0.md)). Both Windows targets and the
-Android release APK build as **0.4.1**; Android uses **versionCode 11**.
+Android release APK build as **0.4.2**; Android uses **versionCode 12**.
 Of 0.3.4: Shader compilation, pointer, touch and GPU
 regressions passed in the recorded release checks. The user confirms the
 extended health-bar alignment, popup/save-carousel touch changes and launcher
@@ -179,18 +182,20 @@ every level, device or exact console accuracy.
 | Mali GPUs (Helio G96 / Mali-G57, Dimensity 9000 / Mali-G710, Exynos 2100 / Mali-G78) | 🟡 Crash on Start Game traced to SPIR-V extensions older Mali drivers reject; shaders rebuilt without them; not yet run on a Mali device | 🟡 Same; the crash was seen in retail logs (Mali-G57 r26, Mali-G710 r32) |
 | Graphics presets | 🟡 Reduced/Standard/Full menu and policy tests pass; new preset gameplay checks pending | 🟡 Same shared policy and verification limits |
 | Android diagnostic sharing | 🟡 On-demand ZIP implemented; Samsung archive received; cancellation/cleanup timing needs device checks | 🟡 Same shared exporter |
-| Bink movies and video skipping | 🟢 Audio/video confirmed | 🟢 Audio/video confirmed |
+| Bink movies and video skipping | 🟢 Audio/video confirmed; the original E3 closing clip has no audio track | 🟢 Audio/video confirmed |
 | Game audio and effects | 🟢 Audio and earlier stutter/crash fixes confirmed | 🟢 Audio and earlier movie-return fix confirmed; Windows menu music restored in v0.3.0 |
 | Keyboard and physical controllers | 🟢 | 🟢 |
 | Android gameplay touch controls | 🟢 Custom layout, vibration and approved visual design | 🟢 Same shared controls |
 | Native menu navigation and pause | 🟢 Includes Load Map and reSOT Options (main and pause menus); "E3 Demo" title and the E3 logo at the top left, as in the E3 build; "Quit to Demos Menu" hidden. Cheats and Special Load Map moved into reSOT Options: on the game's pages they moved the in-game logo half off the screen | 🟢 Includes reSOT Options (main and pause menus); Xbox Live entries hidden |
-| Special Load Map (reSOT Options, main menu) | 🟡 All 20 maps of the BF (and one world-only entry for the record), sent as the original Load Map's message; scripted direct requests faulted for 4 of 12 maps, the message path is not yet checked on those | 🟡 30 area maps with the keys of the BF's WOLInfo.bin (four corrected in 0.4.0), loaded as a saved game is: Start New Game only closes the menu, then the map with a checkpoint of its own and no movie, before the balcony; the user loaded 2601 and 7401 this way; 1401 Corridor Start (no checkpoint) and 8101 Tower Base faulted in sub_00030990 and are replaced by 1401 Cour and 8101 Bridge Support, which have one (not yet run); 7601 Salle and 8101 Tomb load (Salle's crash fixed) |
-| HD menu font | 🟡 The 512x128 menu font sheet, recognised by the hash of its pixels, is replaced on the host by a 4x font fitted glyph by glyph onto it (`tools/hd-font.py`): the Atlantis MF face it was drawn from, the user's HD drawing where the face differs, the sheet enlarged for `%` and `@`; Direct3D 12 and Vulkan renderers, every letter keeps its box. Built; not yet looked at on screen. The E3 corner logo, pushed off the right edge in play once the reSOT menu entries exist (cause not found), is not drawn there; the menu shows it at the top left instead | 🟡 The same with the retail's own sheet (two marks enlarged); built, not yet looked at on screen |
+| Special Load Map (reSOT Options, main menu) | 🟡 All 20 maps of the BF (and one world-only entry for the record), sent as the original Load Map's message; scripted direct requests faulted for 4 of 12 maps, the message path is not yet checked on those | 🟡 30 area maps with the keys of the BF's WOLInfo.bin (four corrected in 0.4.0), loaded as a saved game is: Start New Game only closes the menu, then the map with a checkpoint of its own and no movie, before the balcony; the user loaded 2601 and 7401 this way; 1401 Corridor Start (no checkpoint) and 8101 Tower Base faulted in sub_00030990 and are replaced by 1401 Cour and 8101 Bridge Support, which have one (not yet run); 7601 Salle and 8101 Tomb load (Salle's crash fixed); 1501 Reception Hall now uses its Enemies world list and TEC checkpoint, confirmed by the user; 3101 Tower uses the TEC checkpoint on its bridge approach: body and position restored, but the user reports an initial fall (Retry works); a one-time 0.005-unit spawn lift is confirmed by the user |
+| HD menu font | 🟡 Shared 4x glyph replacement on Windows D3D11/D3D12/Vulkan and Android Vulkan; demo appearance confirmed by the user on Windows, Android device check pending. Original yellow E3 logo retained in menus, hidden during gameplay | 🟡 Same shared replacement; D3D11 runtime recognises the retail sheet; broader visual confirmation pending |
 | F7 Game behavior: Tutorials, Dagger of time, Cheats | 🟡 Dagger visual effect not checked; Cheats On/Off; Tutorials not available (Prince skin removed) | 🟡 Tutorials (universe +0xC0, saved); Cheats On/Off (Prince skin removed) |
 | Built-in cheats switch ("Cheats: On/Off", reSOT Options and F7) | 🟢 Changes OVA 8 `mb_CheatsEnabled` in memory, no BF rebuild; user confirms it works on Windows; Android not run | 🟢 Same for OVA 22; user confirms it works on Windows; label toggled in the in-level pause in a scripted run; Android not run |
+| HD menu logo (not in the repository, `tools/hd-logo.py`) | 🟡 Built on all renderers, not yet confirmed in game | 🟢 Confirmed by the user |
 | Mouse/touch selection of menu rows | 🟡 Text and literal-text choices covered; synthetic tests pass; broader interaction checks pending | 🟢 Yes/No choices and save-carousel arrows confirmed on the Android test phone; synthetic tests pass |
 | Automatic Android overlay hiding | 🟡 Toggle stays visible with pad; hidden toggle/FPS remain touchable. Policy tests pass; device checks pending | 🟡 Same shared implementation and validation limit |
 | Native Vulkan renderer | 🟢 Windows and Android runs; shader/GPU comparisons pass | 🟢 Windows and Android runs; gameplay and GPU comparisons recorded |
+| Retail Vulkan black flashes / Farah Room main gate | Not reported for demo | 🟡 Framebuffer alias lifetime correction confirmed by the user on Windows; main gate not fixed: alpha test rejected it (stale diffuse alpha 0.41 logged), correction confirmed by the user on D3D11 only; Vulkan driver fault not fixed, query reuse restored without proof of cause |
 | Native Direct3D 11 renderer | 🟢 Windows default | 🟢 Windows default |
 | Native Direct3D 12 renderer | 🟡 Optional Windows backend; startup and GPU tests pass | 🟡 Optional Windows backend; broader gameplay checks pending |
 | Widescreen Hor+ and HUD layout | 🟢 Widened view with preserved HUD proportions; artwork edges remain limited | 🟢 Widened view; ultrawide sand-tank alignment confirmed; some dialog layout limits remain |

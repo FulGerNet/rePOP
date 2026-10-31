@@ -49,6 +49,8 @@
 #define RESOT_HW_D3D11 0
 #endif
 
+#include "resot_ui_textures.h" /* RE-SoT: identical UI texture policy on all encoders. */
+
 #if RESOT_HW_D3D11
 #define COBJMACROS
 #include <d3d11.h>
@@ -277,7 +279,13 @@ static NvHwVisibility s_hw_visibility;
 static void hw_visibility_complete(void *opaque, uint32_t at, uint64_t stamp, uint32_t count)
 {
     uint8_t *mem = (uint8_t *)xbox_GetMemoryOffset();
+    static uint32_t seen, empty;
     (void)opaque;
+    /* RE-SoT: light probes arrive as ALWAYS then LEQUAL counts (0x000CE2C0
+     * reads LEQUAL/ALWAYS). Short samples, for comparing the renderers. */
+    seen++; empty += count == 0;
+    if (s_gpu.flips % 600u == 0)
+        fprintf(stderr, "[HALO-REPORT] flip=%u n=%u zero=%u at=%08X pixels=%u\n", s_gpu.flips, seen, empty, at, count);
     memcpy(mem + at, &stamp, 8);
     memcpy(mem + at + 8, &count, 4);
     MemoryBarrier(); /* publish count before the guest's completion marker */
@@ -1281,13 +1289,13 @@ static int hw_depthless_shadow(void)
  * Keep these exact variants retail-only and exclude probes.
  * LEQUAL finals need the same emission correction as ALWAYS finals; quad
  * batching does not change the material. Shared by Windows D3D11 and SDL. */
-static int hw_retail_halo(uint32_t w, uint32_t h, int depth, int querying)
+static int hw_retail_halo_material(uint32_t w, uint32_t h, int depth)
 {
 #if RESOT_RUNTIME_RETAIL
     const Texture *t = &s_gpu.texs[0];
     return w == 640 && h == 480 && depth && s_gpu.depth_test && !s_gpu.depth_mask &&
         (s_gpu.depth_func == 0x207 || s_gpu.depth_func == 0x203) &&
-        s_gpu.color_mask == 0x00010101 && !querying && !s_gpu.alpha_test &&
+        s_gpu.color_mask == 0x00010101 && !s_gpu.alpha_test &&
         s_gpu.blend_enable && s_gpu.blend_sfactor == 1 && s_gpu.blend_dfactor == 1 &&
         s_gpu.blend_equation == 0x8006 && s_gpu.prim == NV_PRIM_QUADS &&
         s_gpu.idx_count >= 4 && (s_gpu.idx_count & 3) == 0 &&
@@ -1299,9 +1307,73 @@ static int hw_retail_halo(uint32_t w, uint32_t h, int depth, int querying)
         s_gpu.rc.color_ocw[0] == 0x00010C00 && s_gpu.rc.alpha_ocw[0] == 0x00000C00 &&
         s_gpu.rc.final0 == 0x0000000C && s_gpu.rc.final1 == 0x00001C80;
 #else
-    (void)w; (void)h; (void)depth; (void)querying;
+    (void)w; (void)h; (void)depth;
     return 0;
 #endif
+}
+static int hw_retail_halo(uint32_t w, uint32_t h, int depth, int querying)
+{
+    return !querying && hw_retail_halo_material(w,h,depth);
+}
+/* RE-SoT: the LEQUAL probe of 0x000CE2C0's ALWAYS/LEQUAL pair (0x000CE34D). */
+static int hw_retail_halo_probe(uint32_t w, uint32_t h, int depth, int querying)
+{
+    return querying && s_gpu.depth_func == 0x203 && hw_retail_halo_material(w,h,depth);
+}
+
+/* RE-SoT: the forced LEQUAL above compares the halo's flat quad per pixel. A
+ * light sits against its own lantern or wall, so that surface cut the quad or
+ * removed it as the camera moved, on top of the query ratio the title already
+ * applies. The same surface can also hide the small LEQUAL probe, so the ratio
+ * drops to zero while a light beside it keeps its halo. Compress both draws' depth
+ * towards the camera by about the lantern's size, so nearby surfaces do not cut
+ * them and real foreground still does.
+ * Screen z follows 1 - b/w (far plane far away; logged door draws: z 0.9976 at
+ * w 21, 0.9884 at w 4.3). A presentation choice, not console behaviour.
+ * RESOT_HALO_DEPTH_PULL=0 keeps the plain test. Returns the viewport max depth. */
+static float hw_halo_max_depth(void)
+{
+    static int enabled = -1;
+    float scale = 1.0f, far_w = 0.0f, z_first = 0.0f, sx = 0.0f, sy = 0.0f;
+    uint32_t i;
+    if (enabled < 0) { const char *e = getenv("RESOT_HALO_DEPTH_PULL"); enabled = !(e && *e == '0'); }
+    for (i = 0; i < s_gpu.idx_count && i < 64; i++) {
+        float in[NV2A_VSH_INPUTS][4];
+        Nv2aVshOutput o;
+        float z, w, pull, target;
+        uint32_t a;
+        for (a = 0; a < NV2A_VSH_INPUTS; a++)
+            fetch_attr(&s_gpu.attr[a], s_gpu.idx[i], in[a]);
+        if (!nv2a_vsh_run((const float (*)[4])in, &o)) break;
+        z = o.pos[2] / 16777215.0f; w = o.pos[3];
+        if (!i) { far_w = w; z_first = z; sx = o.pos[0]; sy = o.pos[1]; }
+        if (!(z > 0.0f && z < 1.0f && w > 0.0f)) continue;
+        pull = w * 0.5f < 1.5f ? w * 0.5f : 1.5f;
+        target = 1.0f - (1.0f - z) * w / (w - pull);
+        if (target > 0.0f && target / z < scale) scale = target / z;
+    }
+    /* One whole frame every 10 s: every light, in draw order. */
+    if (s_gpu.flips % 600u == 0)
+        fprintf(stderr, "[HALO-DRAW] flip=%u func=%X xy=%g,%g w=%g z=%g scale=%g factor0=%08X tex=%08X %ux%u fmt=%X quads=%u\n",
+                s_gpu.flips, s_gpu.depth_func, sx, sy, far_w, z_first, scale, s_gpu.rc.factor0[0],
+                s_gpu.texs[0].offset, s_gpu.texs[0].width, s_gpu.texs[0].height, s_gpu.texs[0].color,
+                s_gpu.idx_count / 4);
+    return enabled ? scale : 1.0f;
+}
+
+/* RE-SoT: 0x00067DA1 scales the light's colour by flicker and query ratio, and
+ * the combiner doubles it before ONE/ONE. A flat 0.25 kept bright lights from
+ * clipping to white discs (2026-10-21) but left dim ones, FF20140B in the logs,
+ * almost invisible beside them. Same peak as that 0.25, with dim lights raised by
+ * a square root; zero stays zero, so hidden lights still fade out. Presentation
+ * choice, not console behaviour. */
+static void hw_halo_emission(float *rgb)
+{
+    float peak = rgb[0] > rgb[1] ? rgb[0] : rgb[1], k;
+    if (rgb[2] > peak) peak = rgb[2];
+    if (peak <= 0.0f) return;
+    k = 0.25f / sqrtf(peak);
+    rgb[0] *= k; rgb[1] *= k; rgb[2] *= k;
 }
 
 #if RESOT_HW_D3D11
@@ -1428,7 +1500,8 @@ static uint32_t hw_tex_hash(const Texture *t)
         for (i = 0; i < 256; i += 8)
             h = (h ^ ((const uint32_t *)((const uint8_t *)xbox_GetMemoryOffset()
                                          + t->palette))[i]) * 16777619u;
-    return h;
+    /* RE-SoT: re-upload the demo watermark on menu/game transitions. */
+    return h ^ resot_ui_texture_variant(t->width, t->height);
 }
 
 static int hw_mem_ok(uint32_t va, uint32_t bytes)
@@ -1497,7 +1570,8 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
     HwTexture *c = NULL, *victim = NULL;
     uint32_t i, slot, hash, face, face_stride, *px;
     D3D11_TEXTURE2D_DESC td;
-    int mips;
+    int mips, hd; /* RE-SoT: host dimensions can exceed the guest font sheet. */
+    uint32_t upload_w, upload_h;
     LARGE_INTEGER upload_start, upload_end, upload_frequency; /* RE-SoT: slow upload evidence. */
     int cache_reason;
 
@@ -1576,10 +1650,20 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
     face_stride = t->cube ? tex_face_stride(t) : 0;
     for (face = 0; face < (t->cube ? 6u : 1u); face++)
         hw_decode_texture(t, face * face_stride, px + (size_t)face*t->width*t->height);
+    /* RE-SoT: replace before allocation, keeping the guest cache dimensions. */
+    upload_w = t->width; upload_h = t->height;
+    px = resot_ui_texture_pixels(px, &upload_w, &upload_h, t->cube, &hd);
     mips = t->levels > 1 && tex_size_from_format(t->color);
+    if (c->tex) {
+        ID3D11Texture2D_GetDesc(c->tex, &td);
+        if (td.Width != upload_w || td.Height != upload_h) {
+            ID3D11ShaderResourceView_Release(c->srv); c->srv = NULL;
+            ID3D11Texture2D_Release(c->tex); c->tex = NULL;
+        }
+    }
     if (!c->tex) {
         memset(&td, 0, sizeof td);
-        td.Width = t->width; td.Height = t->height;
+        td.Width = upload_w; td.Height = upload_h;
         td.MipLevels = mips ? 0 : 1; td.ArraySize = t->cube ? 6 : 1;
         td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
         td.SampleDesc.Count = 1;
@@ -1598,8 +1682,8 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
     ID3D11Texture2D_GetDesc(c->tex, &td);
     for (face = 0; face < (t->cube ? 6u : 1u); face++)
         ID3D11DeviceContext_UpdateSubresource(s_hw.ctx, (ID3D11Resource *)c->tex,
-            face * td.MipLevels, NULL, px + (size_t)face * t->width * t->height,
-            t->width * 4, 0);
+            face * td.MipLevels, NULL, px + (size_t)face * upload_w * upload_h,
+            upload_w * 4, 0);
     if (mips)
         ID3D11DeviceContext_GenerateMips(s_hw.ctx, c->srv);
     free(px);
@@ -1772,7 +1856,7 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     /* The header (vp, fogp, ws, pad) and then cur[]: everything in HwVsConst
      * before the program constants. */
     float hdr[16 + NV_VERTEX_ATTRS * 4], bf[4];
-    int st, i, halo;
+    int st, i, halo, probe;
     UINT stride = sizeof(HwVertex), zero = 0;
     uint32_t area;
 
@@ -1781,14 +1865,16 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     d = hw_depth(s);
 #if RESOT_RUNTIME_RETAIL
     halo = hw_retail_halo(s->w,s->h,d != NULL,s_hw_visibility.enabled);
+    probe = hw_retail_halo_probe(s->w,s->h,d != NULL,s_hw_visibility.enabled);
 #else
-    halo = 0; /* RE-SoT: this material was traced only in retail. */
+    halo = probe = 0; /* RE-SoT: this material was traced only in retail. */
 #endif
     ID3D11DeviceContext_OMSetRenderTargets(s_hw.ctx, 1, &s->rtv, d ? d->dsv : NULL);
     vp.TopLeftX = 0; vp.TopLeftY = 0;
     vp.Width = (float)hw_px(s->w, s->sc);
     vp.Height = (float)(hw_py(s->h,s->sc));
-    vp.MinDepth = 0; vp.MaxDepth = 1;
+    vp.MinDepth = 0;
+    vp.MaxDepth = halo || probe ? hw_halo_max_depth() : 1.0f;
     ID3D11DeviceContext_RSSetViewports(s_hw.ctx, 1, &vp);
     sc.left = (LONG)hw_px(s_gpu.clip_x, s->sc);
     sc.top = (LONG)(hw_py(s_gpu.clip_y,s->sc));
@@ -1854,7 +1940,7 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
         smp[st] = hw_sampler(t);
     }
     /* RE-SoT: match native halo attenuation without changing alpha/probes. */
-    if (halo) for (i=0;i<3;i++) pc.fac0[0][i] *= 0.25f;
+    if (halo) hw_halo_emission(pc.fac0[0]);
     /* Consecutive batches mostly share their combiner set-up. */
     if (!s_hw.ps_last_valid || memcmp(&pc, &s_hw.ps_last, sizeof pc)) {
         if (SUCCEEDED(ID3D11DeviceContext_Map(s_hw.ctx, (ID3D11Resource *)s_hw.ps_cb, 0,
@@ -2178,7 +2264,7 @@ static void hw_vsp_finish(HwVsp *e, ID3DBlob *b)
     }
 }
 
-/* RE-SoT: background compilation of vertex programs (xbox-demo).
+/* RE-SoT: background compilation of vertex programs (demo and retail).
  *
  * D3DCompile takes 24-158 ms for one translated program (37 programs of the
  * first level: mean 69 ms; skipping optimisation still 44 ms, so the flags
@@ -2189,9 +2275,14 @@ static void hw_vsp_finish(HwVsp *e, ID3DBlob *b)
  * stall of the APU thread in the log. A program missing from the disk cache
  * is now compiled by this thread, and its batches go through the vertex
  * interpreter -- the path every untranslatable program already takes --
- * until the shader is ready, usually a few frames. RESOT_ASYNC_VSH=0
- * compiles in place as before. */
-#if RESOT_RUNTIME_DEMO
+ * until the shader is ready, usually a few frames. Retail independently
+ * exhibits the same stall: the user's 2026-10-30 12:03 D3D11 log records
+ * cold vs_prog compilations of 28-154 ms, with KickOff waits up to 627 ms.
+ * Retail already falls back to the same interpreter for unsupported
+ * programs (9-20 interpreted batches/frame in those logs); use that path
+ * while its cold programs compile too. RESOT_ASYNC_VSH=0 compiles in place
+ * as before. This addresses cold-program hitches, not sustained scene cost. */
+#if RESOT_RUNTIME_DEMO || RESOT_RUNTIME_RETAIL
 typedef struct { HwVsp *e; char *src; size_t len; } HwVspJob;
 static HwVspJob s_vsp_jobs[HW_VSP_MAX];
 static LONG s_vsp_job_head, s_vsp_job_tail;   /* under s_vsp_job_cs */
@@ -2417,6 +2508,11 @@ static void hw_classify_screen(float left, float right, float top, float bottom)
     if(projected_ui && !s_gpu.depth_test && nv_hw_retail_health_frame(
         s_hw.widen,left,right,top,bottom,s_gpu.texs[0].width,
         s_gpu.texs[0].height,s_gpu.texs[0].color)) s_hw.batch_hud=-1;
+    /* RE-SoT: every full tank and forming ring, however long the column. */
+    if(projected_ui && !s_gpu.depth_test && !s_hw.batch_projected_screen
+        && nv_hw_retail_sand_column(s_hw.widen,left,right,top,bottom,
+        s_gpu.texs[0].width,s_gpu.texs[0].height,s_gpu.texs[0].color,
+        s_gpu.blend_enable)) s_hw.batch_hud=-1;
 #endif
     /* RE-SoT: retail only. Its title logo is flat 2D drawn through the
      * narrowed projection (vsh FE9274D1, x=92.531..476.531 y=48.531..168.531

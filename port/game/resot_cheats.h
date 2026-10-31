@@ -24,6 +24,7 @@
 #define RESOT_CHEATS_H
 #include <stdint.h>
 #include <stdio.h>
+#include <math.h>
 #include "guest_probe.h"
 
 #define RESOT_CHEATS_UNIVERSE_KEY 0xCC00008Eu
@@ -213,6 +214,36 @@ static void resot_map_write(volatile uint32_t *v)
     v[RESOT_UNIV_CUR_MAP / 4] = s_map_key;
     v[RESOT_UNIV_WORLD_TO_LOAD / 4] = s_map_key;
 }
+
+/* Retail-only first-spawn clearance requested after the user confirmed
+ * Tower's initial fall disappears on Retry. Its GAO's world matrix is
+ * [GAO +0x0C], with xyz translation at +0x30: retail 0x000309B5..0x000309E3
+ * reads that exact vector for sector distances. The engine's displacement
+ * path 0x0003D7A9..0x0003D7CE updates the same xyz matrix slots. Jade's
+ * vertical coordinate is z. Apply once as the requested load completes,
+ * before the next game frame; never keep lifting a falling character. */
+static void resot_map_spawn_clearance(void)
+{
+#ifdef RESOT_MAP_SPAWN_LIFT_KEY
+    uint32_t actor, matrix, i;
+    union { uint32_t u; float f; } xyz[3];
+    if (s_map_key != RESOT_MAP_SPAWN_LIFT_KEY ||
+            s_map_checkpoint != RESOT_MAP_SPAWN_LIFT_CHECKPOINT ||
+            !resot_cheats_word(RESOT_MAIN_ACTOR, &actor) || !actor ||
+            actor > UINT32_MAX - 0x10u ||
+            !resot_cheats_word(actor + 0x0Cu, &matrix) || !matrix ||
+            matrix > UINT32_MAX - 0x3Cu)
+        return;
+    for (i = 0; i < 3; i++)
+        if (!resot_cheats_word(matrix + 0x30u + i*4u, &xyz[i].u) ||
+                !isfinite(xyz[i].f) || fabsf(xyz[i].f) > 1000000.0f)
+            return;
+    *(volatile float *)((uintptr_t)g_xbox_mem_offset + matrix + 0x38u) =
+        xyz[2].f + RESOT_MAP_SPAWN_LIFT;
+    fprintf(stderr, "[MAP] Tower first spawn: z %.6f -> %.6f (+%.3f)\n",
+            xyz[2].f, xyz[2].f + RESOT_MAP_SPAWN_LIFT, RESOT_MAP_SPAWN_LIFT);
+#endif
+}
 #endif
 
 /* Per pad poll, after a retail Special Load Map (resot_map_follow). An
@@ -261,6 +292,7 @@ static void resot_map_frame(void)
         }
         fprintf(stderr, "[MAP] poll %u: %08X loaded (current world %08X, +0 %08X)\n",
                 s_cheats_frames, s_map_key, v[RESOT_UNIV_CURRENT_WORLD / 4], v[0]);
+        resot_map_spawn_clearance();
         s_map_state = 3;
         s_map_logged = s_cheats_frames;
         s_map_seen = s_map_checkpoint;

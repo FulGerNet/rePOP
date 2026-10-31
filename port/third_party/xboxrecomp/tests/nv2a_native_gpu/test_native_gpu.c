@@ -238,6 +238,116 @@ static int test_rectangle_depth_clear(SDL_GPUDevice *device,
     return 0;
 }
 
+/* RE-SoT: bounded allocator-only diagnostic. Query reuse correctness is
+ * covered by the normal GPU/CLEAR/fence test below; this mode measures only
+ * the CPU cost avoided when a completed native query is kept for reuse.
+ * No draw, query reset/read, submission, shader compilation or game data is
+ * included in the timed loop. It cannot establish gameplay FPS or crash cause. */
+static int query_allocation_bench(SDL_GPUDevice *device, const ResotGpuQueryAPI *api)
+{
+    const unsigned count = 4096, rounds = 3;
+    const Uint64 frequency = SDL_GetPerformanceFrequency();
+    REQUIRE(SDL_WaitForGPUIdle(device));
+    for (unsigned i = 0; i < 64; i++) {
+        void *query = api->create(device); REQUIRE(query);
+        api->destroy(device,query);
+    }
+    printf("query allocator benchmark: %s, %u create/destroy pairs per round; CPU only, no GPU work\n",
+           api->driver,count);
+    for (unsigned round = 0; round < rounds; round++) {
+        Uint64 start = SDL_GetPerformanceCounter();
+        for (unsigned i = 0; i < count; i++) {
+            void *query = api->create(device); REQUIRE(query);
+            api->destroy(device,query);
+        }
+        Uint64 elapsed = SDL_GetPerformanceCounter() - start;
+        double milliseconds = 1000.0 * (double)elapsed / (double)frequency;
+        printf("query allocator round %u: %u pairs, %.3f ms, %.3f us/pair\n",
+               round + 1,count,milliseconds,milliseconds * 1000.0 / count);
+    }
+    return 0;
+}
+
+/* RE-SoT: synthetic lifetime stress for the retirement order of native query
+ * objects. Same controller and order as the renderer: reset/begin/draw/end,
+ * submit with a fence, retire from a non-blocking poll, while SDL resets the
+ * recycled command buffer later. Reproducing or not reproducing a fault here
+ * says nothing about the game's frame content; it isolates only this order. */
+static int query_churn(SDL_GPUDevice *device, const ResotGpuQueryAPI *api,
+                       SDL_GPUGraphicsPipeline *gpu, SDL_GPUTexture *target,
+                       SDL_GPUTexture *depth, int pool_disabled, uint64_t total,
+                       SDL_Window *present)
+{
+    NgVisibility v = {0};
+    Reports reports = {0};
+    uint64_t next_log = 100000;
+    uint64_t submits = 0;
+    v.device = device; v.api = api; v.enabled = 1; v.pool_disabled = pool_disabled;
+    printf("query churn: %s pool_disabled=%d total=%llu present=%d\n",api->driver,pool_disabled,
+           (unsigned long long)total,present != NULL);
+    while (v.queries < total) {
+        SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(device);
+        SDL_GPUColorTargetInfo ct = {0};
+        SDL_GPUDepthStencilTargetInfo ds = {0};
+        SDL_GPUViewport vp = {0,0,128,128,0,1};
+        SDL_Rect sc = {32,32,64,64};
+        float pc[136] = {0};
+        SDL_GPUFence *fence;
+        REQUIRE(cmd);
+        ct.texture = target; ct.load_op = SDL_GPU_LOADOP_LOAD; ct.store_op = SDL_GPU_STOREOP_STORE;
+        ds.texture = depth; ds.load_op = SDL_GPU_LOADOP_CLEAR; ds.store_op = SDL_GPU_STOREOP_STORE;
+        ds.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE; ds.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        ds.clear_depth = 1;
+        /* Retail logs: about 2400 queries/s at 60 fps. With present the swapchain
+         * paces the loop, so a frame carries more to reach the logged totals. */
+        for (unsigned i = 0; i < (present ? 1000u : 40u); i++) {
+            NgVisSegment *s = ng_vis_prepare(&v,cmd,1);
+            SDL_GPURenderPass *pass;
+            REQUIRE(s);
+            pass = SDL_BeginGPURenderPass(cmd,&ct,1,&ds); REQUIRE(pass);
+            api->begin(cmd,s->query);
+            SDL_BindGPUGraphicsPipeline(pass,gpu); SDL_SetGPUViewport(pass,&vp); SDL_SetGPUScissor(pass,&sc);
+            SDL_PushGPUFragmentUniformData(cmd,0,pc,sizeof pc);
+            SDL_DrawGPUPrimitives(pass,3,1,0,0);
+            api->end(cmd,s->query); SDL_EndGPURenderPass(pass); api->resolve(cmd,s->query);
+            REQUIRE(ng_vis_report(&v,0,v.queries));
+            ng_vis_clear(&v);
+            ds.load_op = SDL_GPU_LOADOP_LOAD;
+        }
+        if (present) {
+            SDL_GPUTexture *swap = NULL;
+            REQUIRE(SDL_WaitAndAcquireGPUSwapchainTexture(cmd,present,&swap,NULL,NULL));
+            if (swap) {
+                SDL_GPUColorTargetInfo back = {0};
+                SDL_GPURenderPass *pass;
+                back.texture = swap; back.load_op = SDL_GPU_LOADOP_CLEAR; back.store_op = SDL_GPU_STOREOP_STORE;
+                pass = SDL_BeginGPURenderPass(cmd,&back,1,NULL); REQUIRE(pass); SDL_EndGPURenderPass(pass);
+            }
+            SDL_PumpEvents();
+        }
+        fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd); REQUIRE(fence);
+        REQUIRE(ng_vis_submitted(&v,fence));
+        REQUIRE(ng_vis_poll(&v,report_complete,&reports));
+        if (++submits % 8 == 0) { /* Bound frames in flight without draining each one. */
+            REQUIRE(SDL_WaitForGPUFences(device,true,&fence,1));
+            REQUIRE(ng_vis_poll(&v,report_complete,&reports));
+        }
+        if (v.queries >= next_log) {
+            printf("query churn: %llu queries, %llu allocated, %llu reused, %llu reports\n",
+                   (unsigned long long)v.queries,(unsigned long long)v.allocated,
+                   (unsigned long long)v.reused,(unsigned long long)v.completed);
+            next_log += 100000;
+        }
+    }
+    REQUIRE(SDL_WaitForGPUIdle(device));
+    REQUIRE(ng_vis_poll(&v,report_complete,&reports));
+    printf("query churn done: %llu queries, %llu allocated, %llu reused, %llu reports\n",
+           (unsigned long long)v.queries,(unsigned long long)v.allocated,
+           (unsigned long long)v.reused,(unsigned long long)v.completed);
+    ng_vis_destroy(&v);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0); /* RE-SoT: expose long GPU phases in test logs. */
@@ -266,6 +376,17 @@ int main(int argc, char **argv)
     device = resot_native_device(backend,1); /* RE-SoT: production minimal feature contract. */
     REQUIRE(device);
     REQUIRE(!strcmp(SDL_GetGPUDeviceDriver(device),backend));
+    query_library = SDL_LoadObject("SDL3.dll"); REQUIRE(query_library);
+    get_api = (ResotGetGpuQueryAPI)SDL_LoadFunction(query_library,dx ? "RESOT_GetD3D12QueryAPI" : "RESOT_GetVulkanQueryAPI");
+    REQUIRE(get_api);
+    api = get_api(RESOT_GPU_QUERY_ABI); REQUIRE(api && api->size == sizeof *api && !strcmp(api->driver,backend));
+    REQUIRE(!get_api(RESOT_GPU_QUERY_ABI+1)); /* Incompatible ABI must fail explicitly. */
+    if (argc > 2 && !strcmp(argv[2],"--query-bench")) {
+        int result = query_allocation_bench(device,api);
+        SDL_DestroyGPUDevice(device); SDL_DestroyWindow(window);
+        SDL_Quit(); SDL_UnloadObject(query_library);
+        return result;
+    }
     REQUIRE(!test_vertex_ring(device));
     REQUIRE(!test_texture_cycle(device)); /* RE-SoT: cached image lifetime. */
     REQUIRE(!test_texture_probe(device,64,32)); /* RE-SoT: production texture/mip diagnostics. */
@@ -273,11 +394,6 @@ int main(int argc, char **argv)
     REQUIRE(!test_texture_probe(device,64,64)); /* RE-SoT: square control. */
     REQUIRE(!test_texture_probe(device,1,64)); /* RE-SoT: clamp narrow dimensions at every mip. */
     REQUIRE(!test_texture_probe(device,64,1));
-    query_library = SDL_LoadObject("SDL3.dll"); REQUIRE(query_library);
-    get_api = (ResotGetGpuQueryAPI)SDL_LoadFunction(query_library,dx ? "RESOT_GetD3D12QueryAPI" : "RESOT_GetVulkanQueryAPI");
-    REQUIRE(get_api);
-    api = get_api(RESOT_GPU_QUERY_ABI); REQUIRE(api && api->size == sizeof *api && !strcmp(api->driver,backend));
-    REQUIRE(!get_api(RESOT_GPU_QUERY_ABI+1)); /* Incompatible ABI must fail explicitly. */
     visibility.device = device; visibility.api = api; visibility.enabled = 1;
     REQUIRE(SDL_ClaimWindowForGPUDevice(device,window));
     REQUIRE(SDL_ShowWindow(window));
@@ -313,6 +429,9 @@ int main(int argc, char **argv)
     image.format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT; image.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
     depth = SDL_CreateGPUTexture(device,&image); REQUIRE(depth);
     transfer = SDL_CreateGPUTransferBuffer(device,&transfer_info); REQUIRE(transfer);
+    if (argc > 4 && !strcmp(argv[2],"--query-churn")) /* --query-churn <pool_disabled 0|1> <total> [present] */
+        return query_churn(device,api,gpu,target,depth,atoi(argv[3]),strtoull(argv[4],NULL,10),
+                           argc > 5 ? window : NULL);
     REQUIRE(!test_rectangle_depth_clear(device,&pipeline,gpu,target,depth,transfer));
     REQUIRE(!test_depth_clip(device,dx,&pipeline,target,transfer));
     REQUIRE(!test_shadow_sample(device,dx,&pipeline,target,transfer));

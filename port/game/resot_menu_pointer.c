@@ -258,6 +258,17 @@ void resot_menu_pointer_pad(uint8_t *state)
     }
     if(hit>=0 && current>=0 && hit!=current) {
         state[4]|=(uint8_t)(hit<current?1:2);
+#if RESOT_RUNTIME_RETAIL
+        /* The name keyboard is a grid of choices built in nested loops
+         * (0x002C5FB0..0x002C7072; other traced pages have at most 5 rows).
+         * Child order says nothing there and up/down alone stays in a column:
+         * walk to the row, then along it. Left/right bits as in save_carousel. */
+        if(n>=12) {
+            state[4]&=(uint8_t)~3;
+            if(fabsf(ys[hit]-ys[current])>0.005f) state[4]|=(uint8_t)(ys[hit]<ys[current]?1:2);
+            else state[4]|=(uint8_t)(xs[hit]<xs[current]?4:8);
+        }
+#endif
         release=1;
     } else if(hit>=0 && choices[hit]==click_choice && current==hit) {
         state[6]=255; release=1; click_choice=hover_choice=0;

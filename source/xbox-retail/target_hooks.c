@@ -604,7 +604,14 @@ static void text_dump(void)
 #define RESOT_UNIV_LOAD_MOVIE       0x110u
 #define RESOT_UNIV_NEW_GAME_MOVIE   0x0Au
 #define RESOT_UNIV_FIRST_MAP        0x2200B526u
+/* Host clearance for the first Special Load Map spawn only; BF content
+ * keys (s_maps below), not executable addresses. Half a centimetre in the
+ * world's metre units. Normal checkpoint retries retain the title's spawn. */
+#define RESOT_MAP_SPAWN_LIFT_KEY        0x41002456u
+#define RESOT_MAP_SPAWN_LIFT_CHECKPOINT 0x2B006896u
+#define RESOT_MAP_SPAWN_LIFT            0.005f
 #include "../../port/game/resot_cheats.h"
+#include "../../port/game/resot_gate_diag.h"
 /* The Prince AI's set-up, 0x00270940: first stack argument the Prince's GAO
  * (ebp at 0x00270953), eax the costume source (ebx at 0x0027094F, tested at
  * 0x00270A13, read at 0x00270CF3). */
@@ -722,7 +729,16 @@ static const char *const s_map_parts[MAP_PARTS] = {
  * checkpoint, faulted there too. Their areas are listed by a neighbouring
  * map with a checkpoint: 1401 Cour (0x4D000F5F) and 8101 Bridge Support
  * (0x41006037), keys as WOLInfo.bin lists them. 2601 and 7401 loaded at
- * their checkpoints (user logs); the others were not all seen in game. 0x2200B794 and 0x0F0053D9 are the values the
+ * their checkpoints (user logs); the others were not all seen in game.
+ * 1501's base WOL has only FRH_Checkpoint (0x0F00425D); its Enemies WOL,
+ * original key 0x2B014DDD in WOLInfo.bin, also contains TEC_Checkpoint
+ * (0x0F00425C). 3101's FRH_Checkpoint01_StartPos (0x41005E82) belongs to
+ * its Bridge dependency, which also has the real TEC_CheckPoint_00
+ * (0x2B006896). The FRH choices loaded without calling Prince set-up in
+ * the user's 2026-10-29 31-load log, leaving the menu Prince's head and
+ * position. Use the TEC entries that initialize him instead. BF GAO keys
+ * are content keys, not XBE addresses; the map keys are from WOLInfo.bin.
+ * 0x2200B794 and 0x0F0053D9 are the values the
  * universe held after Start New Game and after MenuBoot's load. */
 static const ResotMap s_maps[MAP_PARTS][MAP_PER_PART] = {
     { { "0101 Entree", 0x2200B526u, 0x2200B794u },             /* ff02b526, StartCheckpoint */
@@ -734,13 +750,13 @@ static const ResotMap s_maps[MAP_PARTS][MAP_PER_PART] = {
       { "1201 Chambre Sultan Start", 0x4D0425D8u, 0x4D0026F3u }, /* ff0d25d8, Checkpoint01 */
       { "1301 Lobby", 0x4D000D5Bu, 0x4D00F5CBu },              /* ff0d0d5b, DefconRoom 01 */
       { "1401 Cour", 0x4D000F5Fu, 0x4D002774u },               /* ff0d0f5f, TEC_Checkpoint */
-      { "1501 Reception Hall", 0x0F00387Du, 0x0F00425Du } },   /* ff0f387d, FRH_Checkpoint */
+      { "1501 Reception Hall", 0x2B014DDDu, 0x0F00425Cu } },   /* ff0b4ddd, TEC_Checkpoint; includes the hall and its enemies */
     { { "2101 Start", 0x0D0024F8u, 0x0D002504u },              /* ff0d24f8, TEC_Checkpoint */
       { "2201 Aviary", 0x2B005C22u, 0x2B0065B8u },             /* ff0b5c22, CheckPoint01 */
       { "2401 Corridor Start", 0x4D006474u, 0x410036B0u },     /* ff0d6474, LowerBath Start */
       { "2501 Ancient Hall", 0x2B005DBAu, 0x2B0065BCu },       /* ff0b5dba, CheckPoint01 */
       { "2601 Bridge", 0x0F003E8Bu, 0x2B006896u },             /* ff0f3e8b, CheckPoint_00 */
-      { "3101 Tower", 0x41002456u, 0x41005E82u },              /* ff012456, Checkpoint01_StartPos */
+      { "3101 Tower", 0x41002456u, 0x2B006896u },              /* ff012456, Bridge TEC_CheckPoint_00 on the tower approach */
       { "3201 Grotte", 0x2200AC02u, 0x2200E14Du },             /* ff02ac02, Checkpoint_01 */
       { "3301 Reservoir", 0x0F00322Bu, 0x41001EF5u },          /* ff0f322b, TEC_StartPos */
       { "3401 Balcony", 0x410052C9u, 0x4100536Au },            /* ff0152c9, Checkpoint_StartPos */
@@ -1275,6 +1291,7 @@ static void native_refresh(void)
     resot_game_behavior_frame();
     resot_game_skin_frame();
     resot_test_map();
+    resot_gate_watch();
     prince_list_watch();
     if (resot_cheats_frame())
         for (k = 0; k < CTX_COUNT; k++)

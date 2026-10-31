@@ -54,7 +54,7 @@ Run `python tools/test-menu-pointer.py`. It compiles the production shared
 mouse/touch bridge against synthetic guest objects for both target layouts.
 Checks include row selection, separate direction/activation releases, a single
 activation per tap, drag cancellation, page changes during a press, physical
-input priority, idle movie polling, Bink taps, cinematic viewport state,
+input priority, the retail name keyboard grid, idle movie polling, Bink taps, cinematic viewport state,
 pillarbox misses and invalid guest metadata. Products stay in
 `build/menu-pointer-tests/`. This does not replace mouse testing in the actual
 window or Android device touch/lifecycle validation.
@@ -173,3 +173,12 @@ FIFO completion, slot reuse, and normalization across render scales. Products
 stay in ignored `build/visibility-tests/`. No game files or window are used.
 The renderer integration and the cause of the reported flickering still need
 in-game validation; this test does not simulate a removed graphics device.
+
+## Native framebuffer alias lifetime
+
+`python tools/test-native-surface-alias.py` compiles the production retail
+RAM fingerprint, alias check and GPU-producer marking functions with synthetic
+guest RAM. It covers current-frame GPU writes, later RAM reuse, repeated
+texture stages, retained scanout ownership and restoring the alias after
+a new GPU draw. No window, game data or controller input is used. This is
+a lifetime-policy regression; manual GPU rendering remains a separate check.

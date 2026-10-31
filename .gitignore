@@ -1,5 +1,7 @@
 # The user's own game files.
 /Assets/
+# Generated from the user's logo images by tools/hd-logo.py; builds without them.
+/port/game/resot_hd_logo_xbox_*.h
 # Analysis databases, Ghidra projects and notes that quote the binaries.
 /research/
 # Outputs.

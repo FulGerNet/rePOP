@@ -612,6 +612,47 @@ extern int  xbox_OhciHandleMmio(void *ctx, uint32_t xbox_va);
 #define APU_TRAP_BASE 0xFE800000u
 #define APU_TRAP_END  0xFE880000u
 
+/* RE-SoT: a fault inside a driver has no frames StackWalk can follow. Name the
+ * thread and the module, and list stack words that point into loaded code:
+ * candidates, not a verified call chain (stale slots can match). */
+static void print_native_fault_context(const CONTEXT *ctx)
+{
+    typedef HRESULT (WINAPI *GetDescription)(HANDLE, PWSTR *);
+    GetDescription get = (GetDescription)(void *)GetProcAddress(
+        GetModuleHandleA("kernel32.dll"), "GetThreadDescription");
+    PWSTR name = NULL;
+    const DWORD64 *sp = (const DWORD64 *)ctx->Rsp;
+    MEMORY_BASIC_INFORMATION mbi;
+    unsigned printed = 0;
+    fprintf(stderr, "  Thread %lu", GetCurrentThreadId());
+    if (get && SUCCEEDED(get(GetCurrentThread(), &name)) && name) {
+        fprintf(stderr, " \"%ls\"", name);
+        LocalFree(name);
+    }
+    fprintf(stderr, " rsp=%p\n", sp);
+    if (!VirtualQuery(sp, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT) return;
+    {
+        const DWORD64 *end = (const DWORD64 *)((const char *)mbi.BaseAddress + mbi.RegionSize);
+        for (unsigned i = 0; i < 2048 && sp + i < end && printed < 32; i++) {
+            HMODULE module;
+            char path[MAX_PATH];
+            MEMORY_BASIC_INFORMATION code;
+            const void *value = (const void *)sp[i];
+            if ((sp[i] >> 47) || !VirtualQuery(value, &code, sizeof code)
+                    || !(code.Protect & (PAGE_EXECUTE_READ | PAGE_EXECUTE | PAGE_EXECUTE_READWRITE))
+                    || !GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                                         | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                           (LPCSTR)value, &module)
+                    || !GetModuleFileNameA(module, path, sizeof path))
+                continue;
+            fprintf(stderr, "    stack+%03X %s+0x%llX\n", i * 8,
+                    strrchr(path, '\\') ? strrchr(path, '\\') + 1 : path,
+                    (unsigned long long)(sp[i] - (DWORD64)module));
+            printed++;
+        }
+    }
+}
+
 static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
 {
     if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
@@ -664,6 +705,7 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
             (unsigned long long)ep->ContextRecord->Rip,
             (unsigned long long)fault_addr,
             ep->ExceptionRecord->ExceptionInformation[0] ? "write" : "read");
+        print_native_fault_context(ep->ContextRecord);
         fprintf(stderr, "  Xbox regs: eax=0x%08X ecx=0x%08X edx=0x%08X esp=0x%08X\n",
             g_eax, g_ecx, g_edx, g_esp);
         fprintf(stderr, "  Xbox regs: ebx=0x%08X esi=0x%08X edi=0x%08X\n",

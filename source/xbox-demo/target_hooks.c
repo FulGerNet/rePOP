@@ -894,8 +894,7 @@ static const char *const s_map_parts[MAP_PARTS] = { "Maps 1 to 11", "Maps 12 to 
 /* Original keys (resot_cheats.h): from the lifted code's immediates (the
  * Load Map table at 0x0015D580 and others), except 05_GP14_Jardin,
  * 06_GP24_E3_Long and 08_GP62_E3_Long (the BF's data, in their family:
- * ff0b3xxx is 0x1B00xxxx, ff0f53xx 0x0F0053xx) and 6201_PrisonA (the
- * retail's ff02 family, 0x22). Bin entries in the comments. */
+ * ff0b3xxx is 0x1B00xxxx, ff0f53xx 0x0F0053xx). Bin entries in the comments. */
 static const ResotMap s_maps[MAP_PARTS][MAP_PER_PART] = {
     { { "_Start_Demo", 0x0B0044C9u },                     /* ff0b44c9 */
       /* Menu_wol_ff0e016c (0x0E00016C) closed the demo when the user chose
@@ -918,7 +917,11 @@ static const ResotMap s_maps[MAP_PARTS][MAP_PER_PART] = {
       { "08_GP62_E3_Long", 0x0F0053EEu },                 /* ff0f53ee */
       { "08_GP62_E3_Cour", 0x0F0053EFu },                 /* ff0f53ef */
       { "09_GP81_Tomb", 0x1B003A26u },                    /* ff0b3a26 */
-      { "6201_PrisonA", 0x2200E124u },                    /* ff02e124 */
+      /* 6201_PrisonA_wol_ff02e124 (0x2200E124) lists the three area worlds
+       * but no PrinceCostume05 and no E3 world: no Prince set-up in the user's
+       * log, the menu Prince's head stayed. 08_GP62_E3_Cour lists the same
+       * areas with both, and did set him up (log 20261028-000147). */
+      { "6201_PrisonA", 0x0F0053EFu },                    /* ff0f53ef */
       { "01_GP01_E3_Cour (world, no map)", RESOT_MAP_NAME_ONLY } },
 };
 

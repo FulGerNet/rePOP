@@ -1,5 +1,7 @@
 # reSOT on Windows
 
+Version 0.4.2 brings the HD menu logos, the retail name keyboard fix for the
+mouse and the sand tank HUD fix. `RESOT_HD_LOGO=0` keeps the game's logo.
 Version 0.4.1 carries the retail rendering, crash and loading-hang fixes.
 The Android launcher's logs tip is not here: the Windows version plate is
 not a button, the logs are files in `bin/logs`. Version 0.4.0 adds Special Load Map and Cheats (in reSOT Options), the
@@ -10,7 +12,7 @@ animated Prince of Persia title to the launcher. Version 0.3.3 ran the game and 
 a retail mid-game freeze, reduces audio crackle and brings the new animated
 logo. Version 0.3.2 added Reduced/Standard/Full graphics presets and a background
 stable-release check with optional Update / Close buttons styled like the
-launcher. The displayed version is 0.4.1. Offline/rate-limit errors are ignored.
+launcher. The displayed version is 0.4.2. Offline/rate-limit errors are ignored.
 No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
 request and reSOT version in its User-Agent. Update opens the official release
 page, without downloading/installing an executable automatically.
