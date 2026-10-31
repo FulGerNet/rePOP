@@ -177,7 +177,7 @@ static struct {
     HwPsConst last_pc;
     int vc_valid, pc_valid;
     /* RE-SoT: overlay and F5/F6 panel images, kept while their size holds. */
-    SDL_GPUTexture *overlay, *panel;
+    SDL_GPUTexture *overlay, *panel, *label, *lines; /* RE-SoT: label: the F8 mode's name; lines: its volumes. */
     uint32_t overlay_w, overlay_h, overlay_serial, panel_w, panel_h;
     DWORD movie_log;
     uint32_t movie_composes; /* RE-SoT: distinguish movie repaint cadence from guest flips. */
@@ -466,7 +466,7 @@ static NgTranslatedFragment *ng_specialized_ps(const HwPsConst *pc)
     NgTranslatedFragment *entry;
     static int enabled=-1;
     if(enabled<0) { const char *e=getenv("RESOT_NATIVE_SPECIALIZE"); enabled=!(e && *e=='0'); }
-    if(!enabled || s_ng_compat) return NULL; /* RE-SoT: driver workaround. */
+    if(!enabled || s_ng_compat || pc->misc[3]) return NULL; /* RE-SoT: driver workaround; F8 views run in ps_main. */
     resot_ps_key(key,pc);
     if(s_ng.active==100) key[RESOT_PS_FLAGS]=0; /* RE-SoT: those stay uniforms in the SPIR-V. */
     bucket=ng_program_bucket(key,RESOT_PS_KEY_WORDS);
@@ -1451,6 +1451,7 @@ static void ng_constants(NgSurface *s, NgVsConst *vc, HwPsConst *pc, SDL_GPUText
     hw_color4(s_gpu.fog_color, pc->fogc);
     { float r = pc->fogc[2]; pc->fogc[2] = pc->fogc[0]; pc->fogc[0] = r; }
     pc->misc[0] = (uint32_t)s_gpu.rc_seen;
+    pc->misc[3] = (uint32_t)s_hw.batch_debug;
     for (i = 0; i < 4; i++) {
         const Texture *t = &s_gpu.texs[i];
         uint32_t mode = (s_gpu.rc.stage_program >> (5*i))&31;
@@ -1812,7 +1813,7 @@ static int ng_simple_combiner(void)
 #if RESOT_RUNTIME_RETAIL || RESOT_RUNTIME_DEMO
     static int enabled = -1;
     if (enabled < 0) { const char *e = getenv("RESOT_NATIVE_SIMPLE"); enabled = !(e && *e == '0'); }
-    int eligible = enabled && !s_ng_compat && s_ng.simple_ps && s_ng.simple_alpha_ps && s_gpu.rc_seen && resot_native_simple(
+    int eligible = enabled && !s_ng_compat && !s_hw.batch_debug && s_ng.simple_ps && s_ng.simple_alpha_ps && s_gpu.rc_seen && resot_native_simple(
         s_gpu.rc.control,s_gpu.rc.stage_program,s_gpu.rc.color_icw[0],s_gpu.rc.alpha_icw[0],
         s_gpu.rc.color_ocw[0],s_gpu.rc.alpha_ocw[0],s_gpu.rc.final0,s_gpu.rc.final1,
         s_gpu.alpha_test,s_gpu.alpha_func,s_gpu.texs[0].cube);
@@ -1886,6 +1887,7 @@ static int ng_draw_program_batch(void)
     pcount = nv2a_vsh_pack_gpu(&words, &inputs, &ninputs);
     if (!pcount) return 0;
     if (hw_skip_shadow()) return 1; /* RE-SoT: same effect policy as D3D11/CPU. */
+    if (hw_debug_begin(hw_debug_flat())) return 1; /* RE-SoT */
     /* RE-SoT: use 1/2/4/8 float4 inputs instead of always uploading eight.
      * This removes unused zero stores and cuts CPU/GPU transfer bytes for
      * small programs; formats still use the exact fetch_attr conversion. */
@@ -2289,6 +2291,14 @@ static void ng_compose(void)
         ng_blit(s_ng.composed,SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,s_ng.overlay,&vp,NULL,1,15,NULL,0);
     }
     else { s_ng.movie_log = 0; s_ng.movie_composes = 0; }
+    /* RE-SoT: F8 Show triggers: over the picture, under the panels. */
+    if (xbox_FramebufferDebugLinesGet(&pixels,&w,&h) && w && h) {
+        if (!s_ng.lines)
+            s_ng.lines = ng_image(w,h,0,1,SDL_GPU_TEXTUREUSAGE_SAMPLER,SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+        ng_upload_cycle(s_ng.lines,pixels,w,h,1,0,1);
+        vp.x = px; vp.y = py; vp.w = pw; vp.h = ph;
+        ng_blit(s_ng.composed,SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,s_ng.lines,&vp,NULL,3,15,NULL,0);
+    }
     if (xbox_FramebufferDebugPanelGet(&pixels,&w,&h) && w && h) {
         float scale = bh/720.0f;
         if (scale < 0.75f) scale = 0.75f;
@@ -2301,6 +2311,17 @@ static void ng_compose(void)
         ng_upload_cycle(s_ng.panel,pixels,w,h,1,0,1);
         vp.x = vp.y = 8*scale; vp.w = w*scale; vp.h = h*scale;
         ng_blit(s_ng.composed,SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,s_ng.panel,&vp,NULL,3,15,NULL,0);
+    }
+    /* RE-SoT: the F8 mode's name, top right, over both game and movies. */
+    if (xbox_FramebufferRenderLabelGet(&pixels,&w,&h) && w && h) {
+        float scale = bh/720.0f;
+        if (scale < 0.75f) scale = 0.75f;
+        if ((w+16)*scale > bw) scale = (float)bw/(w+16);
+        if (!s_ng.label)
+            s_ng.label = ng_image(w,h,0,1,SDL_GPU_TEXTUREUSAGE_SAMPLER,SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+        ng_upload_cycle(s_ng.label,pixels,w,h,1,0,1);
+        vp.x = bw-(w+8)*scale; vp.y = 8*scale; vp.w = w*scale; vp.h = h*scale;
+        ng_blit(s_ng.composed,SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,s_ng.label,&vp,NULL,3,15,NULL,0);
     }
     s_hw.pending_present = 1;
 }

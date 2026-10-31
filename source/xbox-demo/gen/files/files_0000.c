@@ -3630,6 +3630,8 @@ loc_000BFB7F: ;
  */
 void sub_000BFB80(void)
 {
+    extern void sub_000BFB80_enter(void);
+    sub_000BFB80_enter();
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */
     int _flags = 0; /* fallback flag var */

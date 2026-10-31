@@ -107,6 +107,9 @@ extern int   xbox_FramebufferPostProcessing(void); /* RE-SoT: live graphics opti
 /* RE-SoT: the F5 panel is host UI, drawn after the title's movie overlay. */
 extern int   xbox_FramebufferDebugPanelGet(const uint32_t **px, uint32_t *w,
                                           uint32_t *h);
+extern int   xbox_FramebufferRenderLabelGet(const uint32_t **px, uint32_t *w, uint32_t *h);
+extern int   xbox_FramebufferDebugLinesGet(const uint32_t **px, uint32_t *w, uint32_t *h);
+extern int   xbox_FramebufferRenderMode(void);
 extern int   xbox_FramebufferOverlayGet(const uint32_t **px, uint32_t *w,
                                         uint32_t *h, uint32_t rect[4],
                                         uint32_t *serial);
@@ -190,6 +193,7 @@ static int hw_shadow_receiver(const Texture *t); /* RE-SoT: shared observed cast
 
 static struct {
     int tried, ok, scale, nocull;
+    int batch_debug; /* RE-SoT: F8 view of this draw, PSC misc.w (hw_debug_begin). */
     int fx_scale;                       /* the same for surfaces smaller than the display */
     int vsync, cpu_vsh;
     float aspect;                       /* shown width / height */
@@ -235,7 +239,8 @@ static struct {
     ID3D11ShaderResourceView *ovl_srv;
     uint32_t ovl_w, ovl_h, ovl_serial;
     /* RE-SoT: separate resources so host UI never replaces movie pixels. */
-    ID3D11Texture2D *debug_tex;
+    ID3D11Texture2D *debug_tex, *label_tex, *lines_tex; /* RE-SoT: label: the F8 mode's name; lines: its volumes. */
+    ID3D11ShaderResourceView *label_srv, *lines_srv;
     uint32_t debug_width, debug_height; /* RE-SoT: F5 and F6 have different sizes. */
     ID3D11ShaderResourceView *debug_srv;
     ID3D11PixelShader *ps_debug;        /* RE-SoT: preserve host panel alpha. */
@@ -624,6 +629,9 @@ static const char s_hw_hlsl[] =
 "  else { if (d == 12) Q12 = rc_m(Q12, v, m); else if (d == 13) Q13 = rc_m(Q13, v, m);\n"
 "    else if (d == 14) Q14 = rc_m(Q14, v, m); else Q15 = rc_m(Q15, v, m); } }\n"
 "float4 ps_main(VO i) : SV_Target {\n"
+/* RE-SoT: F8 debug views (misc.w): 1 lit by nothing, 2 and 3 vertex colours.
+ * Only this reference shader reads it; such draws skip every specialization. */
+"  if (misc.w == 1u) { i.d0.rgb = 1.0; i.d1 = 0; }\n"
 "  float4 s0 = float4(1, 1, 1, 1);\n"
 "  [branch] if (tscale[0].z > 0.5) { if (tscale[0].w > 0.5) s0 = cx0.Sample(sm0, i.t0.xyz);\n"
 "    else s0 = tx0.Sample(sm0, proj_uv(i.t0, tscale[0])); }\n"
@@ -703,6 +711,8 @@ static const char s_hw_hlsl[] =
 "    } else o = Q12;\n"
 "  }\n"
 "  o = saturate(o);\n"
+"  if (misc.w >= 2u) o.rgb = i.d0.rgb;\n"
+"  if (misc.w == 3u) o.a = 1.0;\n"
 "  if (atest.x != 0) {\n"
 "    int v = int(o.a * 255.0 + 0.5), r = int(atest.z & 0xFF); uint f = atest.y; bool ok = true;\n"
 "    if (f == 0x200) ok = false; else if (f == 0x201) ok = v < r;\n"
@@ -923,7 +933,7 @@ static HwTrPs *hw_trps_get(const HwPsConst *pc)
     char *src;
     ID3DBlob *b;
     if (enabled < 0) { const char *v = getenv("RESOT_PS_TRANSLATE"); enabled = !(v && *v == '0'); }
-    if (!enabled) return NULL;
+    if (!enabled || pc->misc[3]) return NULL; /* RE-SoT: F8 views run in ps_main. */
     resot_ps_key(key, pc);
     for (i = 0; i < RESOT_PS_KEY_WORDS; i++) bucket = (bucket ^ key[i]) * 16777619u;
     bucket &= 255;
@@ -1971,6 +1981,7 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     hw_color4(s_gpu.fog_color, pc.fogc);       /* FOG_COLOR has R in bits 0-7 */
     { float r = pc.fogc[2]; pc.fogc[2] = pc.fogc[0]; pc.fogc[0] = r; }
     pc.misc[0] = (uint32_t)s_gpu.rc_seen;
+    pc.misc[3] = (uint32_t)s_hw.batch_debug;
     for (st = 0; st < 4; st++) {
         const Texture *t = &s_gpu.texs[st];
         uint32_t mode = (s_gpu.rc.stage_program >> (st * 5)) & 0x1F;
@@ -2726,6 +2737,70 @@ static int hw_postprocess_candidate(uint32_t n)
  * reused/static RGB565 texture from suppressing unrelated geometry. */
 static struct { uint32_t offset,frame; int valid; } s_shadow_targets[32];
 static int hw_shadow_receiver(const Texture *t); /* RE-SoT: same provenance for admission and skipping. */
+/* RE-SoT: F8 debug view. 3D on the display surface only: 2D, HUD and the glow
+ * chain stay as they are. Multipass light maps and shadows multiply the picture,
+ * and additive passes would wash out vertex colours, so those passes are skipped.
+ * Returns 1 to skip the draw. Show triggers leaves everything but the meshes the
+ * entry hooks named (port/game/resot_invisible.h). */
+#define HW_DEBUG_MARKS 4096u
+static volatile uint32_t s_hw_debug_marks[HW_DEBUG_MARKS];
+static uint32_t s_hw_debug_marks_frame;
+void nv2a_hw_debug_mark_mesh(uint32_t data)
+{
+    uint32_t key = data & 0x0FFFFFFFu, i, slot = (key >> 4) * 2654435761u;
+    if (!key) return;
+    for (i = 0; i < 32; i++, slot++) {
+        uint32_t at = s_hw_debug_marks[slot & (HW_DEBUG_MARKS - 1)];
+        if (at == key) return;
+        if (!at) { s_hw_debug_marks[slot & (HW_DEBUG_MARKS - 1)] = key; return; }
+    }
+}
+static int hw_debug_marked(uint32_t data)
+{
+    uint32_t key = data & 0x0FFFFFFFu, i, slot = (key >> 4) * 2654435761u;
+    if (!key) return 0;
+    for (i = 0; i < 32; i++, slot++) {
+        uint32_t at = s_hw_debug_marks[slot & (HW_DEBUG_MARKS - 1)];
+        if (at == key) return 1;
+        if (!at) return 0;
+    }
+    return 0;
+}
+static int hw_debug_begin(int flat)
+{
+    int mode = xbox_FramebufferRenderMode();
+    s_hw.batch_debug = 0;
+    if (!mode || flat || s_gpu.clip_w != 640 || s_gpu.clip_h < 448) return 0;
+    if (mode == 3) {
+        uint32_t a;
+        /* The marks are rewritten each game frame; levels reuse the addresses. */
+        if (s_hw.frame - s_hw_debug_marks_frame >= 600) {
+            memset((void *)s_hw_debug_marks, 0, sizeof s_hw_debug_marks);
+            s_hw_debug_marks_frame = s_hw.frame;
+        }
+        for (a = 0; a < NV_VERTEX_ATTRS; a++)
+            if (s_gpu.attr[a].size && s_gpu.attr[a].stride && hw_debug_marked(s_gpu.attr[a].offset)) {
+                s_hw.batch_debug = 3;
+                break;
+            }
+        return 0;
+    }
+    if (s_gpu.blend_enable && (s_gpu.blend_dfactor == 0x300 || s_gpu.blend_sfactor == 0x306 ||
+            s_gpu.blend_dfactor == 1)) return 1;
+    s_hw.batch_debug = mode;
+    return 0;
+}
+/* A program's first vertex: w == 1 is the title's 2D, as in hw_classify_screen. */
+static int hw_debug_flat(void)
+{
+    float in[NV2A_VSH_INPUTS][4];
+    Nv2aVshOutput o;
+    uint32_t a;
+    if (!xbox_FramebufferRenderMode()) return 0;
+    for (a = 0; a < NV2A_VSH_INPUTS; a++)
+        fetch_attr(&s_gpu.attr[a], s_gpu.idx[0], in[a]);
+    return nv2a_vsh_run((const float (*)[4])in, &o) && fabsf(o.pos[3] - 1.0f) <= 0.0001f;
+}
 static int hw_skip_shadow(void)
 {
     unsigned i,best=0;
@@ -2960,6 +3035,7 @@ static int hw_draw_program_batch(void)
     if (s_hw.cpu_vsh || n < 3 || n > NV_MAX_INDICES)
         return 0;
     if (hw_skip_shadow()) return 1; /* RE-SoT: before conversion/upload. */
+    if (hw_debug_begin(hw_debug_flat())) return 1; /* RE-SoT */
     /* RE-SoT: verify the four corners of a possible final glow composite. */
     if (hw_postprocess_candidate(n)) {
         Nv2aVshOutput post[4];
@@ -3218,6 +3294,7 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
     uint32_t i, count = 0;
 
     if (hw_skip_shadow() || hw_skip_postprocess(v, n)) return; /* RE-SoT: CPU-transformed batches too. */
+    if (n && hw_debug_begin(fabsf(v[0].pos[3] - 1.0f) <= 0.0001f)) return; /* RE-SoT */
 
     /* Full-width 2D keeps its width (see hw_draw_program_batch). */
     {
@@ -3539,6 +3616,29 @@ static void hw_compose_locked(void) /* RE-SoT: snapshot before post-flip fences.
     }
     /* RE-SoT: top-left host menu remains visible over every movie. Keep the
      * panel at its native pixel size at 720p, scale up with larger windows. */
+    /* RE-SoT: F8 Show triggers: over the picture, under the panels. */
+    if (xbox_FramebufferDebugLinesGet(&opx, &ow, &oh)) {
+        if (!s_hw.lines_tex) {
+            D3D11_TEXTURE2D_DESC td;
+            memset(&td, 0, sizeof td);
+            td.Width = ow; td.Height = oh; td.MipLevels = 1; td.ArraySize = 1;
+            td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1;
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            if (SUCCEEDED(ID3D11Device_CreateTexture2D(s_hw.dev, &td, NULL, &s_hw.lines_tex)))
+                ID3D11Device_CreateShaderResourceView(s_hw.dev,
+                    (ID3D11Resource *)s_hw.lines_tex, NULL, &s_hw.lines_srv);
+        }
+        if (s_hw.lines_srv) {
+            ID3D11DeviceContext_UpdateSubresource(s_hw.ctx,
+                (ID3D11Resource *)s_hw.lines_tex, 0, NULL, opx, ow * 4, 0);
+            vp.TopLeftX = px; vp.TopLeftY = py; vp.Width = pw; vp.Height = ph;
+            ID3D11DeviceContext_PSSetShader(s_hw.ctx, s_hw.ps_debug, NULL, 0);
+            ID3D11DeviceContext_OMSetBlendState(s_hw.ctx, s_hw.debug_blend, bf, 0xFFFFFFFFu);
+            ID3D11DeviceContext_RSSetViewports(s_hw.ctx, 1, &vp);
+            ID3D11DeviceContext_PSSetShaderResources(s_hw.ctx, 0, 1, &s_hw.lines_srv);
+            ID3D11DeviceContext_Draw(s_hw.ctx, 3, 0);
+        }
+    }
     if (xbox_FramebufferDebugPanelGet(&opx, &ow, &oh)) {
         /* RE-SoT: safely resize the host overlay texture when switching F5/F6. */
         if (s_hw.debug_tex && (s_hw.debug_width != ow || s_hw.debug_height != oh)) {
@@ -3570,6 +3670,33 @@ static void hw_compose_locked(void) /* RE-SoT: snapshot before post-flip fences.
             ID3D11DeviceContext_OMSetBlendState(s_hw.ctx, s_hw.debug_blend, bf, 0xFFFFFFFFu);
             ID3D11DeviceContext_RSSetViewports(s_hw.ctx, 1, &vp);
             ID3D11DeviceContext_PSSetShaderResources(s_hw.ctx, 0, 1, &s_hw.debug_srv);
+            ID3D11DeviceContext_Draw(s_hw.ctx, 3, 0);
+        }
+    }
+    /* RE-SoT: the F8 mode's name, top right, over both game and movies. */
+    if (xbox_FramebufferRenderLabelGet(&opx, &ow, &oh)) {
+        if (!s_hw.label_tex) {
+            D3D11_TEXTURE2D_DESC td;
+            memset(&td, 0, sizeof td);
+            td.Width = ow; td.Height = oh; td.MipLevels = 1; td.ArraySize = 1;
+            td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1;
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            if (SUCCEEDED(ID3D11Device_CreateTexture2D(s_hw.dev, &td, NULL, &s_hw.label_tex)))
+                ID3D11Device_CreateShaderResourceView(s_hw.dev,
+                    (ID3D11Resource *)s_hw.label_tex, NULL, &s_hw.label_srv);
+        }
+        if (s_hw.label_srv) {
+            float scale = (float)s_hw.bb_h / 720.0f;
+            if (scale < 0.75f) scale = 0.75f;
+            if ((ow + 16) * scale > s_hw.bb_w) scale = (float)s_hw.bb_w / (ow + 16);
+            ID3D11DeviceContext_UpdateSubresource(s_hw.ctx,
+                (ID3D11Resource *)s_hw.label_tex, 0, NULL, opx, ow * 4, 0);
+            vp.TopLeftX = (float)s_hw.bb_w - (ow + 8) * scale; vp.TopLeftY = 8 * scale;
+            vp.Width = ow * scale; vp.Height = oh * scale;
+            ID3D11DeviceContext_PSSetShader(s_hw.ctx, s_hw.ps_debug, NULL, 0);
+            ID3D11DeviceContext_OMSetBlendState(s_hw.ctx, s_hw.debug_blend, bf, 0xFFFFFFFFu);
+            ID3D11DeviceContext_RSSetViewports(s_hw.ctx, 1, &vp);
+            ID3D11DeviceContext_PSSetShaderResources(s_hw.ctx, 0, 1, &s_hw.label_srv);
             ID3D11DeviceContext_Draw(s_hw.ctx, 3, 0);
         }
     }

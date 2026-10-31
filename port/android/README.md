@@ -6,6 +6,9 @@ drivers reject at the first pipeline (closing the game after Start Game,
 GitHub #8, #9). Not yet confirmed on a Mali device. The Windows Vulkan
 renderer uses the same shaders, so `port/windows` needs no separate change.
 
+Version 0.4.3 batches visibility reports, as on Windows; the Windows shader and F8 changes do not apply here.
+Known issue, to fix: in the retail Magic Fountain teleport the fade to black does not
+appear and the camera stays at the entrance on the bridge until the view is changed.
 Version 0.4.2 brings the HD menu logos, the retail name keyboard fix for touch
 and the sand tank HUD fix (as on Windows). Version 0.4.1 carries the retail rendering, crash and loading-hang fixes
 (as on Windows) and a tip beside the launcher's version plate: "The game
@@ -17,7 +20,7 @@ animated Prince of Persia title to the launcher. Version 0.3.3 ran the game and 
 a retail mid-game freeze, reduces audio crackle and brings the new animated
 logo. Version 0.3.2 added Reduced/Standard/Full graphics presets and a background
 stable-release check with optional Update / Close buttons styled like the
-launcher. The displayed version is 0.4.2. Offline/rate-limit errors are ignored.
+launcher. The displayed version is 0.4.3. Offline/rate-limit errors are ignored.
 No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
 request and reSOT version in its User-Agent. Update opens the official release
 page, without downloading/installing an executable automatically.
@@ -286,6 +289,9 @@ while the panel is open or the touch pad is hidden; tapping the same spot
 still opens/closes the panel. The icon returns when the pad is visible and
 the panel is closed. Windows uses F5 and
 has no corresponding touch button.
+The F8 debug views (`port/windows/README.md`) are not reachable here: Android has
+no F8 key and no such touch control, as they are a developer tool.
+
 **Game behavior** (the Windows F7 panel's Tutorials, Dagger of time and
 Cheats) has no Android panel yet: this host keeps `[Game] Tutorials` in the
 INI and applies it (retail), and leaves the dagger as the game has it. Cheats and Special Load Map are in reSOT Options, in the

@@ -265,11 +265,7 @@ void sub_0029D170(void)
     g_esp += 4;                          /* ret */
 }
 
-/* Projection matrix: the camera is the first stack argument. */
-void sub_000EF340_enter(void)
-{
-}
-
+static void resot_triggers_view(void);
 void sub_000EF140_enter(void)
 {
     extern RESOT_TLS uint32_t g_edi, g_ebp;
@@ -285,6 +281,8 @@ void sub_000EF140_enter(void)
             && *(const uint32_t *)(mem + g_esp) == 0x000EF5AAu
             && g_edx == 0x00650C20u)
         *(float *)(mem + 0x00650C20u) /= s_widen;
+    if (GMEM32(g_esp) == 0x000EF5AAu && g_edx == 0x00650C20u)
+        resot_triggers_view();
 }
 
 /* ── The pad without USB ──
@@ -1386,4 +1384,30 @@ static void text_dump(void)
         regs_load(&saved);
         while (*e == ',' || *e == ' ') e++;
     }
+}
+
+/* F8 Show triggers (port/game/resot_invisible.h). The demo inlines the visibility
+ * test in sub_000295F0: it calls sub_00021810 with the GAO in esi (0x000296B5),
+ * reads GAO+4 (0x000296BF), tests ForceInvisible (0x000296C6) and inserts with
+ * sub_000BFB80 (0x000296D7). GEO+0x4C is the vertex resource (0x0008E139, passed
+ * to sub_000F1700). */
+#include "../../port/game/resot_triggers.h"
+extern RESOT_TLS uint32_t g_esi;
+void sub_00021810_enter(void)
+{
+    resot_invisible_pass(g_esi, 0x4C);
+}
+void sub_000BFB80_enter(void)
+{
+    resot_invisible_restore();
+}
+/* The camera whose projection sub_000EF340 builds: its argument, read at
+ * 0x000EF376 as [esp+0x18] after 0x14 bytes of frame. */
+void sub_000EF340_enter(void)
+{
+    s_trigger_camera = GMEM32(g_esp + 4);
+}
+static void resot_triggers_view(void)
+{
+    resot_triggers_frame(RESOT_JADE_WORLD_LOADED, 0x00650C20u);
 }

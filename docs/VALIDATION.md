@@ -1,5 +1,77 @@
 # Validation log
 
+## 2026-10-31: v0.4.3, retail Magic Fountain teleport left open
+
+The user confirmed the F8 modes work after the camera offset fix. Open, by the
+user's decision: in the retail Magic Fountain teleport the fade to black does not
+appear, the camera stays at (-475.5,-304.2) on the bridge until the view is changed,
+and on the way back it visibly travels to the Prince. Reported as long-standing.
+
+Observed with temporary traces, now removed: it still happens with V-Sync at 30 FPS.
+Camera GAO key 0xCC000403; zone slots at vars +0x4EC, written by retail sub_00254740
+and cleared by sub_002509A0. While stuck, sub_00207710 (AI key 0x08000010, thousands of
+entries per log interval elsewhere) had zero entries. Track changes go through
+sub_002DF060. No blended 3D full-screen quad was seen in one run. The cause was not
+established, and no flat quad or gamma ramp was ruled out.
+
+Version 0.4.3, versionCode 13; release notes deferred, more additions are planned.
+Checks: `python tools/check-hlsl.py`; `tools/recomp.ps1 -SkipAnalysis` both targets;
+`tools/build-android.ps1`; `ctest` with `RESOT_GPU_BINDINGS_SMOKE=1`.
+Not checked: these final binaries were not run; Android was not tested on a device.
+
+## 2026-10-31: Show triggers, skewed lines and slowness
+
+User screenshot: volumes appear, but as long skew lines, and both targets run very
+slowly. Log: frame spikes up to 1608 ms, 535 demo objects. Causes found: a matrix
+is 0x50 bytes in these XBEs (type at +0x40, retail 0x002FDDE0; demo sub_0008A9F0
+fills camera+0xE0 from camera+0x90), so camera+0xC8 was not the inverse matrix; and
+each field read called VirtualQuery. Now camera+0xE0, type +0x40, remembered readable
+ranges, volumes collected every 6 views, a 960x540 line picture.
+
+Checks: `tools/recomp.ps1 -BuildOnly` both targets, `tools/build-android.ps1`.
+Not checked: not run in the game; whether the lines now fit the scene and the speed
+are unseen. The sign of projected y is still inferred.
+
+## 2026-10-31: F8 Show triggers draws trigger volumes
+
+User report: No lighting and Vertex work well; Show triggers shows no triggers and
+must show their boxes or shapes in colour. The trigger criterion in io_scene_pop,
+pop-bf-lab and Jade Toolkit is the object's name (TEC, trigger) with its bounding
+box; release memory holds no names, so `port/game/resot_triggers.h` classifies by
+content: cyan ZDE zones of objects with no mesh, green bounding boxes of AI objects
+with no mesh, magenta boxes of hidden meshes. No tool code copied. Lines are
+projected on the title thread and rasterised into one 1280x720 picture on all
+three renderers.
+
+Not checked: nothing was run in the game. Layouts come from Jade's source (a later
+engine version), with the world walk, camera argument and projection checked in each
+XBE's disassembly; zone and bounding volume layouts and the projection's signs are
+unverified on these XBEs. `[TRIGGERS]` log lines report what was found. The
+classification will miss triggers that have a mesh or no AI and may show non-triggers
+such as AI markers. Lines ignore depth, on purpose.
+
+## 2026-10-31: F8 debug views
+
+F8 on Windows cycles normal, No lighting, Vertex, Show triggers (`fb_present.c`),
+with the name in red at the top right for 3 s and a 1 s fade. The mode is one
+variable, never written to a file. Show triggers follows the user's definition:
+invisible objects with a 3D mesh, in vertex style. ForceInvisible (GAO+4, 0x00200000)
+is cleared from entry hooks until the visible-list insertion: retail sub_00028370 and
+sub_000DEBC0, demo sub_00021810 and sub_000BFB80. Their mesh data (GEO+0x4C, then +4)
+picks the draws shown in vertex colours.
+
+Checks: `python tools/check-hlsl.py`; `tools/recomp.ps1 -SkipAnalysis` both targets
+(hooks present in `gen/`, 2 lines each in 4 files, nothing else changed there);
+`tools/build-android.ps1`; `ctest` with `RESOT_GPU_BINDINGS_SMOKE=1` 14/14.
+
+Not checked: nothing was run in the game, so no view, the label and its fade have
+been seen on any renderer or target. Known limits by construction: while Show
+triggers is on, shown objects have the Visible status, which AI and collision rays
+can read; skinned or dynamic meshes not drawn from their GEO vertex data stay in
+their material; No lighting and Vertex skip multiplicative and additive passes on
+the display surface. The clip_w/h test for 3D has not been checked against every
+effect. Android has no F8 key (`port/android/README.md`).
+
 ## 2026-10-31: user confirmation of the stutter corrections
 
 The user played the builds of 13:22 and reports excellent performance ("piu che

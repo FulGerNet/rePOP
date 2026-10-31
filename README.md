@@ -10,7 +10,7 @@
 
 **Prince of Persia: The Sands of Time, recompiled from Xbox to native Windows and Android.**
 
-**Current version: v0.4.2.** reSOT is an advanced, playable recompilation and
+**Current version: v0.4.3.** reSOT is an advanced, playable recompilation and
 port of the original Xbox retail game and E3 2003 demo. Both games now run
 well on Windows and Android in the configurations tested by the user, with
 working gameplay, menus, movies, audio and controller support. The project
@@ -148,6 +148,10 @@ The release also retains the v0.3.0 features below.
   HUD clearance, repaired log-source selection, and retained the shared
   graphics, input and diagnostic options.
 
+Version 0.4.3 gives Direct3D 11 and 12 their own shader for each render state, reduces
+stutter in effect-heavy scenes on every renderer and adds the F8 debug views on
+Windows. Known issue, to fix: in the retail Magic Fountain teleport the fade to black does not
+appear and the camera stays at the entrance on the bridge until the view is changed.
 Version 0.4.2 adds HD main menu logos to both games and fixes the retail name
 keyboard with mouse and touch, the sand tanks' HUD position, Vulkan black
 flashes and the demo's 6201 PrisonA entry ([release notes](docs/releases/v0.4.2.md)).
@@ -157,7 +161,7 @@ adds a logs tip to the Android launcher ([release notes](docs/releases/v0.4.1.md
 Version 0.4.0 adds Special Load Map, the built-in cheats switch, the F7
 Game behavior section and an HD menu font for both games (see the status
 table and [the release notes](docs/releases/v0.4.0.md)). Both Windows targets and the
-Android release APK build as **0.4.2**; Android uses **versionCode 12**.
+Android release APK build as **0.4.3**; Android uses **versionCode 13**.
 Of 0.3.4: Shader compilation, pointer, touch and GPU
 regressions passed in the recorded release checks. The user confirms the
 extended health-bar alignment, popup/save-carousel touch changes and launcher

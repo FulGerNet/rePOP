@@ -1,5 +1,8 @@
 # reSOT on Windows
 
+Version 0.4.3 brings faster Direct3D 11 and 12 shaders, less stutter and the F8 debug views.
+Known issue, to fix: in the retail Magic Fountain teleport the fade to black does not
+appear and the camera stays at the entrance on the bridge until the view is changed.
 Version 0.4.2 brings the HD menu logos, the retail name keyboard fix for the
 mouse and the sand tank HUD fix. `RESOT_HD_LOGO=0` keeps the game's logo.
 Version 0.4.1 carries the retail rendering, crash and loading-hang fixes.
@@ -12,7 +15,7 @@ animated Prince of Persia title to the launcher. Version 0.3.3 ran the game and 
 a retail mid-game freeze, reduces audio crackle and brings the new animated
 logo. Version 0.3.2 added Reduced/Standard/Full graphics presets and a background
 stable-release check with optional Update / Close buttons styled like the
-launcher. The displayed version is 0.4.2. Offline/rate-limit errors are ignored.
+launcher. The displayed version is 0.4.3. Offline/rate-limit errors are ignored.
 No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
 request and reSOT version in its User-Agent. Update opens the official release
 page, without downloading/installing an executable automatically.
@@ -107,6 +110,12 @@ when the pad is hidden, retaining its hit area. Contextual Back/Confirm
 buttons appear in menus and cutscenes. These
 floating controls are Android-specific; Windows uses F5 for FPS, mouse or
 controller menu input and right-click Back.
+F8 cycles a debug view on any renderer: normal, No lighting (textures without
+lighting), Vertex (vertex colours, no textures), Show triggers (the normal picture with invisible meshes in vertex colours, and wire
+volumes over it: cyan detection zones of objects with no mesh, green boxes of logic
+objects, magenta boxes of hidden meshes; drawn through walls), and back. Its name
+shows in red at the top right for three seconds, then fades. Nothing is saved: every
+start is normal.
 F6 opens the translucent diagnostics panel. Like F5 it leaves the game
 playable. It shows, twice a second: frame rate and frame time with the
 current graphics settings; executor time (interpreter, draw calls), present

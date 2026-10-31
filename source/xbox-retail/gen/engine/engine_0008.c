@@ -8148,6 +8148,8 @@ loc_000CFC06: ;
  */
 void sub_000CFC10(void)
 {
+    extern void sub_000CFC10_enter(void);
+    sub_000CFC10_enter();
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */
     int _flags = 0; /* fallback flag var */

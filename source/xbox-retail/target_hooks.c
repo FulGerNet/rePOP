@@ -152,6 +152,7 @@ static float widen_factor(void)
     return s_widen;
 }
 
+static void resot_triggers_view(void);
 void sub_000CD970_enter(void)
 {
     extern RESOT_TLS uint32_t g_ebp;
@@ -165,6 +166,8 @@ void sub_000CD970_enter(void)
         GMEMF(PROJ_BUILT) /= s_widen;
         GMEMF(PROJ_HOLDER + 0x60) /= s_widen;
     }
+    if (GMEM32(g_esp) == PROJ_RET && g_esi == PROJ_HOLDER)
+        resot_triggers_view();
 }
 
 /* Culling planes. sub_002FD810 is the demo's sub_0008A500 (Jade's
@@ -1356,4 +1359,28 @@ void sub_00039B20(void)
         resot_native_activate((id >> 8) >= P_J0 ? RESOT_NATIVE_JOY : RESOT_NATIVE_KEYS,
                               (int)(id & 0xFF));
     g_esp += 8;                           /* ret 4 */
+}
+
+/* F8 Show triggers (port/game/resot_invisible.h). Retail's visibility routine:
+ * 0x00028384 reads GAO+4 and 0x00028390 tests ForceInvisible; its list insertion
+ * calls sub_000DEBC0. GEO+0x4C is the vertex resource (0x00310334, passed to
+ * sub_000D5BF0), whose +4 is the NV097 vertex array offset (see resot_gate_diag.h). */
+#include "../../port/game/resot_triggers.h"
+void sub_00028370_enter(void)
+{
+    resot_invisible_pass(GMEM32(g_esp + 4), 0x4C);
+}
+void sub_000DEBC0_enter(void)
+{
+    resot_invisible_restore();
+}
+/* The camera whose projection sub_000CFC10 builds: its argument, read at
+ * 0x000CFC48 as [esp+0x1C] after 0x18 bytes of frame. */
+void sub_000CFC10_enter(void)
+{
+    s_trigger_camera = GMEM32(g_esp + 4);
+}
+static void resot_triggers_view(void)
+{
+    resot_triggers_frame(RESOT_JADE_WORLD_LOADED, PROJ_BUILT);
 }

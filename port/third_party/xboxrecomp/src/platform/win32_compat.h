@@ -347,6 +347,7 @@ int   MessageBoxA(HWND hwnd, LPCSTR text, LPCSTR caption, UINT type);
 #define VK_DECIMAL   0x6E
 #define VK_F6        0x75
 #define VK_F7        0x76
+#define VK_F8        0x77
 #define VK_F11       0x7A
 #define VK_LSHIFT    0xA0
 #define VK_RSHIFT    0xA1

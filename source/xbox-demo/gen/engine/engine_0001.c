@@ -21671,6 +21671,8 @@ loc_000217FD: ;
  */
 void sub_00021810(void)
 {
+    extern void sub_00021810_enter(void);
+    sub_00021810_enter();
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;
     int32_t _fas = 0, _fbs = 0;

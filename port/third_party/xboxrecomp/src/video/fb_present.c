@@ -150,6 +150,14 @@ static volatile LONG s_frame_draws;
  * The optional provider keeps target addresses out of the shared runtime.
  * Register it before starting the window; it writes a bounded scene name. */
 static volatile LONG s_debug_panel;
+/* RE-SoT: F8 debug view: 0 normal, 1 no lighting, 2 vertex, 3 show triggers.
+ * Lives only in this variable: no options file, so every start is normal. */
+static volatile LONG s_render_mode;
+static volatile DWORD s_render_mode_tick;
+int xbox_FramebufferRenderMode(void)
+{
+    return (int)InterlockedCompareExchange(&s_render_mode, 0, 0);
+}
 /* RE-SoT: Android touch controls hide their FPS button while this panel
  * occupies the same corner. Read the real state, including keyboard F5. */
 int xbox_FramebufferFpsVisible(void)
@@ -202,6 +210,111 @@ void xbox_FramebufferSetWowProvider(void (*provider)(char *, size_t))
 }
 
 #if defined(_WIN32)
+/* RE-SoT: F8 Show triggers: lines projected by port/game/resot_triggers.h, drawn
+ * here into one picture every renderer blends over the game. Two sets, so the
+ * game thread never writes the one being drawn. */
+typedef struct { float x0, y0, x1, y1; uint32_t color; } FbDebugSegment;
+enum { FB_DEBUG_SEGMENTS = 16384, FB_DEBUG_W = 960, FB_DEBUG_H = 540 };
+static FbDebugSegment s_debug_segments[2][FB_DEBUG_SEGMENTS];
+static volatile LONG s_debug_published = -1, s_debug_counts[2];
+void xbox_FramebufferSetDebugSegments(const void *segments, uint32_t count)
+{
+    LONG next = InterlockedCompareExchange(&s_debug_published, 0, 0) == 0 ? 1 : 0;
+    if (!segments || !count) { InterlockedExchange(&s_debug_published, -1); return; }
+    if (count > FB_DEBUG_SEGMENTS) count = FB_DEBUG_SEGMENTS;
+    memcpy(s_debug_segments[next], segments, count * sizeof(FbDebugSegment));
+    s_debug_counts[next] = (LONG)count;
+    InterlockedExchange(&s_debug_published, next);
+}
+/* Clips to the picture, then two pixels wide. */
+static void fb_debug_line(uint32_t *bits, const FbDebugSegment *s)
+{
+    float x0 = s->x0 * FB_DEBUG_W, y0 = s->y0 * FB_DEBUG_H, x1 = s->x1 * FB_DEBUG_W, y1 = s->y1 * FB_DEBUG_H;
+    float t0 = 0, t1 = 1, dx = x1 - x0, dy = y1 - y0, p[4], q[4], length;
+    int i, steps;
+    p[0] = -dx; q[0] = x0; p[1] = dx; q[1] = FB_DEBUG_W - 2 - x0;
+    p[2] = -dy; q[2] = y0; p[3] = dy; q[3] = FB_DEBUG_H - 2 - y0;
+    for (i = 0; i < 4; i++) {
+        if (p[i] == 0) { if (q[i] < 0) return; continue; }
+        {
+            float r = q[i] / p[i];
+            if (p[i] < 0) { if (r > t1) return; if (r > t0) t0 = r; }
+            else { if (r < t0) return; if (r < t1) t1 = r; }
+        }
+    }
+    x1 = x0 + dx * t1; y1 = y0 + dy * t1; x0 += dx * t0; y0 += dy * t0;
+    dx = x1 - x0; dy = y1 - y0;
+    length = fabsf(dx) > fabsf(dy) ? fabsf(dx) : fabsf(dy);
+    steps = (int)length + 1;
+    dx /= steps; dy /= steps;
+    for (i = 0; i <= steps; i++, x0 += dx, y0 += dy) {
+        int x = (int)x0, y = (int)y0;
+        if (x < 0 || y < 0 || x + 1 >= FB_DEBUG_W || y + 1 >= FB_DEBUG_H) continue;
+        bits[y * FB_DEBUG_W + x] = bits[y * FB_DEBUG_W + x + 1] = s->color;
+        bits[(y + 1) * FB_DEBUG_W + x] = bits[(y + 1) * FB_DEBUG_W + x + 1] = s->color;
+    }
+}
+int xbox_FramebufferDebugLinesGet(const uint32_t **pixels, uint32_t *width, uint32_t *height)
+{
+    static uint32_t bits[FB_DEBUG_W * FB_DEBUG_H];
+    LONG set = InterlockedCompareExchange(&s_debug_published, 0, 0);
+    LONG i, count;
+    if (set < 0 || xbox_FramebufferRenderMode() != 3) return 0;
+    memset(bits, 0, sizeof bits);
+    count = s_debug_counts[set];
+    for (i = 0; i < count; i++) fb_debug_line(bits, &s_debug_segments[set][i]);
+    *pixels = bits; *width = FB_DEBUG_W; *height = FB_DEBUG_H;
+    return 1;
+}
+
+/* RE-SoT: "Mode (F8)", red, top right: three seconds, then a one second fade.
+ * Straight alpha, for the same blend as the panels. Coverage comes from GDI's
+ * white on black; it is redrawn only when the mode changes. */
+int xbox_FramebufferRenderLabelGet(const uint32_t **pixels, uint32_t *width, uint32_t *height)
+{
+    enum { LABEL_W = 320, LABEL_H = 40, HOLD_MS = 3000, FADE_MS = 1000 };
+    static HDC dc;
+    static uint32_t *bits;
+    static uint32_t out[LABEL_W * LABEL_H];
+    static int drawn;
+    int mode = xbox_FramebufferRenderMode(), i;
+    DWORD age = GetTickCount() - s_render_mode_tick;
+    unsigned fade;
+    if (!mode || age >= HOLD_MS + FADE_MS) return 0;
+    if (!dc) {
+        BITMAPINFO info;
+        HBITMAP bitmap;
+        memset(&info, 0, sizeof info);
+        info.bmiHeader.biSize = sizeof info.bmiHeader;
+        info.bmiHeader.biWidth = LABEL_W;
+        info.bmiHeader.biHeight = -LABEL_H;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        dc = CreateCompatibleDC(NULL);
+        if (!dc) return 0;
+        bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
+        if (!bitmap) { DeleteDC(dc); dc = NULL; return 0; }
+        SelectObject(dc, bitmap);
+        SelectObject(dc, CreateFontA(-26, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                     CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, "Segoe UI"));
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(255, 255, 255));
+    }
+    if (drawn != mode) {
+        static const char *const names[] = {"", "No lighting (F8)", "Vertex (F8)", "Show triggers (F8)"};
+        RECT text = {0, 0, LABEL_W, LABEL_H};
+        memset(bits, 0, LABEL_W * LABEL_H * 4);
+        DrawTextA(dc, names[mode], -1, &text, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        GdiFlush();
+        drawn = mode;
+    }
+    fade = age <= HOLD_MS ? 255u : 255u * (HOLD_MS + FADE_MS - age) / FADE_MS;
+    for (i = 0; i < LABEL_W * LABEL_H; i++)
+        out[i] = ((bits[i] & 255u) * fade / 255u) << 24 | 0x00FF2020u;
+    *pixels = out; *width = LABEL_W; *height = LABEL_H;
+    return 1;
+}
+
 int xbox_FramebufferDebugPanelGet(const uint32_t **pixels, uint32_t *width,
                                  uint32_t *height)
 {
@@ -278,6 +391,22 @@ int xbox_FramebufferDebugPanelGet(const uint32_t **pixels, uint32_t *width,
  * Windows: the font is fixed-width. */
 extern void resot_host_draw_text(uint32_t *bits, int w, int h, int x, int y,
                                  const char *text, uint32_t argb);
+/* RE-SoT: no F8 key on this host (port/android/README.md). */
+void xbox_FramebufferSetDebugSegments(const void *segments, uint32_t count)
+{
+    (void)segments; (void)count;
+}
+int xbox_FramebufferDebugLinesGet(const uint32_t **pixels, uint32_t *width, uint32_t *height)
+{
+    (void)pixels; (void)width; (void)height;
+    return 0;
+}
+int xbox_FramebufferRenderLabelGet(const uint32_t **pixels, uint32_t *width, uint32_t *height)
+{
+    (void)pixels; (void)width; (void)height;
+    return 0;
+}
+
 int xbox_FramebufferDebugPanelGet(const uint32_t **pixels, uint32_t *width,
                                  uint32_t *height)
 {
@@ -562,6 +691,14 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
      * binding capture consumes game input; never bind F11 to a game action. */
     if ((m==WM_KEYDOWN || m==WM_KEYUP) && w==VK_F11) {
         if (m==WM_KEYDOWN && !(l & (1 << 30))) fb_toggle_fullscreen(h);
+        return 0;
+    }
+    /* RE-SoT: F8 cycles the debug view, ahead of the panels and game bindings. */
+    if ((m==WM_KEYDOWN || m==WM_KEYUP) && w==VK_F8) {
+        if (m==WM_KEYDOWN && !(l & (1 << 30))) {
+            InterlockedExchange(&s_render_mode, (xbox_FramebufferRenderMode() + 1) & 3);
+            s_render_mode_tick = GetTickCount();
+        }
         return 0;
     }
     /* RE-SoT: a host options panel consumes its mouse/keyboard messages and
