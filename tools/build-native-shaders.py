@@ -83,6 +83,21 @@ def main():
         hlsl += "\nVO vs_combiner_probe(uint id : SV_VertexID) { BO b=vs_blit(id); VO o=(VO)0; o.pos=b.pos; o.d0=float4(0.23,0.51,0.81,0.67); o.fog=float4(0.37,0,0,0); o.t0=float4(b.uv*1.5-0.25,0,1); return o; }\n"
         hlsl += "\nfloat4 ps_combiner_compare(VO i) : SV_Target { return saturate(abs(ps_main(i)-(atest.x!=0?ps_simple_alpha(i):ps_simple(i)))*255.0); }\n"
         hlsl += "\nfloat4 ps_vertex_probe(VO i) : SV_Target { return float4(i.d0.x,i.fog.x,i.t0.x,i.t0.y); }\n"
+        # RE-SoT: compare screen-space reconstruction against homogeneous
+        # clipping for a surface crossing the eye (negative w).
+        hlsl += "\nfloat4 depth_clip_position(uint id) { return id==0 ? float4(-0.8,-0.8,0.8,1) : id==1 ? float4(0.8,-0.8,0.8,1) : float4(0,-0.8,-1.2,-1); }\n"
+        hlsl += "\nVO vs_depth_reference(uint id:SV_VertexID) { VO o=(VO)0; o.pos=depth_clip_position(id); return o; }\n"
+        hlsl += "\nVO vs_depth_screen(uint id:SV_VertexID) { float4 p=depth_clip_position(id); float4 s=float4((p.x/p.w+1)*64,(1-p.y/p.w)*64,p.z/p.w,p.w); return vs_finish(s,0,0,0,0,0,0,0); }\n"
+        hlsl += "\nfloat4 ps_depth_probe(VO i):SV_Target { return float4(i.pos.z,1,0,1); }\n"
+        # RE-SoT: synthetic depthless Z16 caster. afc13cc clipped all of it
+        # because its positive screen Z is much larger than 65535.
+        hlsl += "\nfloat2 shadow_probe_xy(uint id) { return id==0?float2(-0.8,-0.8):id==1?float2(0.8,-0.8):float2(0,0.8); }\n"
+        hlsl += "\nVO vs_shadow_reference(uint id:SV_VertexID) { VO o=(VO)0; o.pos=float4(shadow_probe_xy(id),0.5,1); return o; }\n"
+        hlsl += "\nVO vs_shadow_caster(uint id:SV_VertexID) { float2 xy=shadow_probe_xy(id); return vs_finish(float4((xy.x+1)*64,(1-xy.y)*64,id==0?4000000:id==1?6000000:5000000,1),0,0,0,0,0,0,0); }\n"
+        hlsl += "\nfloat4 ps_shadow_coverage():SV_Target { return 1; }\n"
+        # RE-SoT: shadow clipping must agree with proj_uv for affine Q=0,
+        # equivalent homogeneous signs/scales, and out-of-footprint texels.
+        hlsl += "\nfloat4 ps_shadow_probe(BO i):SV_Target { uint k=min((uint)(i.uv.x*6),5u); float q=k==0?0:k==1?1:k==2?-1:k==3?1:0.00001; float2 uv=k==3?float2(2,0.5):float2(0.5,0.5); float4 tc=float4(uv*(q==0?1:q),0,q); if(k==5) tc.x=-1; return shadow_sample(float4(0.75,0.5,0.25,1),tc,float4(1,1,1,0)); }\n"
     src = output / "nv2a-native.hlsl"
     src.write_text(hlsl, encoding="ascii")
     # RE-SoT: Vulkan specialization constants preserve the generic combiner
@@ -168,6 +183,9 @@ def main():
     entries = check.ENTRIES + [("vs_uber", "vs_4_0"), ("vs_uber_small", "vs_4_0"), ("ps_simple", "ps_4_0"), ("ps_simple_alpha", "ps_4_0")]
     if args.test_border:
         entries += [("ps_border_probe", "ps_4_0"), ("vs_combiner_probe", "vs_4_0"), ("ps_combiner_compare", "ps_4_0"), ("ps_vertex_probe", "ps_4_0")]
+        entries += [("vs_depth_reference", "vs_4_0"), ("vs_depth_screen", "vs_4_0"), ("ps_depth_probe", "ps_4_0")]
+        entries += [("ps_shadow_probe", "ps_4_0")] # RE-SoT: test-only production shadow helper.
+        entries += [("vs_shadow_reference", "vs_4_0"), ("vs_shadow_caster", "vs_4_0"), ("ps_shadow_coverage", "ps_4_0")]
     for entry, old_profile in entries:
         for fmt in ("dxil", "spirv"):
             binary = output / f"{entry}.{fmt}"

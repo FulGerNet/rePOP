@@ -1184,12 +1184,16 @@ class FunctionTranslator:
         """Prove every pre-writer CFG path avoids inherited EFLAGS.
 
         INC/DEC preserve carry; shifts may preserve flags at a zero count.
-        Accept only unconditional full integer snapshots as the first writer.
+        Accept unconditional integer or SSE comparison snapshots as the first writer.
         Follow jumps rather than mistaking an entry JMP for a flags boundary.
         Calls before a writer are rejected conservatively as well.
         """
         by_address = {insn.address: insn for insn in instructions}
-        full_writers = {"cmp", "test", "add", "sub", "and", "or", "xor", "neg"}
+        # RE-WW: geometric cold paths begin with COMISS/UCOMISS. These
+        # produce a complete local floating comparison snapshot, just as CMP
+        # produces an integer one. Rejecting them left real epilogues as
+        # unresolved stubs and stranded the caller's guest stack frame.
+        full_writers = {"cmp", "test", "add", "sub", "and", "or", "xor", "neg"} | _SSE_COMPARES
         pending, seen = [target], set()
         while pending:
             address = pending.pop()

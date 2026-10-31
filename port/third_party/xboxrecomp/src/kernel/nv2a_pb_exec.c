@@ -400,43 +400,46 @@ static void dump_texture_bmp(uint32_t seq);
 #define TEX_DUMP_SEQ_BASE 1000u
 #define TEX_DUMP_SEQ_MAX  40u
 
+/* RE-WW: a movie reached after a busy menu otherwise exhausts the bounded
+ * diagnostic sequence before its first frame. No effect unless requested. */
+static int texture_dump_gate_open(void)
+{
+    static const char *path;
+    static int checked;
+    FILE *f;
+    if (!checked) { checked = 1; path = getenv("RECOMP_TEX_DUMP_GATE"); }
+    if (!path || !*path) return 1;
+    f = fopen(path, "rb");
+    if (!f) return 0;
+    fclose(f);
+    return 1;
+}
+
 static void note_texture_use(void)
 {
     int i;
 
     if (!s_gpu.texs[0].valid)
         return;
+    /* RE-WW: repeated captures must also see textures first bound after the
+     * 64-entry usage census is full. Keep that census independent of capture.
+     * RE-SoT: repeated frames distinguish a bad keyframe conversion from
+     * accumulating prediction errors; first-use captures alone cannot. */
+    {
+        static int every = -1;
+        static unsigned binds, seq;
+        if (every < 0) {
+            const char *e = getenv("RECOMP_TEX_DUMP_EVERY");
+            every = e ? atoi(e) : 0;
+        }
+        if (every > 0 && ++binds % (unsigned)every == 0
+            && seq < TEX_DUMP_SEQ_MAX && texture_dump_gate_open())
+            dump_texture_bmp(TEX_DUMP_SEQ_BASE + seq++);
+    }
     for (i = 0; i < s_tex_use_count; i++) {
         if (s_tex_use[i].offset == s_gpu.texs[0].offset
          && s_tex_use[i].color  == s_gpu.texs[0].color) {
             s_tex_use[i].batches++;
-            /* Dump a surface that is redrawn, every Nth time it is bound.
-             *
-             * First use alone cannot tell a decode error that is wrong in
-             * every frame from one that accumulates across them. A block
-             * transform that is wrong is wrong on its own, in the keyframe
-             * as much as anywhere; motion compensation that is wrong starts
-             * from a clean keyframe and smears further with each predicted
-             * frame after it. In a single frame the two look identical, and
-             * in a sequence they look nothing alike -- so the sequence is
-             * what has to be captured.
-             *
-             * It belongs on this side of the return: a video surface keeps
-             * one address for the whole film, so after the first frame it is
-             * only ever found here, and the first-use dump below never fires
-             * for it again. RECOMP_TEX_DUMP_EVERY=<n> sets the interval, and
-             * RECOMP_TEX_DUMP still names the files. */
-            {
-                static int every = -1;
-                static unsigned binds, seq;
-                if (every < 0) {
-                    const char *e = getenv("RECOMP_TEX_DUMP_EVERY");
-                    every = e ? atoi(e) : 0;
-                }
-                if (every > 0 && ++binds % (unsigned)every == 0
-                    && seq < TEX_DUMP_SEQ_MAX)
-                    dump_texture_bmp(TEX_DUMP_SEQ_BASE + seq++);
-            }
             return;
         }
     }
@@ -1093,13 +1096,16 @@ static int sample_texture(uint32_t u, uint32_t v, uint32_t *argb)
 static void dump_texture_bmp(uint32_t seq)
 {
     const char *prefix = getenv("RECOMP_TEX_DUMP");
+    /* RE-WW: inspect RGB beneath alpha when diagnosing a movie copy.
+     * This affects only diagnostic files, never guest pixels or GPU state. */
+    int opaque = getenv("RECOMP_TEX_DUMP_OPAQUE") != NULL;
     uint32_t w = s_gpu.texs[0].width, h = s_gpu.texs[0].height, x, y;
     uint32_t row_bytes, pad, filesz;
     uint8_t hdr[54];
     char path[512];
     FILE *f;
 
-    if (!prefix || !w || !h || w > 4096 || h > 4096)
+    if (!prefix || !w || !h || w > 4096 || h > 4096 || !texture_dump_gate_open())
         return;
     row_bytes = w * 3;
     pad = (4 - (row_bytes & 3)) & 3;
@@ -1125,7 +1131,7 @@ static void dump_texture_bmp(uint32_t seq)
             uint8_t px[3];
             if (!sample_texture(x, h - 1 - y, &argb))
                 argb = 0;
-            a = (argb >> 24) & 0xFFu;
+            a = opaque ? 255u : (argb >> 24) & 0xFFu;
             /* over mid-grey, so an alpha-only page is visible either way */
             px[0] = (uint8_t)(((argb & 0xFFu) * a + 128u * (255u - a)) / 255u);
             px[1] = (uint8_t)((((argb >> 8) & 0xFFu) * a + 128u * (255u - a)) / 255u);

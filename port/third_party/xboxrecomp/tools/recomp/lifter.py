@@ -424,6 +424,7 @@ _EFLAGS_PRESERVE = frozenset({
     "movzx", "movsx", "xchg", "bswap",
     "cdq", "cwde", "cbw", "cwd",
     "lahf",
+    "in",  # RE-WW: port input leaves EFLAGS unchanged
     "not",  # NOT does not modify flags
     "call",
     "int3", "int", "wait",
@@ -1609,7 +1610,8 @@ class Lifter:
                  "setl", "setge", "setle", "setg", "sets", "setns"):
             return self._lift_setcc(insn, ops, m)
         if m in ("cmove", "cmovne", "cmovb", "cmovae", "cmovbe", "cmova",
-                 "cmovl", "cmovge", "cmovle", "cmovg", "cmovs", "cmovns"):
+                 "cmovl", "cmovge", "cmovle", "cmovg", "cmovs", "cmovns",
+                 "cmovp", "cmovnp"):  # RE-WW: ordered/unordered selection
             return self._lift_cmovcc(insn, ops, m)
 
         # ── SSE (scalar float) ──
@@ -1695,6 +1697,18 @@ class Lifter:
                 "{ uint64_t _tsc = xbox_ReadTimeStampCounter();",
                 "  eax = (uint32_t)_tsc; edx = (uint32_t)(_tsc >> 32); }"
                 "  /* rdtsc */",
+            ]
+
+        # RE-WW: observed D3D TV field-pin read. Only this operand form
+        # is implemented; unknown ports retain the reached-site diagnostic.
+        if (m == "in" and nops == 2
+                and ops[0].type == "reg" and ops[0].reg == "al"
+                and ops[1].type == "reg" and ops[1].reg == "dx"):
+            return [
+                "{ uint8_t _port_value;",
+                "  if (xbox_ReadPort8((uint16_t)edx, &_port_value)) {",
+                "    SET_LO8(eax, _port_value);",
+                f'  }} else {{ RECOMP_UNIMPL("in al, dx", 0x{insn.address:08X}u); }} }}',
             ]
 
         # ── Bit scan ──
@@ -3147,9 +3161,9 @@ class Lifter:
         # ── Scalar (lane 0) access ──
         # movss/addss/... genuinely operate on one 32-bit value, so they read
         # and write lane 0 explicitly rather than the whole register.
-        def _sse_read(op):
+        def _sse_read(op, double_precision=False):
             if _is_xmm(op):
-                return f"{op.reg}.f[0]"
+                return f"{op.reg}.{'d' if double_precision else 'f'}[0]"
             elif op.type == "reg":
                 return op.reg
             elif op.type == "mem":
@@ -3334,7 +3348,10 @@ class Lifter:
                 # frequently a write to a register the operand address was
                 # built from -- so the operands have to be read now, while
                 # they still mean what the compare meant.
-                return [f"_fca = {_sse_read(ops[0])}; _fcb = {_sse_read(ops[1])};"
+                # RE-WW: COMISD/UCOMISD compare low doubles, including
+                # register operands whose encoded width is the full XMM.
+                double_precision = m in ("comisd", "ucomisd")
+                return [f"_fca = {_sse_read(ops[0], double_precision)}; _fcb = {_sse_read(ops[1], double_precision)};"
                         f" /* {m} */"]
 
         # ── Bitwise ──
@@ -3509,6 +3526,8 @@ class Lifter:
                         return [f"fp_push(MEMF({_fmt_mem(ops[0])})); /* fld float */"]
                     elif ops[0].mem_size == 8:
                         return [f"fp_push(MEMD({_fmt_mem(ops[0])})); /* fld double */"]
+                    elif ops[0].mem_size == 10:
+                        return [f"fp_push(recomp_load80({_fmt_mem(ops[0])})); /* RE-WW: fld binary80 */"]
                     return [f"fp_push(MEMF({_fmt_mem(ops[0])})); /* fld */"]
                 if ops[0].type == "reg":
                     # fld st(i) pushes a COPY of st(i). Was a no-op comment,
@@ -3536,6 +3555,8 @@ class Lifter:
                     return [f"MEMF({_fmt_mem(ops[0])}) = (float)fp_top();{do_pop} /* {m} */"]
                 elif ops[0].mem_size == 8:
                     return [f"MEMD({_fmt_mem(ops[0])}) = fp_top();{do_pop} /* {m} */"]
+                elif ops[0].mem_size == 10:
+                    return [f"recomp_store80({_fmt_mem(ops[0])}, fp_top());{do_pop} /* RE-WW: {m} binary80 */"]
             # fst/fstp st(i): copy st0 to st(i); fstp then pops. This used to be
             # a bare comment -- a no-op -- which LEAKS the FPU stack. `fstp st(0)`
             # is the common idiom for "pop the value fptan/fsincos just pushed";
@@ -3946,7 +3967,8 @@ def lift_basic_block(lifter, bb, flag_state=None):
 
         if (curr.mnemonic in ("cmove", "cmovne", "cmovb", "cmovae",
                               "cmovbe", "cmova", "cmovl", "cmovge",
-                              "cmovle", "cmovg", "cmovs", "cmovns")
+                              "cmovle", "cmovg", "cmovs", "cmovns",
+                              "cmovp", "cmovnp")
                 and last_flag_setter and len(curr.operands) >= 2):
             cond = _make_cmovcc_cond(
                 curr.mnemonic, last_flag_setter, last_flag_ops)

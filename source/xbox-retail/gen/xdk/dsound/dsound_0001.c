@@ -23360,7 +23360,10 @@ loc_00532EEB: ;
     _cf = (int)((((uint64_t)(MEM32(edx + 2)) + (uint64_t)(esi)) >> 32) & 1);
     MEM32(edx + 2) = MEM32(edx + 2) + esi;
     _fa = (uint32_t)(MEM32(edx + 2)) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* add result */
-    RECOMP_UNIMPL("in al, dx", 0x00532F20u); /* TODO: in al, dx */
+    { uint8_t _port_value;
+      if (xbox_ReadPort8((uint16_t)edx, &_port_value)) {
+        SET_LO8(eax, _port_value);
+      } else { RECOMP_UNIMPL("in al, dx", 0x00532F20u); } }
     _fb = (uint32_t)(MEM8(esi + 3)) & 0xFFu; _fbs = (int32_t)(int8_t)(_fb); /* add source, before the write */
     _cf = (int)((((uint64_t)(HI8(eax)) + (uint64_t)(MEM8(esi + 3))) >> 8) & 1);
     SET_HI8(eax, HI8(eax) + MEM8(esi + 3));

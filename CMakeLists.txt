@@ -63,6 +63,12 @@ if(EXISTS "${target_dir}/target_hooks.c")
   target_sources(ww-xbox-retail PRIVATE "${target_dir}/target_hooks.c")
 endif()
 target_include_directories(ww-xbox-retail PRIVATE "${target_dir}" "${target_dir}/gen" port/third_party/xboxrecomp/include)
+# RE-WW (from reSOT): picture shape when RECOMP_HW_ASPECT is not set. "16:9"
+# widens Hor+ through target_hooks.c; empty keeps the original 4:3.
+set(REWW_ASPECT "16:9" CACHE STRING "Default picture shape (w:h), empty for 4:3")
+if(REWW_ASPECT)
+  target_compile_definitions(ww-xbox-retail PRIVATE "RESOT_DEFAULT_ASPECT=\"${REWW_ASPECT}\"")
+endif()
 target_link_libraries(ww-xbox-retail PRIVATE xboxrecomp d3d11 dxgi dxguid xinput winmm dbghelp bcrypt ole32 shell32 uuid msimg32 windowscodecs gdi32 psapi)
 set_target_properties(ww-xbox-retail PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/bin")
 if(REWW_ABI_CHECK)

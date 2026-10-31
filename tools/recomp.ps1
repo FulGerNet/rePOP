@@ -9,5 +9,8 @@ if ($Seeds) { $argsList+='--seeds' }
 if ($AbiCheck) { $argsList+='--abi-check' }
 if ($GenerateOnly) { $argsList+='--generate-only' }
 if ($AnalyzeOnly) { $argsList+='--analyze-only' }
+# RE-WW: Windows PowerShell 5.1 turns native stderr progress into terminating
+# errors under 'Stop'; the exit code below remains authoritative.
+$ErrorActionPreference='Continue'
 & python @argsList
 if ($LASTEXITCODE) { throw "reWW pipeline failed ($LASTEXITCODE)" }

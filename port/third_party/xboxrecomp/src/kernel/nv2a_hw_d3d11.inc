@@ -126,14 +126,23 @@ extern int   xbox_FramebufferOverlayGet(const uint32_t **px, uint32_t *w,
 #define HW_VSP_MAX      192             /* translated vertex programs kept */
 #define HW_VSP_SLOTS    8               /* attributes a translated program reads */
 
+#include "reww_surface_ownership.h" /* RE-WW: CPU reuse of GPU surface memory. */
+#include "reww_rt_subrect.h" /* RE-WW: linear textures inside render targets. */
+
 typedef struct {
     uint32_t offset, w, h;              /* guest (resolved) address and size */
     uint32_t sc;                        /* host pixels per guest pixel (before widening) */
     ID3D11Texture2D *tex;
     ID3D11RenderTargetView *rtv;
     ID3D11ShaderResourceView *srv;
+    ID3D11Texture2D *feedback;
+    ID3D11ShaderResourceView *feedback_srv;
+    uint64_t feedback_draw;
     uint32_t drawn_frame;
+    RewwSurfaceOwnership ram;
+    RewwWriteLog writes; /* RE-WW: latest writer of an aliased region. */
 } HwSurface;
+static uint64_t s_hw_feedback_draw; /* RE-WW: one snapshot per surface/draw. */
 
 typedef struct {
     uint32_t offset, w, h;
@@ -338,7 +347,9 @@ static void hw_visibility_method(uint32_t method, uint32_t value, uint64_t stamp
 static const char s_hw_hlsl_vs_common[] =
 "cbuffer VSC : register(b0) { float4 vp; float4 fogp; float4 ws; float4 vpad; float4 cur[16];\n"
 "                             float4 c[192]; };\n"
-"struct VO { float4 pos:SV_Position; float4 d0:COLOR0; float4 d1:COLOR1; float4 fog:FOG;\n"
+/* RE-SoT: multipass depth comparisons need consistent position arithmetic
+ * across vertex programs and host compilers; colors retain normal math. */
+"struct VO { precise float4 pos:SV_Position; float4 d0:COLOR0; float4 d1:COLOR1; float4 fog:FOG;\n"
 "            float4 t0:TEXCOORD0; float4 t1:TEXCOORD1; float4 t2:TEXCOORD2; float4 t3:TEXCOORD3; };\n"
 "VO vs_finish(float4 p, float4 d0, float4 d1, float fog, float4 t0, float4 t1, float4 t2, float4 t3) {\n"
 "  VO o; float w = p.w; float x = p.x, y = p.y;\n"
@@ -349,8 +360,18 @@ static const char s_hw_hlsl_vs_common[] =
  * it towards its side of the screen (hw_hud_shift); ws.w is zero for other
  * batches. */
 "  if (flat) x += ws.w;\n"
+/* RE-SoT: afc13cc removed the global clamp to fix eye-crossing scene
+ * triangles. Depthless RGB565 shadow casters still need the old clamp:
+ * both XBEs declare Z16 there but emit screen Z outside 0..65535. These
+ * passes have no depth surface/test; clipping their Z erases silhouettes.
+ * vp.w is set only for the independently traced caster state below. */
+"  float z = p.z * vp.z; if (vp.w > 0.5) z = saturate(z);\n"
+/* RE-SoT: reconstruct the homogeneous depth plane before GPU clipping.
+ * Clamping screen z per vertex bends triangles crossing the eye/near plane,
+ * so geometry behind the camera can occlude floors and walls in front.
+ * The rasterizer clips z against 0..w after interpolation on both hosts. */
 "  o.pos = float4((x * vp.x - 1.0) * w, (1.0 - y * vp.y) * w,\n"
-"                 saturate(p.z * vp.z) * w, w);\n"
+"                 z * w, w);\n"
 "  o.d0 = saturate(d0); o.d1 = saturate(d1); o.fog = float4(fog, 0, 0, 0);\n"
 "  o.t0 = t0; o.t1 = t1; o.t2 = t2; o.t3 = t3; return o; }\n";
 
@@ -554,6 +575,8 @@ static const char s_hw_hlsl[] =
 "float4 stage_tex(uint mode, float4 tc, float4 smp, float bound, inout bool keep, uint cpm) {\n"
 "  if (mode == 0) return float4(0, 0, 0, 1);\n"
 "  if (mode >= 1 && mode <= 3) return bound > 0.5 ? smp : float4(1, 1, 1, 1);\n"
+/* RE-WW: DEPENDENT_AR/GB already sampled at the previous stage's colour. */
+"  if (mode == 15 || mode == 16) return bound > 0.5 ? smp : float4(1, 1, 1, 1);\n"
 "  if (mode == 4) return saturate(tc);\n"
 "  if (mode == 5) {\n"
 "    for (int j = 0; j < 4; j++) {\n"
@@ -562,12 +585,18 @@ static const char s_hw_hlsl[] =
 "    return float4(0, 0, 0, 0); }\n"
 "  return float4(0, 0, 0, 0); }\n"
 "float2 proj_uv(float4 tc, float4 sc) { float q = tc.w != 0.0 ? tc.w : 1.0; return tc.xy / q * sc.xy; }\n"
-/* RE-SoT: a projected shadow has a finite footprint. Behind-projector and
- * out-of-map receivers must not smear the clamp-to-edge texel up a wall.
+/* RE-WW: NV2A DEPENDENT_AR (15) reads (alpha, red) and DEPENDENT_GB (16)
+ * (green, blue) of the preceding stage as normalized coordinates. WW's
+ * colour grading (program 0x201) looks its 256x1 LUT up with GB. */
+"bool dep_mode(uint mode) { return mode == 15 || mode == 16; }\n"
+"float2 dep_uv(uint mode, float4 v) { return mode == 15 ? float2(v.a, v.r) : float2(v.g, v.b); }\n"
+/* RE-SoT: a shadow has a finite footprint. Use the sampler's Q convention:
+ * Q=0 denotes affine coordinates, not an invisible receiver. Out-of-map
+ * receivers must not smear the clamp-to-edge texel up a wall.
  * Black is neutral for the observed ZERO / ONE_MINUS_SRC_COLOR receivers. */
 "float4 shadow_sample(float4 value, float4 tc, float4 scale) {\n"
 "  float2 uv = proj_uv(tc, scale);\n"
-"  return tc.w > 0.0001 && all(uv >= 0.0) && all(uv <= 1.0) ? value : float4(0,0,0,0); }\n"
+"  return all(uv >= 0.0) && all(uv <= 1.0) ? value : float4(0,0,0,0); }\n"
 /* RE-SoT: retail light maps request white CLAMP_TO_BORDER. A zero border
  * multiplies the underlying surface to black outside the light-map atlas.
  * Both backends sample clamp-to-edge, then blend the guest border per tap
@@ -630,8 +659,14 @@ static const char s_hw_hlsl[] =
 "  bool keep = true; uint sp = ctl.y; uint cpm = atest.w;\n"
 "  float4 Q1 = 0, Q2 = 0, Q3 = 0, Q4 = 0, Q5 = 0, Q6 = 0, Q7 = 0, Q12 = 0, Q13 = 0, Q14 = 0, Q15 = 0;\n"
 "  float4 Q8  = stage_tex(sp & 31, i.t0, s0, tscale[0].z, keep, cpm);\n"
+"  [branch] if (dep_mode((sp >> 5) & 31) && tscale[1].z > 0.5 && tscale[1].w < 0.5)\n"
+"    s1 = tx1.SampleLevel(sm1, dep_uv((sp >> 5) & 31, Q8), 0);\n"
 "  float4 Q9  = stage_tex((sp >> 5) & 31, i.t1, s1, tscale[1].z, keep, cpm >> 4);\n"
+"  [branch] if (dep_mode((sp >> 10) & 31) && tscale[2].z > 0.5 && tscale[2].w < 0.5)\n"
+"    s2 = tx2.SampleLevel(sm2, dep_uv((sp >> 10) & 31, Q9), 0);\n"
 "  float4 Q10 = stage_tex((sp >> 10) & 31, i.t2, s2, tscale[2].z, keep, cpm >> 8);\n"
+"  [branch] if (dep_mode((sp >> 15) & 31) && tscale[3].z > 0.5 && tscale[3].w < 0.5)\n"
+"    s3 = tx3.SampleLevel(sm3, dep_uv((sp >> 15) & 31, Q10), 0);\n"
 "  float4 Q11 = stage_tex((sp >> 15) & 31, i.t3, s3, tscale[3].z, keep, cpm >> 12);\n"
 "  if (!keep) discard;\n"
 "  float4 o;\n"
@@ -876,14 +911,16 @@ static ID3DBlob *hw_compile(const char *entry, const char *target)
 #include "nv2a_native_scale.h" /* RE-SoT: tested fractional rounding on both hosts. */
 #include "resot_effect_quality.h" /* RE-SoT: shared auxiliary-effect quality budget. */
 static volatile LONG s_render_percent;
-/* RE-SoT: quality of screen effects and auxiliary render targets, independently
- * from the final texture-glow switch. Guest timings are unchanged. */
-static volatile LONG s_post_quality=3;
+/* RE-SoT: shared graphics preset controls auxiliary quality, character shadows
+ * and final texture glow together. Guest timings are unchanged. */
+static volatile LONG s_post_quality=2;
+extern void xbox_SetPostProcessing(int enabled); /* RE-SoT: integrated Full preset glow. */
 void xbox_SetPostProcessingQuality(int quality)
 {
-    if(quality<0 || quality>3)quality=3;
+    if(quality<0 || quality>3)quality=2;
+    xbox_SetPostProcessing(resot_preset_glow(quality)); /* RE-SoT: one preset owns the complete effect policy. */
     if(InterlockedExchange(&s_post_quality,quality)!=quality)
-        fprintf(stderr,"[VIDEO] post processing quality %d (0 off, 1 low, 2 mid, 3 high)\n",quality);
+        fprintf(stderr,"[VIDEO] graphics preset %d (0 debug off, 1 reduced, 2 standard, 3 full)\n",quality);
 }
 static int hw_post_quality(void) { return (int)InterlockedCompareExchange(&s_post_quality,0,0); }
 /* RE-SoT: only proven fullscreen chains may be omitted as screen effects.
@@ -1250,6 +1287,45 @@ static uint32_t hw_zmax_bits(void)
     return ((s_gpu.format >> 4) & 0xF) == 1 ? 0xFFFFu : 0xFFFFFFu;
 }
 
+/* RE-SoT: demo demo-hud-after-err and retail retail-hud-after-err each
+ * record format 08080113, pitch 512, 256x256, zeta=0 and depth disabled.
+ * This is render state, not a target-specific XBE address or heap address. */
+static int hw_depthless_shadow(void)
+{
+    return resot_shadow_target(s_gpu.format,s_gpu.pitch,s_gpu.clip_x,s_gpu.clip_y,
+        s_gpu.clip_w,s_gpu.clip_h,s_gpu.zeta_offset,s_gpu.depth_test,s_gpu.blend_enable);
+}
+
+/* RE-SoT: retail-light-query.txt and lights-walls-lowerbath-trace.txt
+ * independently identify the final halo material and its query probes.
+ * LowerBath uses ARGB8888 64x64, not the earlier DXT1 128x128 image;
+ * the old predicate matched zero draws in the affected phone session.
+ * Keep these exact variants retail-only and exclude probes.
+ * LEQUAL finals need the same emission correction as ALWAYS finals; quad
+ * batching does not change the material. Shared by Windows D3D11 and SDL. */
+static int hw_retail_halo(uint32_t w, uint32_t h, int depth, int querying)
+{
+#if RESOT_RUNTIME_RETAIL
+    const Texture *t = &s_gpu.texs[0];
+    return w == 640 && h == 480 && depth && s_gpu.depth_test && !s_gpu.depth_mask &&
+        (s_gpu.depth_func == 0x207 || s_gpu.depth_func == 0x203) &&
+        s_gpu.color_mask == 0x00010101 && !querying && !s_gpu.alpha_test &&
+        s_gpu.blend_enable && s_gpu.blend_sfactor == 1 && s_gpu.blend_dfactor == 1 &&
+        s_gpu.blend_equation == 0x8006 && s_gpu.prim == NV_PRIM_QUADS &&
+        s_gpu.idx_count >= 4 && (s_gpu.idx_count & 3) == 0 &&
+        t->valid && !t->cube &&
+        ((t->color == 0x0C && t->width == 128 && t->height == 128) ||
+         (t->color == 0x06 && t->width == 64 && t->height == 64)) &&
+        s_gpu.rc.control == 1 && s_gpu.rc.stage_program == 1 &&
+        s_gpu.rc.color_icw[0] == 0x08010000 && s_gpu.rc.alpha_icw[0] == 0x18140000 &&
+        s_gpu.rc.color_ocw[0] == 0x00010C00 && s_gpu.rc.alpha_ocw[0] == 0x00000C00 &&
+        s_gpu.rc.final0 == 0x0000000C && s_gpu.rc.final1 == 0x00001C80;
+#else
+    (void)w; (void)h; (void)depth; (void)querying;
+    return 0;
+#endif
+}
+
 #if RESOT_HW_D3D11
 /* The colour surface the title is drawing into. */
 static HwSurface *hw_surface(void)
@@ -1282,6 +1358,8 @@ static HwSurface *hw_surface(void)
     if (s->tex) {
         if (s_hw.front == s) s_hw.front = NULL;
         if (s_hw.biggest == s) s_hw.biggest = NULL;
+        if (s->feedback_srv) ID3D11ShaderResourceView_Release(s->feedback_srv);
+        if (s->feedback) ID3D11Texture2D_Release(s->feedback);
         ID3D11ShaderResourceView_Release(s->srv);
         ID3D11RenderTargetView_Release(s->rtv);
         ID3D11Texture2D_Release(s->tex);
@@ -1366,10 +1444,10 @@ static uint32_t hw_tex_hash(const Texture *t)
 {
     const uint8_t *p = (const uint8_t *)xbox_GetMemoryOffset() + t->offset;
     /* RE-SoT: hash every face; rewriting a nonzero face must invalidate it. */
-    uint32_t n = (t->cube ? 6 * tex_face_stride(t) : hw_tex_bytes(t)) / 4, step = n > 2048 ? n / 2048 : 1, i;
-    uint32_t h = 2166136261u;
-    for (i = 0; i < n; i += step)
-        h = (h ^ ((const uint32_t *)p)[i]) * 16777619u;
+    uint32_t bytes = t->cube ? 6 * tex_face_stride(t) : hw_tex_bytes(t), i;
+    /* RE-WW: use the same bounded fingerprint for CPU uploads, including
+     * the last word/tail that can invalidate a former render-target alias. */
+    uint32_t h = reww_surface_fingerprint(p, bytes);
     if (t->palette)
         for (i = 0; i < 256; i += 8)
             h = (h ^ ((const uint32_t *)((const uint8_t *)xbox_GetMemoryOffset()
@@ -1387,6 +1465,44 @@ static int hw_mem_ok(uint32_t va, uint32_t bytes)
         return 1;
     return 0;
 }
+
+/* RE-WW: remember the guest RAM footprint at a GPU write. Host rendering
+ * does not write those bytes back; a changed fingerprint means the CPU has
+ * repurposed the memory (for example a decoded movie), not GPU feedback. */
+static void hw_claim_surface_ram(RewwSurfaceOwnership *owner, uint32_t offset,
+                                 uint32_t pitch, uint32_t height)
+{
+    uint64_t bytes = (uint64_t)pitch * height;
+    if (!bytes || bytes > UINT32_MAX || !hw_mem_ok(offset, (uint32_t)bytes)) {
+        reww_surface_invalidate(owner);
+        return;
+    }
+    reww_surface_claim(owner, (const uint8_t *)xbox_GetMemoryOffset() + offset,
+                       (uint32_t)bytes);
+}
+
+static int hw_surface_ram_changed(const RewwSurfaceOwnership *owner, uint32_t offset)
+{
+    return owner->gpu_owned && (!hw_mem_ok(offset, owner->bytes) ||
+        reww_surface_changed(owner, (const uint8_t *)xbox_GetMemoryOffset() + offset));
+}
+
+#if RESOT_HW_D3D11
+static void hw_reclaim_surface(HwSurface *s)
+{
+    uint32_t i;
+    int dirty = 0;
+    /* RE-WW: a GPU write may follow a CPU rewrite before any texture lookup.
+     * Retire the other shapes' old baselines before rearming this producer. */
+    for (i = 0; i < HW_MAX_SURFACES; i++)
+        if (s_hw.surf[i].tex && s_hw.surf[i].offset == s->offset &&
+            hw_surface_ram_changed(&s_hw.surf[i].ram, s->offset)) dirty = 1;
+    if (dirty)
+        for (i = 0; i < HW_MAX_SURFACES; i++)
+            if (s_hw.surf[i].offset == s->offset) reww_surface_invalidate(&s_hw.surf[i].ram);
+    hw_claim_surface_ram(&s->ram, s->offset, s_gpu.pitch, s->h);
+}
+#endif
 
 /* RE-SoT: retain sample_tex as the format fallback and scalar reference.
  * Demo's demo-hud-after-err.txt independently records P8 (0x0B) textures,
@@ -1428,13 +1544,127 @@ static void hw_border_constants(HwPsConst *pc, unsigned stage, const Texture *t)
 }
 
 #if RESOT_HW_D3D11
+/* RE-WW: WW's final color adjustment samples the active color surface.
+ * Binding that RTV as an SRV is illegal on the host. Preserve the pixels
+ * from preceding draws, rather than substituting the white fallback. */
+static ID3D11ShaderResourceView *hw_feedback_texture(HwSurface *s)
+{
+    if (!s->feedback) {
+        D3D11_TEXTURE2D_DESC td;
+        ID3D11Texture2D_GetDesc(s->tex, &td);
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(ID3D11Device_CreateTexture2D(s_hw.dev, &td, NULL, &s->feedback)))
+            return NULL;
+        if (FAILED(ID3D11Device_CreateShaderResourceView(s_hw.dev,
+                (ID3D11Resource *)s->feedback, NULL, &s->feedback_srv))) {
+            ID3D11Texture2D_Release(s->feedback); s->feedback = NULL;
+            return NULL;
+        }
+    }
+    if (s->feedback_draw != s_hw_feedback_draw) {
+        ID3D11ShaderResourceView *none[8] = {0};
+        ID3D11RenderTargetView *rtv = NULL;
+        ID3D11DepthStencilView *dsv = NULL;
+        ID3D11DeviceContext_OMGetRenderTargets(s_hw.ctx, 1, &rtv, &dsv);
+        ID3D11DeviceContext_OMSetRenderTargets(s_hw.ctx, 0, NULL, NULL);
+        ID3D11DeviceContext_PSSetShaderResources(s_hw.ctx, 0, 8, none);
+        ID3D11DeviceContext_CopyResource(s_hw.ctx, (ID3D11Resource *)s->feedback,
+                                       (ID3D11Resource *)s->tex);
+        ID3D11DeviceContext_OMSetRenderTargets(s_hw.ctx, 1, &rtv, dsv);
+        if (rtv) ID3D11RenderTargetView_Release(rtv);
+        if (dsv) ID3D11DepthStencilView_Release(dsv);
+        s->feedback_draw = s_hw_feedback_draw;
+        if (s_ftrace == 2) fprintf(stderr,"[RE-WW feedback] D3D11 snapshot %08X draw=%llu\n",
+            s->offset, (unsigned long long)s_hw_feedback_draw);
+    }
+    return s->feedback_srv;
+}
+
+/* RE-WW: a linear texture naming a rectangle inside a render target
+ * (reww_rt_subrect.h). Copy that host rectangle into a small cached image
+ * once per draw, after unbinding outputs as the feedback snapshot does. */
+typedef struct {
+    const HwSurface *s;
+    uint32_t x, y, w, h, hw, hh;
+    ID3D11Texture2D *tex;
+    ID3D11ShaderResourceView *srv;
+    uint64_t draw;
+    uint32_t used;
+} HwSubrect;
+static HwSubrect s_hw_subrect[16];
+
+static ID3D11ShaderResourceView *hw_subrect_texture(HwSurface *s, uint32_t x, uint32_t y,
+                                                    uint32_t w, uint32_t h)
+{
+    D3D11_TEXTURE2D_DESC td;
+    D3D11_BOX box;
+    HwSubrect *e = NULL, *victim = &s_hw_subrect[0];
+    uint32_t i, x0 = hw_px(x, s->sc), x1 = hw_px(x + w, s->sc);
+    uint32_t y0 = hw_py(y, s->sc), y1 = hw_py(y + h, s->sc);
+
+    ID3D11Texture2D_GetDesc(s->tex, &td);
+    if (x1 > td.Width) x1 = td.Width;
+    if (y1 > td.Height) y1 = td.Height;
+    if (x1 <= x0 || y1 <= y0)
+        return NULL;
+    for (i = 0; i < 16 && !e; i++) {
+        HwSubrect *c = &s_hw_subrect[i];
+        if (c->tex && c->s == s && c->x == x && c->y == y && c->w == w && c->h == h &&
+            c->hw == x1 - x0 && c->hh == y1 - y0)
+            e = c;
+        else if (!c->tex || c->used < victim->used)
+            victim = c;
+    }
+    if (!e) {
+        e = victim;
+        if (e->srv) ID3D11ShaderResourceView_Release(e->srv);
+        if (e->tex) ID3D11Texture2D_Release(e->tex);
+        memset(e, 0, sizeof *e);
+        td.Width = x1 - x0; td.Height = y1 - y0;
+        td.MipLevels = td.ArraySize = 1;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        td.Usage = D3D11_USAGE_DEFAULT; td.CPUAccessFlags = td.MiscFlags = 0;
+        if (FAILED(ID3D11Device_CreateTexture2D(s_hw.dev, &td, NULL, &e->tex)))
+            return NULL;
+        if (FAILED(ID3D11Device_CreateShaderResourceView(s_hw.dev,
+                (ID3D11Resource *)e->tex, NULL, &e->srv))) {
+            ID3D11Texture2D_Release(e->tex); e->tex = NULL;
+            return NULL;
+        }
+        e->s = s; e->x = x; e->y = y; e->w = w; e->h = h;
+        e->hw = x1 - x0; e->hh = y1 - y0;
+        e->draw = UINT64_MAX;
+    }
+    e->used = s_hw.frame;
+    if (e->draw != s_hw_feedback_draw) {
+        ID3D11ShaderResourceView *none[8] = {0};
+        ID3D11RenderTargetView *rtv = NULL;
+        ID3D11DepthStencilView *dsv = NULL;
+        box.left = x0; box.right = x1; box.top = y0; box.bottom = y1;
+        box.front = 0; box.back = 1;
+        ID3D11DeviceContext_OMGetRenderTargets(s_hw.ctx, 1, &rtv, &dsv);
+        ID3D11DeviceContext_OMSetRenderTargets(s_hw.ctx, 0, NULL, NULL);
+        ID3D11DeviceContext_PSSetShaderResources(s_hw.ctx, 0, 8, none);
+        ID3D11DeviceContext_CopySubresourceRegion(s_hw.ctx, (ID3D11Resource *)e->tex, 0, 0, 0, 0,
+                                                  (ID3D11Resource *)s->tex, 0, &box);
+        ID3D11DeviceContext_OMSetRenderTargets(s_hw.ctx, 1, &rtv, dsv);
+        if (rtv) ID3D11RenderTargetView_Release(rtv);
+        if (dsv) ID3D11DepthStencilView_Release(dsv);
+        e->draw = s_hw_feedback_draw;
+        if (s_ftrace == 2)
+            fprintf(stderr, "[RE-WW subrect] D3D11 %08X %ux%u+%u+%u of %ux%u\n",
+                    s->offset, w, h, x, y, s->w, s->h);
+    }
+    return e->srv;
+}
+
 static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
 {
     const Texture *t = &s_gpu.texs[stage];
     HwTexture *c = NULL, *victim = NULL;
     uint32_t i, slot, hash, face, face_stride, *px;
     D3D11_TEXTURE2D_DESC td;
-    int mips;
+    int mips, ram_alias = 0, dirty = 0;
     LARGE_INTEGER upload_start, upload_end, upload_frequency; /* RE-SoT: slow upload evidence. */
     int cache_reason;
 
@@ -1447,9 +1677,58 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
      * drawn into most recently. */
     {
         HwSurface *best = NULL;
+        for (i = 0; !t->cube && i < HW_MAX_SURFACES; i++) {
+            HwSurface *c2 = &s_hw.surf[i];
+            if (c2->tex && c2->offset == t->offset) {
+                ram_alias = 1;
+                if (hw_surface_ram_changed(&c2->ram, c2->offset)) dirty = 1;
+            }
+        }
+        if (dirty) {
+            static unsigned reports;
+            if (reports++ < 8) fprintf(stderr,"[RE-WW] CPU replaced GPU surface %08X; upload guest texture %ux%u\n",t->offset,t->width,t->height);
+            for (i = 0; i < HW_MAX_SURFACES; i++)
+                if (s_hw.surf[i].offset == t->offset) reww_surface_invalidate(&s_hw.surf[i].ram);
+            for (i = 0; i < HW_MAX_TEXTURES; i++)
+                if (s_hw.texs[i].offset == t->offset) s_hw.texs[i].checked_frame = UINT32_MAX;
+        }
+        /* RE-WW: a linear 32-bit texture takes the surface whose row pitch
+         * it declares, including a rectangle inside it (reww_rt_subrect.h). */
+        if (!t->cube && !tex_size_from_format(t->color) && tex_texel_bytes(t->color) == 4 &&
+            reww_rt_subrect_enabled()) {
+            HwSurface *host = NULL;
+            uint32_t sx = 0, sy = 0, cx, cy;
+            uint64_t newest = 0, written;
+            for (i = 0; i < HW_MAX_SURFACES; i++) {
+                HwSurface *c2 = &s_hw.surf[i];
+                if (!c2->tex || !c2->ram.gpu_owned ||
+                    !reww_rt_subrect(c2->offset, c2->w, c2->h, t->offset, t->pitch,
+                                     t->width, t->height, &cx, &cy))
+                    continue;
+                written = reww_write_latest(&c2->writes, cx, cy, t->width, t->height);
+                if (!host || written > newest ||
+                    (written == newest && c2->drawn_frame > host->drawn_frame)) {
+                    host = c2; sx = cx; sy = cy; newest = written;
+                }
+            }
+            if (host && s_ftrace == 2)
+                fprintf(stderr, "  [HW-TEX] stage=%d offset=%08X pitch=%u declared=%ux%u in %ux%u at %u,%u feedback=%d\n",
+                        stage, t->offset, t->pitch, t->width, t->height, host->w, host->h,
+                        sx, sy, host == target);
+            if (host && !reww_rt_subrect_is_whole(sx, sy, t->width, t->height, host->w, host->h)) {
+                ID3D11ShaderResourceView *srv;
+                hw_trace_effect_source(stage, host->offset, t->width, t->height, host->drawn_frame);
+                srv = hw_subrect_texture(host, sx, sy, t->width, t->height);
+                if (srv) return srv;
+            }
+            if (host) {
+                hw_trace_effect_source(stage, host->offset, host->w, host->h, host->drawn_frame);
+                return host == target ? hw_feedback_texture(host) : host->srv;
+            }
+        }
         for (i = 0; i < HW_MAX_SURFACES; i++) {
             HwSurface *c2 = &s_hw.surf[i];
-            if (t->cube || !c2->tex || c2->offset != t->offset)
+            if (t->cube || !c2->tex || c2->offset != t->offset || !c2->ram.gpu_owned)
                 continue;
             if (!best || (c2->w == t->width && best->w != t->width)
                 || ((c2->w == t->width) == (best->w == t->width)
@@ -1464,7 +1743,7 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
                 best->drawn_frame, s_hw.frame, best == target);
         if (best) {
             hw_trace_effect_source(stage,best->offset,best->w,best->h,best->drawn_frame); /* RE-SoT */
-            return best == target ? NULL : best->srv;
+            return best == target ? hw_feedback_texture(best) : best->srv;
         }
     }
     if (!hw_mem_ok(t->offset, t->cube ? 6 * tex_face_stride(t) : hw_tex_bytes(t)))
@@ -1483,12 +1762,12 @@ static ID3D11ShaderResourceView *hw_texture(int stage, const HwSurface *target)
         if (!victim || !e->srv || (victim->srv && e->used_frame < victim->used_frame))
             victim = e;
     }
-    if (c && c->checked_frame == s_hw.frame) {
+    if (c && c->checked_frame == s_hw.frame && !ram_alias) {
         c->used_frame = s_hw.frame;
         return c->srv;
     }
     hash = hw_tex_hash(t);
-    if (c && c->hash == hash) {
+    if (c && c->hash == hash && !dirty) {
         c->checked_frame = c->used_frame = s_hw.frame;
         return c->srv;
     }
@@ -1652,11 +1931,13 @@ static ID3D11BlendState *hw_blend_state(void)
     return s_hw.blend[i].st;
 }
 
-static ID3D11DepthStencilState *hw_depth_state(int have_depth)
+static ID3D11DepthStencilState *hw_depth_state(int have_depth, int halo)
 {
     uint32_t test = have_depth && s_gpu.depth_test;
     uint32_t write = test && s_gpu.depth_mask;
-    uint32_t key = test | (write << 1) | ((s_gpu.depth_func & 7) << 2);
+    /* RE-SoT: same final-halo occlusion policy as native Vulkan/D3D12. */
+    uint32_t func = halo ? 0x203 : s_gpu.depth_func;
+    uint32_t key = test | (write << 1) | ((func & 7) << 2);
     D3D11_DEPTH_STENCIL_DESC dd;
     int i;
 
@@ -1670,7 +1951,7 @@ static ID3D11DepthStencilState *hw_depth_state(int have_depth)
      * silhouette (z about 0.97), even though the game disabled depth testing. */
     dd.DepthEnable = test;
     dd.DepthWriteMask = write ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
-    dd.DepthFunc = test ? (D3D11_COMPARISON_FUNC)((s_gpu.depth_func & 7) + 1)
+    dd.DepthFunc = test ? (D3D11_COMPARISON_FUNC)((func & 7) + 1)
                         : D3D11_COMPARISON_ALWAYS;
     i = s_hw.nds < 32 ? s_hw.nds++ : 0;
     if (s_hw.ds[i].st)
@@ -1706,13 +1987,18 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     /* The header (vp, fogp, ws, pad) and then cur[]: everything in HwVsConst
      * before the program constants. */
     float hdr[16 + NV_VERTEX_ATTRS * 4], bf[4];
-    int st, i;
+    int st, i, halo;
     UINT stride = sizeof(HwVertex), zero = 0;
     uint32_t area;
 
     if (!s)
         return NULL;
     d = hw_depth(s);
+#if RESOT_RUNTIME_RETAIL
+    halo = hw_retail_halo(s->w,s->h,d != NULL,s_hw_visibility.enabled);
+#else
+    halo = 0; /* RE-SoT: this material was traced only in retail. */
+#endif
     ID3D11DeviceContext_OMSetRenderTargets(s_hw.ctx, 1, &s->rtv, d ? d->dsv : NULL);
     vp.TopLeftX = 0; vp.TopLeftY = 0;
     vp.Width = (float)hw_px(s->w, s->sc);
@@ -1734,7 +2020,7 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     }
     hw_color4(s_gpu.blend_color, bf);
     ID3D11DeviceContext_OMSetBlendState(s_hw.ctx, hw_blend_state(), bf, 0xFFFFFFFFu);
-    ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx, hw_depth_state(d != NULL), 0);
+    ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx, hw_depth_state(d != NULL,halo), 0);
 
     memset(&pc, 0, sizeof pc);
     for (i = 0; i < 8; i++) {
@@ -1752,6 +2038,7 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     hw_color4(s_gpu.fog_color, pc.fogc);       /* FOG_COLOR has R in bits 0-7 */
     { float r = pc.fogc[2]; pc.fogc[2] = pc.fogc[0]; pc.fogc[0] = r; }
     pc.misc[0] = (uint32_t)s_gpu.rc_seen;
+    ++s_hw_feedback_draw; /* RE-WW: subsequent stages share the same snapshot. */
     for (st = 0; st < 4; st++) {
         const Texture *t = &s_gpu.texs[st];
         uint32_t mode = (s_gpu.rc.stage_program >> (st * 5)) & 0x1F;
@@ -1761,7 +2048,8 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
             fprintf(stderr, "[HW-TEX-STATE] stage=%d palette=%08X address=%u/%u border=%08X\n",
                 st, t->palette, t->addr_u, t->addr_v, t->border_color);
         srv[st] = NULL;
-        if ((s_gpu.rc_seen ? (mode >= 1 && mode <= 3) : st == 0) && t->valid)
+        /* RE-WW: dependent AR/GB stages (15/16) sample a texture too. */
+        if ((s_gpu.rc_seen ? ((mode >= 1 && mode <= 3) || mode == 15 || mode == 16) : st == 0) && t->valid)
             srv[st] = hw_texture(st, s);
         pc.tscale[st][0] = pc.tscale[st][1] = 1.0f;
         if (t->valid && !tex_size_from_format(t->color)) {
@@ -1782,6 +2070,8 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
         }
         smp[st] = hw_sampler(t);
     }
+    /* RE-SoT: match native halo attenuation without changing alpha/probes. */
+    if (halo) for (i=0;i<3;i++) pc.fac0[0][i] *= 0.25f;
     /* Consecutive batches mostly share their combiner set-up. */
     if (!s_hw.ps_last_valid || memcmp(&pc, &s_hw.ps_last, sizeof pc)) {
         if (SUCCEEDED(ID3D11DeviceContext_Map(s_hw.ctx, (ID3D11Resource *)s_hw.ps_cb, 0,
@@ -1795,6 +2085,7 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     memset(hdr, 0, sizeof hdr);
     hdr[0] = 2.0f / (float)s->w; hdr[1] = 2.0f / (float)s->h;
     hdr[2] = 1.0f / (float)hw_zmax_bits();
+    hdr[3] = (float)hw_depthless_shadow(); /* RE-SoT: retain pre-afc13cc depthless caster coverage. */
     hdr[4] = s_gpu.fog_param[0]; hdr[5] = s_gpu.fog_param[1];
     hdr[6] = (float)s_gpu.fog_mode; hdr[7] = s_gpu.fog_enable ? 1.0f : 0.0f;
     {
@@ -1869,6 +2160,8 @@ static HwSurface *hw_bind_draw_state(const HwVsp *prog)
     }
 #endif
     s->drawn_frame = s_hw.frame;
+    reww_write_log(&s->writes, reww_write_next(), s_gpu.clip_x, s_gpu.clip_y,
+                   s_gpu.clip_w, s_gpu.clip_h);
     area = s->w * s->h;
     if (!s_hw.biggest || area >= s_hw.biggest_area) {
         s_hw.biggest = s;
@@ -2018,8 +2311,17 @@ static void hw_trace_end(void)
      * reported black patch. Read only one pixel, and only during a trace. */
     {
         const char *probe = getenv("RECOMP_HW_TRACE_PIXEL");
-        unsigned x, y;
+        unsigned x, y, k;
         HwSurface *s = s_hw.biggest;
+        /* RE-WW: probe the batch's own target, not the largest surface:
+         * glow chains draw into several surfaces within one frame. */
+        uint32_t bpp = surface_bpp();
+        for (k = 0; bpp && s_gpu.pitch && k < HW_MAX_SURFACES; k++)
+            if (s_hw.surf[k].tex && s_hw.surf[k].offset == dma_resolve(s_gpu.color_offset)
+                && s_hw.surf[k].w == s_gpu.pitch / bpp) {
+                s = &s_hw.surf[k];
+                break;
+            }
         if (probe && s && sscanf(probe, "%u,%u", &x, &y) == 2) {
             D3D11_TEXTURE2D_DESC td;
             ID3D11Texture2D *read = NULL;
@@ -2337,6 +2639,13 @@ static void hw_classify_screen(float left, float right, float top, float bottom)
 #endif
             ))
         s_hw.batch_hud = right < 320.0f ? -1 : left > 320.0f ? 1 : 0;
+#if RESOT_RUNTIME_RETAIL
+    /* RE-SoT: life upgrades extend the outline through the screen centre;
+     * it still belongs to the left HUD, including separate right end caps. */
+    if(projected_ui && !s_gpu.depth_test && nv_hw_retail_health_frame(
+        s_hw.widen,left,right,top,bottom,s_gpu.texs[0].width,
+        s_gpu.texs[0].height,s_gpu.texs[0].color)) s_hw.batch_hud=-1;
+#endif
     /* RE-SoT: retail only. Its title logo is flat 2D drawn through the
      * narrowed projection (vsh FE9274D1, x=92.531..476.531 y=48.531..168.531
      * at 16:9, a 512-wide 4:3 quad at x=16.7..528.7), so it already has its
@@ -2445,12 +2754,12 @@ static int hw_postprocess_candidate(uint32_t n)
  * are allocations, not XBE constants. Current-frame provenance prevents a
  * reused/static RGB565 texture from suppressing unrelated geometry. */
 static struct { uint32_t offset,frame; int valid; } s_shadow_targets[32];
+static int hw_shadow_receiver(const Texture *t); /* RE-SoT: same provenance for admission and skipping. */
 static int hw_skip_shadow(void)
 {
     unsigned i,best=0;
     const Texture *t=&s_gpu.texs[0];
-    if (resot_shadow_target(s_gpu.format,s_gpu.pitch,s_gpu.clip_x,s_gpu.clip_y,
-            s_gpu.clip_w,s_gpu.clip_h,s_gpu.zeta_offset,s_gpu.depth_test,s_gpu.blend_enable)) {
+    if (hw_depthless_shadow()) { /* RE-SoT: same caster admission as the vertex depth policy. */
         uint32_t offset=dma_resolve(s_gpu.color_offset);
         for(i=0;i<32;i++) {
             if(s_shadow_targets[i].valid && s_shadow_targets[i].offset==offset) { best=i;break; }
@@ -2459,9 +2768,10 @@ static int hw_skip_shadow(void)
         s_shadow_targets[best].offset=offset;s_shadow_targets[best].frame=s_hw.frame;
         s_shadow_targets[best].valid=1;
     }
-    /* RE-SoT: retain character shadows even when screen post-processing is
-     * Off. Its resolution budget still applies; provenance feeds clipping. */
-    (void)t;
+    /* RE-SoT: Reduced omits both the proven caster and its current-frame
+     * receivers. Preserve provenance so switching presets cannot sample stale
+     * or uninitialized shadow maps; all ordinary scene depth stays intact. */
+    if(!resot_preset_shadows(hw_post_quality()) && (hw_depthless_shadow() || hw_shadow_receiver(t)))return 1;
     return 0;
 }
 static int hw_shadow_receiver(const Texture *t)
@@ -2799,6 +3109,8 @@ static int hw_draw_program_batch(void)
             hw_trace_begin();
             ID3D11DeviceContext_DrawIndexed(s_hw.ctx, reuse->ni, reuse->ib_off / 2,
                                             (INT)(reuse->vb_off / (uint32_t)sizeof(HwVertex)));
+            if (s_gpu.color_mask & 0x01010101u)
+                hw_reclaim_surface(bound);
             hw_trace_end();
             s_hw.draws++;
             s_hw.gpu_vsh_batches++;
@@ -2882,6 +3194,8 @@ static int hw_draw_program_batch(void)
         hw_trace_begin();
         ID3D11DeviceContext_DrawIndexed(s_hw.ctx, ni, s_hw.ib_off / 2,
                                         (INT)(s_hw.vb_off / (uint32_t)sizeof(HwVertex)));
+        if (s_gpu.color_mask & 0x01010101u)
+            hw_reclaim_surface(bound);
         hw_trace_end();
         s_hw.draws++;
         s_hw.gpu_vsh_batches++;
@@ -3019,6 +3333,8 @@ static void hw_draw_batch(const Nv2aVshOutput *v, uint32_t n)
         hw_glow_dump_check(bound, 0);
         hw_trace_begin();
         ID3D11DeviceContext_Draw(s_hw.ctx, count, s_hw.vb_off / (uint32_t)sizeof(HwVertex));
+        if (s_gpu.color_mask & 0x01010101u)
+            hw_reclaim_surface(bound);
         hw_trace_end();
         s_hw.vb_off += (uint32_t)sizeof(HwVertex) * count;
         s_hw.cpu_vsh_batches++;
@@ -3064,14 +3380,53 @@ static void hw_clear(uint32_t param)
         if (cy1 < y1) y1 = cy1;
     }
     d = hw_depth(s);
-    if ((param & 0x03) && d) {
+    if ((param & 0x03) && d && x1 > x0 && y1 > y0) {
         float z = (float)(hw_zmax_bits() == 0xFFFFu ? (s_gpu.zstencil_clear & 0xFFFF)
                                                     : (s_gpu.zstencil_clear >> 8))
                 / (float)hw_zmax_bits();
+        if (x0 == 0 && y0 == 0 && x1 >= s->w && y1 >= s->h) {
         ID3D11DeviceContext_ClearDepthStencilView(
             s_hw.ctx, d->dsv,
             ((param & 1) ? D3D11_CLEAR_DEPTH : 0) | ((param & 2) ? D3D11_CLEAR_STENCIL : 0),
             z, (UINT8)(s_gpu.zstencil_clear & 0xFF));
+        } else {
+            /* RE-SoT: ClearDepthStencilView ignores scissor. A rectangle
+             * clear must preserve the scene depth outside its footprint. */
+            D3D11_DEPTH_STENCIL_DESC dd = {0};
+            D3D11_BLEND_DESC bd = {0};
+            ID3D11DepthStencilState *ds = NULL;
+            ID3D11BlendState *bs = NULL;
+            D3D11_VIEWPORT vp = {0,0,(float)hw_px(s->w,s->sc),(float)hw_py(s->h,s->sc),z,z};
+            D3D11_RECT sc = {(LONG)hw_px(x0,s->sc),(LONG)hw_py(y0,s->sc),
+                (LONG)hw_px(x1,s->sc),(LONG)hw_py(y1,s->sc)};
+            dd.DepthEnable = (param&1) != 0;
+            dd.DepthWriteMask = (param&1) ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
+            dd.DepthFunc = D3D11_COMPARISON_ALWAYS;
+            dd.StencilEnable = (param&2) != 0;
+            dd.StencilReadMask = dd.StencilWriteMask = 255;
+            dd.FrontFace.StencilFunc = D3D11_COMPARISON_ALWAYS;
+            dd.FrontFace.StencilFailOp = dd.FrontFace.StencilDepthFailOp = D3D11_STENCIL_OP_KEEP;
+            dd.FrontFace.StencilPassOp = D3D11_STENCIL_OP_REPLACE;
+            dd.BackFace = dd.FrontFace;
+            if (FAILED(ID3D11Device_CreateDepthStencilState(s_hw.dev,&dd,&ds)) ||
+                FAILED(ID3D11Device_CreateBlendState(s_hw.dev,&bd,&bs))) {
+                fprintf(stderr,"[HW] rectangle depth clear state creation failed\n");
+                abort(); /* RE-SoT: never replace a failed partial clear with a full clear. */
+            }
+            ID3D11DeviceContext_OMSetRenderTargets(s_hw.ctx,1,&s->rtv,d->dsv);
+            ID3D11DeviceContext_OMSetBlendState(s_hw.ctx,bs,NULL,0xFFFFFFFFu);
+            ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx,ds,s_gpu.zstencil_clear&255);
+            ID3D11DeviceContext_RSSetState(s_hw.ctx,s_hw.rs[0]);
+            ID3D11DeviceContext_RSSetViewports(s_hw.ctx,1,&vp);
+            ID3D11DeviceContext_RSSetScissorRects(s_hw.ctx,1,&sc);
+            ID3D11DeviceContext_IASetInputLayout(s_hw.ctx,NULL);
+            ID3D11DeviceContext_IASetPrimitiveTopology(s_hw.ctx,D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            ID3D11DeviceContext_VSSetShader(s_hw.ctx,s_hw.vs_blit,NULL,0);
+            ID3D11DeviceContext_PSSetShader(s_hw.ctx,s_hw.ps_solid,NULL,0);
+            ID3D11DeviceContext_PSSetConstantBuffers(s_hw.ctx,0,1,&s_hw.ps_cb);
+            ID3D11DeviceContext_Draw(s_hw.ctx,3,0);
+            ID3D11DepthStencilState_Release(ds); ID3D11BlendState_Release(bs);
+        }
     }
     if (param & NV097_CLEAR_COLOR_MASK) {
         float c[4];
@@ -3095,6 +3450,8 @@ static void hw_clear(uint32_t param)
                                                   0, D3D11_MAP_WRITE_DISCARD, 0, &map))) {
                 memcpy(map.pData, &pc, sizeof pc);
                 ID3D11DeviceContext_Unmap(s_hw.ctx, (ID3D11Resource *)s_hw.ps_cb, 0);
+                /* RE-SoT: the clear payload replaced the cached guest constants. */
+                s_hw.ps_last_valid = 0;
             }
             memset(&bd, 0, sizeof bd);
             /* CLEAR_SURFACE bits: 0x10 R, 0x20 G, 0x40 B, 0x80 A. */
@@ -3117,7 +3474,7 @@ static void hw_clear(uint32_t param)
             ID3D11DeviceContext_RSSetScissorRects(s_hw.ctx, 1, &sc);
             ID3D11DeviceContext_RSSetState(s_hw.ctx, s_hw.rs[0]);
             ID3D11DeviceContext_OMSetBlendState(s_hw.ctx, bs, bf, 0xFFFFFFFFu);
-            ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx, hw_depth_state(0), 0);
+            ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx, hw_depth_state(0,0), 0);
             ID3D11DeviceContext_IASetInputLayout(s_hw.ctx, NULL);
             ID3D11DeviceContext_IASetPrimitiveTopology(s_hw.ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             ID3D11DeviceContext_VSSetShader(s_hw.ctx, s_hw.vs_blit, NULL, 0);
@@ -3126,7 +3483,10 @@ static void hw_clear(uint32_t param)
             ID3D11DeviceContext_Draw(s_hw.ctx, 3, 0);
             if (bs) ID3D11BlendState_Release(bs);
         }
+        hw_reclaim_surface(s);
         s->drawn_frame = s_hw.frame;
+        reww_write_log(&s->writes, reww_write_next(), s_gpu.clip_x, s_gpu.clip_y,
+                       s_gpu.clip_w, s_gpu.clip_h);
         if (!s_hw.biggest || s->w * s->h >= s_hw.biggest_area) {
             s_hw.biggest = s;
             s_hw.biggest_area = s->w * s->h;
@@ -3168,7 +3528,7 @@ static void hw_compose_locked(void) /* RE-SoT: snapshot before post-flip fences.
     ID3D11DeviceContext_RSSetViewports(s_hw.ctx, 1, &vp);
     ID3D11DeviceContext_RSSetState(s_hw.ctx, s_hw.rs_blit);
     ID3D11DeviceContext_OMSetBlendState(s_hw.ctx, NULL, bf, 0xFFFFFFFFu);
-    ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx, hw_depth_state(0), 0);
+    ID3D11DeviceContext_OMSetDepthStencilState(s_hw.ctx, hw_depth_state(0,0), 0);
     ID3D11DeviceContext_IASetInputLayout(s_hw.ctx, NULL);
     ID3D11DeviceContext_IASetPrimitiveTopology(s_hw.ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ID3D11DeviceContext_VSSetShader(s_hw.ctx, s_hw.vs_blit, NULL, 0);

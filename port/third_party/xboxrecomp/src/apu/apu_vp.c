@@ -848,6 +848,27 @@ static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
     bool adpcm =
         (container_size_index == NV_PAVS_VOICE_CFG_FMT_CONTAINER_SIZE_ADPCM);
 
+    /* RE-WW: bounded source diagnostics, before decoding/mixing. */
+    {
+        static int trace = -1;
+        static unsigned shown;
+        static uint32_t previous[MCPX_HW_MAX_VOICES];
+        static bool seen[MCPX_HW_MAX_VOICES];
+        uint32_t fmt = ldl_le_phys(address_space_memory,
+            d->regs[NV_PAPU_VPVADDR] + v * NV_PAVS_SIZE + NV_PAVS_VOICE_CFG_FMT);
+        if (trace < 0) trace = getenv("RECOMP_APU_TRACE") != NULL;
+        if (trace && shown < 160 && (!seen[v] || previous[v] != fmt)) {
+            previous[v] = fmt;
+            seen[v] = true;
+            shown++;
+            fprintf(stderr, "[APU-SOURCE] v=%u fmt=%08X stream=%d stereo=%d"
+                    " cs=%u ss=%u spb=%u ba=%08X cbo=%u ebo=%u"
+                    " segment=%08X desc=%08X\n", v, fmt, stream, stereo,
+                    container_size_index, sample_size, samples_per_block,
+                    ba, cbo, ebo, (uint32_t)segment_offset, segment_length);
+        }
+    }
+
     if (adpcm) {
         block_size = 36;
     } else {

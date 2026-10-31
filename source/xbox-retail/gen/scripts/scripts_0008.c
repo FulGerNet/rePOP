@@ -10150,7 +10150,7 @@ loc_0020B7B3: ;
     _fa = (uint32_t)(HI8(eax)) & 0xFFu; _fb = (uint32_t)(0x44) & 0xFFu;
     _fas = (int32_t)(int8_t)(_fa); _fbs = (int32_t)(int8_t)(_fb); /* test HI8(eax), 0x44 (8-bit) */
     eax = MEM32(edx + 0x18);
-    RECOMP_UNIMPL("cmovp edi, ecx", 0x0020B7C1u); /* TODO: cmovp edi, ecx */
+    if (RECOMP_PARITY8((_fa) & (_fb))) edi = ecx; /* cmovp */
     _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fb = (uint32_t)(ecx) & 0xFFFFFFFFu;
     _fas = (int32_t)(int32_t)(_fa); _fbs = (int32_t)(int32_t)(_fb); /* cmp eax, ecx (32-bit) */
     if (CMP_EQ(_fa, _fb)) goto loc_0020B7CF; /* je: equal / zero */

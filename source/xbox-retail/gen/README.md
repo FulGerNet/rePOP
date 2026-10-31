@@ -9,15 +9,15 @@ which evidence put it in its folder (`Folder:` line).
 | `bink/` | 250 | RAD Bink video decoder |
 | `compiler/` | 1084 | Compiler-generated C++ exception unwinding and global set-up (.text$x, .text$yc/yd) |
 | `files/` | 1 | BIG file archive and disk access (Jade SDK BIGfiles, Base disk) |
-| `main/` | 1313 | Start-up, main loop and full-screen videos (Jade MainXbox) |
+| `main/` | 1314 | Start-up, main loop and full-screen videos (Jade MainXbox) |
 | `scripts/` | 4772 | The game's AI models compiled to C (AI2C), listed in the compiled AI table |
 | `sound/` | 1766 | Ubisoft Dare sound engine and Jade's glue to it |
-| `unsorted/` | 4776 | Functions no evidence places |
-| `xdk/` | 731 | Statically linked Microsoft runtime code no evidence assigns to one library |
+| `unsorted/` | 4777 | Functions no evidence places |
+| `xdk/` | 733 | Statically linked Microsoft runtime code no evidence assigns to one library |
 | `xdk/d3d8/` | 313 | Direct3D 8 for the NV2A (D3D section) |
 | `xdk/d3dx8/` | 123 | D3DX 8 helpers (D3DX section) |
 | `xdk/dsound/` | 500 | DirectSound for the MCPX (DSOUND section) |
-| `xdk/libc/` | 832 | Microsoft C runtime (LIBCMT) |
+| `xdk/libc/` | 835 | Microsoft C runtime (LIBCMT) |
 | `xdk/libcpmt/` | 10 | Microsoft C++ library (LIBCPMT) |
 | `xdk/wmadec/` | 7 | WMA decoder (WMADEC section) |
 | `xdk/xapi/` | 201 | Xbox API (XAPILIB): start-up, disc and save storage |

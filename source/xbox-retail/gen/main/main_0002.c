@@ -41238,14 +41238,14 @@ loc_0003DB7F: ;
 }
 
 /**
- * sub_0003DB90
+ * sub_0003DB90_gen
  * Original: 0x0003DB90 - 0x0003DD14 (388 bytes, 128 insns)
  * Folder: main (between: 0x0003D520 and 0x0003E480)
  * Category: game_render
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0003DB90(void)
+void sub_0003DB90_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;

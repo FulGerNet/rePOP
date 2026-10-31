@@ -86,8 +86,9 @@ def main():
     run(sys.executable, ROOT/'tools/run-build-tool.py', 'cmake', '-S', ROOT, '-B', build,
         '-G', a.generator, '-A', 'x64', '-DREWW_ABI_CHECK=' + ('ON' if a.abi_check else 'OFF'))
     run(sys.executable, ROOT/'tools/run-build-tool.py', 'cmake', '--build', build, '--config', 'Release', '--parallel', a.jobs)
-    shutil.copy2(deps/'SDL3-3.4.18/lib/x64/SDL3.dll', ROOT/'bin/SDL3.dll')
-    shutil.copy2(deps/'SDL3-3.4.18/LICENSE.txt', ROOT/'bin/SDL3-LICENSE.txt')
+    # RE-WW: stock SDK SDL lacks the native query ABI and forces both native
+    # renderers back to D3D11. Preserve a checked runtime in this checkout.
+    run(sys.executable, ROOT/'tools/native-runtime.py')
 
 if __name__ == '__main__':
     main()

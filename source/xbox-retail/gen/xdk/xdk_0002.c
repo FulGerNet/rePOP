@@ -1,7 +1,7 @@
 /**
  * PoP Warrior Within Xbox retail - xdk, chunk 2
  * Statically linked Microsoft runtime code no evidence assigns to one library
- * Functions: 231 (0x0047CB40 - 0x00482367)
+ * Functions: 233 (0x0047CB40 - 0x00482464)
  */
 
 #define RECOMP_GENERATED_CODE
@@ -2982,7 +2982,10 @@ loc_0047DAD3: ;
     g_seh_ebp = ebp; RECOMP_ITAIL(_jt); return; }
 
     edi = edi;
-    RECOMP_UNIMPL("in al, dx", 0x0047DADCu); /* TODO: in al, dx */
+    { uint8_t _port_value;
+      if (xbox_ReadPort8((uint16_t)edx, &_port_value)) {
+        SET_LO8(eax, _port_value);
+      } else { RECOMP_UNIMPL("in al, dx", 0x0047DADCu); } }
     fp_top() = RECOMP_FP_PC(fp_top() + (double)SMEM32(edi)); /* fiadd dword ptr [edi] */
     RECOMP_UNIMPL("hlt", 0x0047DAE0u); /* TODO: hlt */
     fp_top() = RECOMP_FP_PC(fp_top() + (double)SMEM32(edi)); /* fiadd dword ptr [edi] */
@@ -4824,7 +4827,7 @@ loc_0047E420: ;
 
 loc_0047E427: ;
     fp_pop(); /* fstp st(0) */
-    fp_push(MEMF(0x596FB4)); /* fld */
+    fp_push(recomp_load80(0x596FB4)); /* RE-WW: fld binary80 */
     eax = 1;
     goto loc_0047E458;
 
@@ -4846,7 +4849,7 @@ loc_0047E444: ;
 
 loc_0047E44B: ;
     fp_pop(); /* fstp st(0) */
-    fp_push(MEMF(0x596F62)); /* fld */
+    fp_push(recomp_load80(0x596F62)); /* RE-WW: fld binary80 */
     eax = 2;
 
 loc_0047E458: ;
@@ -5183,7 +5186,7 @@ loc_0047E5FF: ;
     if (TEST_Z(_fa, _fb)) goto loc_0047E626; /* je: equal / zero */
 
 loc_0047E610: ;
-    fp_push(MEMF(0x596F58)); /* fld */
+    fp_push(recomp_load80(0x596F58)); /* RE-WW: fld binary80 */
     _fa = (uint32_t)(HI8(ecx)) & 0xFFu; _fb = (uint32_t)(LO8(ecx)) & 0xFFu;
     _fas = (int32_t)(int8_t)(_fa); _fbs = (int32_t)(int8_t)(_fb); /* test HI8(ecx), LO8(ecx) (8-bit) */
     if (TEST_Z(_fa, _fb)) goto loc_0047E61C; /* je: equal / zero */
@@ -5223,7 +5226,7 @@ loc_0047E647: ;
 loc_0047E651: ;
     fp_pop(); /* fstp st(0) */
     fp_pop(); /* fstp st(0) */
-    fp_push(MEMF(0x596FB4)); /* fld */
+    fp_push(recomp_load80(0x596FB4)); /* RE-WW: fld binary80 */
     eax = 1;
     goto loc_0047E518;
 
@@ -9413,6 +9416,8 @@ loc_0047F543: ;
  */
 void sub_0047F548(void)
 {
+    extern void sub_0047F548_enter(void);
+    sub_0047F548_enter();
     uint32_t ebp = 0;
     ebp = g_ebp;  /* prologue saves caller's frame */
     int _flags = 0; /* fallback flag var */
@@ -11969,7 +11974,7 @@ loc_0048004A: ;
     ecx = ecx & 0x80000000u;
     _fa = (uint32_t)(ecx) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* and result */
     fp_pop(); /* fstp st(0) */
-    fp_push(MEMF(0x596FBE)); /* fld */
+    fp_push(recomp_load80(0x596FBE)); /* RE-WW: fld binary80 */
     if ((_fa == 0)) { g_seh_ebp = ebp; sub_0048001A(); return; } /* je: equal / zero */
 
 loc_0048005A: ;
@@ -11993,7 +11998,7 @@ loc_0048006C: ;
 
 loc_00480073: ;
     fp_pop(); /* fstp st(0) */
-    fp_push(MEMF(0x596FB4)); /* fld */
+    fp_push(recomp_load80(0x596FB4)); /* RE-WW: fld binary80 */
     eax = 1;
 
 loc_00480080: ;
@@ -12043,7 +12048,7 @@ void sub_00480052(void)
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
 
 loc_00480052: ;
-    fp_push(MEMF(0x596FBE)); /* fld */
+    fp_push(recomp_load80(0x596FBE)); /* RE-WW: fld binary80 */
     if (_flags /* je: equal / zero */) { g_seh_ebp = ebp; sub_0048001A(); return; }
 
 loc_0048005A: ;
@@ -12067,7 +12072,7 @@ loc_0048006C: ;
 
 loc_00480073: ;
     fp_pop(); /* fstp st(0) */
-    fp_push(MEMF(0x596FB4)); /* fld */
+    fp_push(recomp_load80(0x596FB4)); /* RE-WW: fld binary80 */
     eax = 1;
 
 loc_00480080: ;
@@ -12812,7 +12817,7 @@ loc_004802F3: ;
 
 loc_004802FA: ;
     fp_pop(); /* fstp st(0) */
-    fp_push(MEMF(0x596FB4)); /* fld */
+    fp_push(recomp_load80(0x596FB4)); /* RE-WW: fld binary80 */
     eax = 1;
 
 loc_00480307: ;
@@ -13351,7 +13356,7 @@ loc_00480577: ;
     g_seh_ebp = ebp; sub_004827DF(); return; /* tail jmp 0x004827DF */
 
 loc_00480587: ;
-    fp_push(MEMF(0x57C546)); /* fld */
+    fp_push(recomp_load80(0x57C546)); /* RE-WW: fld binary80 */
     { double _t = fp_top(); fp_top() = fp_st1(); fp_st1() = _t; } /* fxch st(1) */
 
 loc_0048058F: ;
@@ -13384,7 +13389,7 @@ loc_004805AB: ;
 
 loc_004805B2: ;
     fp_pop(); /* fstp st(0) */
-    fp_push(MEMF(0x596FB4)); /* fld */
+    fp_push(recomp_load80(0x596FB4)); /* RE-WW: fld binary80 */
     eax = 1;
 
 loc_004805BF: ;
@@ -13528,7 +13533,7 @@ loc_00480627: ;
     g_seh_ebp = ebp; sub_004827DF(); return; /* tail jmp 0x004827DF */
 
 loc_00480637: ;
-    fp_push(MEMF(0x57C546)); /* fld */
+    fp_push(recomp_load80(0x57C546)); /* RE-WW: fld binary80 */
     { double _t = fp_top(); fp_top() = fp_st1(); fp_st1() = _t; } /* fxch st(1) */
 
 loc_0048063F: ;
@@ -13561,7 +13566,7 @@ loc_0048065B: ;
 
 loc_00480662: ;
     fp_pop(); /* fstp st(0) */
-    fp_push(MEMF(0x596FB4)); /* fld */
+    fp_push(recomp_load80(0x596FB4)); /* RE-WW: fld binary80 */
     eax = 1;
 
 loc_0048066F: ;
@@ -13923,7 +13928,7 @@ loc_004807E8: ;
 
 loc_004807EF: ;
     fp_pop(); /* fstp st(0) */
-    fp_push(MEMF(0x596FB4)); /* fld */
+    fp_push(recomp_load80(0x596FB4)); /* RE-WW: fld binary80 */
     eax = 1;
     goto loc_00480820;
 
@@ -13945,7 +13950,7 @@ loc_0048080C: ;
 
 loc_00480813: ;
     fp_pop(); /* fstp st(0) */
-    fp_push(MEMF(0x596F62)); /* fld */
+    fp_push(recomp_load80(0x596F62)); /* RE-WW: fld binary80 */
     eax = 2;
 
 loc_00480820: ;
@@ -14702,7 +14707,7 @@ loc_00480AE9: ;
     g_seh_ebp = ebp; sub_004827DF(); return; /* tail jmp 0x004827DF */
 
 loc_00480AF9: ;
-    fp_push(MEMF(0x57C546)); /* fld */
+    fp_push(recomp_load80(0x57C546)); /* RE-WW: fld binary80 */
     { double _t = fp_top(); fp_top() = fp_st1(); fp_st1() = _t; } /* fxch st(1) */
 
 loc_00480B01: ;
@@ -14736,7 +14741,7 @@ loc_00480B1F: ;
 
 loc_00480B26: ;
     fp_pop(); /* fstp st(0) */
-    fp_push(MEMF(0x596FB4)); /* fld */
+    fp_push(recomp_load80(0x596FB4)); /* RE-WW: fld binary80 */
     eax = 1;
 
 loc_00480B33: ;
@@ -14888,7 +14893,7 @@ loc_00480BBB: ;
 
 loc_00480BC2: ;
     fp_pop(); /* fstp st(0) */
-    fp_push(MEMF(0x596FBE)); /* fld */
+    fp_push(recomp_load80(0x596FBE)); /* RE-WW: fld binary80 */
     _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fb = (uint32_t)(0x80000000u) & 0xFFFFFFFFu;
     _fas = (int32_t)(int32_t)(_fa); _fbs = (int32_t)(int32_t)(_fb); /* test eax, 0x80000000u (32-bit) */
     if (TEST_Z(_fa, _fb)) goto loc_00480B90; /* je: equal / zero */
@@ -18600,4 +18605,106 @@ loc_0048236E: ;
     POP32(esp, ecx);
     esp += 4; return; /* ret */
 
+}
+
+/**
+ * sub_00482381
+ * Original: 0x00482381 - 0x004823B6 (53 bytes, 18 insns)
+ * Folder: xdk (library: 0x00482317 and 0x00482470)
+ * CC: cdecl, 0 params, returns int_or_void
+ * Frame: fpo_leaf
+ */
+void sub_00482381(void)
+{
+    uint32_t ebp = 0;
+    ebp = g_ebp;  /* frameless: caller's frame */
+    int _flags = 0; /* fallback flag var */
+    uint32_t _fa = 0, _fb = 0;
+    int32_t _fas = 0, _fbs = 0;
+    (void)_fa; (void)_fb; (void)_fas; (void)_fbs;
+    #define fp_push(v) do { double _fp_value = (v); \
+        g_fp_top = (g_fp_top + 7u) & 7u; \
+        g_fp_stack[g_fp_top] = _fp_value; } while (0)
+    #define fp_pop() (g_fp_top = (g_fp_top + 1u) & 7u)
+    #define fp_top() g_fp_stack[g_fp_top]
+    #define fp_st(i) g_fp_stack[(g_fp_top + (i)) & 7u]
+    #define fp_st1() fp_st(1)
+    ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
+
+loc_00482381: ;
+    MEM8(ebp + -144) = 0xFE;
+    SET_HI8(ecx, 0); /* xor self */
+    _fa = (uint32_t)(HI8(ecx)) & 0xFFu; _fas = (int32_t)(int8_t)(_fa); /* xor result */
+    fp_push(1.44269504088896340736); /* fldl2e */
+    fp_st1() = RECOMP_FP_PC(fp_st1() * fp_top()); fp_pop(); /* fmulp st(1) */
+    PUSH32(esp, 0x00482393u); RECOMP_ABI_CALL(0x004824BEu, sub_004824BE); /* call 0x004824BE */
+
+loc_00482393: ;
+    fp_push(1.0); /* fld1 */
+    fp_st1() = RECOMP_FP_PC(fp_st1() + fp_top()); fp_pop(); /* faddp st(1) */
+    _fa = (uint32_t)(MEM8(ebp + -159)) & 0xFFu; _fb = (uint32_t)(1) & 0xFFu;
+    _fas = (int32_t)(int8_t)(_fa); _fbs = (int32_t)(int8_t)(_fb); /* test MEM8(ebp + -159), 1 (8-bit) */
+    if (TEST_Z(_fa, _fb)) goto loc_004823A4; /* je: equal / zero */
+
+loc_004823A0: ;
+    fp_push(1.0); /* fld1 */
+    fp_st1() = RECOMP_FP_PC(fp_top() / fp_st1()); fp_pop(); /* fdivrp st(1) */
+
+loc_004823A4: ;
+    _fa = (uint32_t)(LO8(edx)) & 0xFFu; _fb = (uint32_t)(0x40) & 0xFFu;
+    _fas = (int32_t)(int8_t)(_fa); _fbs = (int32_t)(int8_t)(_fb); /* test LO8(edx), 0x40 (8-bit) */
+    if (TEST_NZ(_fa, _fb)) goto loc_004823AB; /* jne: not equal / not zero */
+
+loc_004823A9: ;
+    fp_top() = ldexp(fp_top(), (int)fp_st1()); /* fscale */
+
+loc_004823AB: ;
+    SET_HI8(ecx, HI8(ecx) | HI8(ecx));
+    _fa = (uint32_t)(HI8(ecx)) & 0xFFu; _fas = (int32_t)(int8_t)(_fa); /* or result */
+    if ((_fa == 0)) goto loc_004823B1; /* je: equal / zero */
+
+loc_004823AF: ;
+    fp_top() = -fp_top(); /* fchs */
+
+loc_004823B1: ;
+    g_seh_ebp = ebp; sub_00482660(); return; /* tail jmp 0x00482660 */
+
+    #undef fp_push
+    #undef fp_pop
+    #undef fp_top
+    #undef fp_st
+    #undef fp_st1
+}
+
+/**
+ * sub_00482464
+ * Original: 0x00482464 - 0x00482470 (12 bytes, 3 insns)
+ * Folder: xdk (library: 0x00482317 and 0x00482470)
+ * CC: cdecl, 0 params, returns int_or_void
+ * Frame: fpo_leaf
+ */
+void sub_00482464(void)
+{
+    uint32_t ebp = 0;
+    ebp = g_ebp;  /* frameless: caller's frame */
+    #define fp_push(v) do { double _fp_value = (v); \
+        g_fp_top = (g_fp_top + 7u) & 7u; \
+        g_fp_stack[g_fp_top] = _fp_value; } while (0)
+    #define fp_pop() (g_fp_top = (g_fp_top + 1u) & 7u)
+    #define fp_top() g_fp_stack[g_fp_top]
+    #define fp_st(i) g_fp_stack[(g_fp_top + (i)) & 7u]
+    #define fp_st1() fp_st(1)
+    ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
+
+loc_00482464: ;
+    g_seh_ebp = ebp; sub_0048266E(); return; /* tail jmp 0x0048266E */
+
+    fp_pop(); /* fstp st(0) */
+    g_seh_ebp = ebp; sub_00482710(); return; /* tail jmp 0x00482710 */
+
+    #undef fp_push
+    #undef fp_pop
+    #undef fp_top
+    #undef fp_st
+    #undef fp_st1
 }

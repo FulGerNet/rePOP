@@ -23,4 +23,23 @@
 #define RESOT_D3D_DEVICE_GLOBAL 0x004A0F58
 #define RESOT_D3D_FENCE_ISSUED 0x2C
 #define RESOT_D3D_FENCE_GPU_PTR 0x30
+/* RE-WW: main loaded world, stored at 0x0003F5E3 after the same state
+ * checks as SoT's 0x00031E11 (state object 0x0091EE0C +0x50 vs 3/4/5).
+ * The WOW loader sub_00046BF0 copies 60 BF name bytes to world+0x210 at
+ * 0x00046D2F..0x00046D45, terminating byte 59 at 0x00046D47. */
+#define RESOT_JADE_WORLD_LOADED 0x005BCEA4
+#define RESOT_JADE_WORLD_NAME 0x210
+#define RESOT_JADE_WORLD_NAME_SIZE 60
+/* RE-WW: streaming root WOW accessor 0x00039C10 (SoT 0x000341C0) reads
+ * worker+0x400C at 0x00039C11; 0x0003EE04 loads the worker from 0x0091EE2C
+ * and passes it to 0x00039CF0, which calls the accessor at 0x00039D90.
+ * Otherwise 0x0003EE28 resolves the primary key 0x005BEED0. Both resolve
+ * key -> BF index in 0x00842580 (sorted 8-byte pairs, lookup 0x000DA2F0),
+ * falling back to the key itself (cmovne at 0x00039C2D/0x0003EE44), then
+ * index -> world in 0x005F4398 + ((((index >> 8) + index) & 255) * 16). */
+#define RESOT_JADE_PRIMARY_WOW_KEY 0x005BEED0
+#define RESOT_JADE_STREAM_WORKER 0x0091EE2C
+#define RESOT_JADE_STREAM_WOW_KEY 0x400C
+#define RESOT_JADE_KEY_INDEX_TABLE 0x00842580
+#define RESOT_JADE_LOADED_TABLES 0x005F4398
 #endif

@@ -785,6 +785,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
      * keyboard and mouse play as the pad unless RECOMP_KEYBOARD=0. */
     if (!getenv("RECOMP_HW_FULLSCREEN"))
         _putenv_s("RECOMP_HW_FULLSCREEN", "1");
+    /* RE-WW (from RE-SoT): the picture shape this executable was built with
+     * (CMake REWW_ASPECT), unless RECOMP_HW_ASPECT already chooses one: the
+     * renderer and the projection hooks in target_hooks.c both read it. */
+#ifdef RESOT_DEFAULT_ASPECT
+    if (!getenv("RECOMP_HW_ASPECT"))
+        _putenv_s("RECOMP_HW_ASPECT", RESOT_DEFAULT_ASPECT);
+#endif
     if (!getenv("RECOMP_KEYBOARD"))
         _putenv_s("RECOMP_KEYBOARD", "1");
 
@@ -867,7 +874,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     /* Step 4: Set game directory for file I/O path translation */
     {
         extern void xbox_path_init(const char *game_dir, const char *save_dir);
-        xbox_path_init(YOUR_GAME_DIR, NULL);
+        /* RE-WW: let bounded diagnostics use private writable disk images.
+         * Reuse the runtime path layer; an unset override keeps normal saves. */
+        const char *save_dir = getenv("REWW_SAVE_DIR");
+        xbox_path_init(YOUR_GAME_DIR, save_dir && *save_dir ? save_dir : NULL);
     }
 
     /* Step 5: Initialize kernel bridge (thunk table in Xbox memory) */

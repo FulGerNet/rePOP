@@ -31,6 +31,7 @@ static int test_simple_combiner(SDL_GPUDevice *device, SDL_GPUTexture *target,
     ps=SDL_CreateGPUShader(device,&si); REQUIRE(ps);
     pi.vertex_shader=vs; pi.fragment_shader=ps; pi.primitive_type=SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
     pi.rasterizer_state.fill_mode=SDL_GPU_FILLMODE_FILL; pi.multisample_state.sample_count=SDL_GPU_SAMPLECOUNT_1;
+    pi.rasterizer_state.enable_depth_clip=true; /* RE-SoT: no optional depth clamp in the production device. */
     color.format=SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM;
     pi.target_info.color_target_descriptions=&color; pi.target_info.num_color_targets=1;
     pipeline=SDL_CreateGPUGraphicsPipeline(device,&pi); REQUIRE(pipeline);

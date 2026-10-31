@@ -880,6 +880,26 @@
   "note": "pointer stored as immediate at 0x00476E44 (code)"
  },
  {
+  "start": "0x00482381",
+  "observed": true,
+  "note": "RE-WW: supported hash 8747A410...64599C; packed CRT exp dispatch record at 0x00596FA2 (file 0x005937A2); 00482381 reached after CINE0100 in renderer-d3d12-20261023T180913339141Z"
+ },
+ {
+  "start": "0x004824B1",
+  "observed": false,
+  "note": "RE-WW: supported hash 8747A410...64599C; packed CRT exp dispatch record at 0x00596FA2 (file 0x005937A2); 00482381 reached after CINE0100 in renderer-d3d12-20261023T180913339141Z"
+ },
+ {
+  "start": "0x0048266E",
+  "observed": false,
+  "note": "RE-WW: supported hash 8747A410...64599C; verified JMP at 0x0048249A targets FSTP ST(0); FLDZ; RET at 0x0048266E..0x00482672 (CRT exp underflow continuation)"
+ },
+ {
+  "start": "0x0048267A",
+  "observed": false,
+  "note": "RE-WW: supported hash 8747A410...64599C; packed CRT exp dispatch record at 0x00596FA2 (file 0x005937A2); 00482381 reached after CINE0100 in renderer-d3d12-20261023T180913339141Z"
+ },
+ {
   "start": "0x0048A07B",
   "observed": false,
   "note": "pointer stored as immediate at 0x0045B292 (code)"

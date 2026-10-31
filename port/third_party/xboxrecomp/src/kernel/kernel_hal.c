@@ -1135,6 +1135,22 @@ ULONGLONG __stdcall xbox_KeQueryInterruptTime(void)
  * ========================================================================= */
 #define XBOX_TSC_HZ 733333333ull
 
+/* RE-WW: TV encoder field pin, read by WW's D3D ISR at 0x00497D7D.
+ * The alternating-read approximation follows xemu acpi_xbox.c (GPIO +0xC0)
+ * and Cxbx EmuX86.cpp (0x80C0 byte read); this is not a GPU busy bit.
+ * https://github.com/xemu-project/xemu/blob/25e1ee2fd59a451f2ab57e825b4f8a5414220c8b/hw/xbox/acpi_xbox.c#L48-L61
+ * https://github.com/Cxbx-Reloaded/Cxbx-Reloaded-legacy/blob/96aabe72e238674a22a61695fb6f5295259edf62/src/devices/x86/EmuX86.cpp#L81-L85
+ * The lifter reports unsupported ports through RECOMP_UNIMPL and preserves AL.
+ */
+int xbox_ReadPort8(uint16_t port, uint8_t *value)
+{
+    static volatile LONG field_reads;
+    if (port != 0x80C0u)
+        return 0;
+    *value = (uint8_t)((InterlockedIncrement(&field_reads) & 1) << 5);
+    return 1;
+}
+
 uint64_t xbox_ReadTimeStampCounter(void)
 {
     static LARGE_INTEGER freq;

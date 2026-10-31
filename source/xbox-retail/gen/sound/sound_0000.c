@@ -29622,6 +29622,8 @@ loc_000C8CA6: ;
  */
 void sub_000C8CC0(void)
 {
+    extern void sub_000C8CC0_enter(void);
+    sub_000C8CC0_enter();
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */
     int _flags = 0; /* fallback flag var */

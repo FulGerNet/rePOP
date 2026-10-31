@@ -4,6 +4,7 @@
 #include "resot_gpu_query.h"
 typedef struct ResotVulkanQuery {
     VkQueryPool pool;
+    VkQueryControlFlags flags; /* RE-SoT: precise counting is optional in Vulkan. */
     PFN_vkDestroyQueryPool destroy;
     PFN_vkCmdResetQueryPool reset;
     PFN_vkCmdBeginQuery begin;
@@ -26,11 +27,19 @@ static void *SDLCALL resot_vk_create(SDL_GPUDevice *device)
     PFN_vkCreateQueryPool create;
     ResotVulkanQuery *q;
     r->vkGetPhysicalDeviceFeatures(r->physicalDevice,&features);
-    if (!features.occlusionQueryPrecise) {
-        SDL_SetError("RE-SoT Vulkan device lacks precise occlusion queries"); return NULL;
-    }
     q = SDL_calloc(1,sizeof *q);
     if (!q) return NULL;
+    /* RE-SoT: ordinary occlusion queries are available without the optional
+     * precise feature. They return hardware visibility, but their nonzero
+     * counts may be conservative. Preserve real results and fence ordering;
+     * never make retail startup depend on this optional capability. */
+    q->flags = features.occlusionQueryPrecise && !SDL_GetHintBoolean("RESOT_GPU_NONPRECISE_QUERIES", false)
+        ? VK_QUERY_CONTROL_PRECISE_BIT : 0;
+    if (!q->flags) {
+        static bool warned;
+        if (!warned) SDL_Log("RE-SoT: conservative hardware occlusion counts; light intensity may differ");
+        warned = true;
+    }
 #define RESOT_VK_LOAD(type,field,name) q->field = (type)r->vkGetDeviceProcAddr(r->logicalDevice,name)
     RESOT_VK_LOAD(PFN_vkDestroyQueryPool,destroy,"vkDestroyQueryPool");
     RESOT_VK_LOAD(PFN_vkCmdResetQueryPool,reset,"vkCmdResetQueryPool");
@@ -60,7 +69,7 @@ static void SDLCALL resot_vk_begin(SDL_GPUCommandBuffer *cmd, void *opaque)
 {
     VulkanCommandBuffer *c = (VulkanCommandBuffer *)cmd;
     ResotVulkanQuery *q = opaque;
-    q->begin(c->commandBuffer,q->pool,0,VK_QUERY_CONTROL_PRECISE_BIT);
+    q->begin(c->commandBuffer,q->pool,0,q->flags);
 }
 static void SDLCALL resot_vk_end(SDL_GPUCommandBuffer *cmd, void *opaque)
 {

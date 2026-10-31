@@ -22699,7 +22699,10 @@ loc_00497B6C: ;
 
 loc_00497B78: ;
     SET_LO16(edx, 0x80C0);
-    RECOMP_UNIMPL("in al, dx", 0x00497B7Cu); /* TODO: in al, dx */
+    { uint8_t _port_value;
+      if (xbox_ReadPort8((uint16_t)edx, &_port_value)) {
+        SET_LO8(eax, _port_value);
+      } else { RECOMP_UNIMPL("in al, dx", 0x00497B7Cu); } }
     eax = eax >> 5;
     _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* shift result */
     eax = ~eax;
@@ -22983,7 +22986,10 @@ loc_00497D6D: ;
 
 loc_00497D79: ;
     SET_LO16(edx, 0x80C0);
-    RECOMP_UNIMPL("in al, dx", 0x00497D7Du); /* TODO: in al, dx */
+    { uint8_t _port_value;
+      if (xbox_ReadPort8((uint16_t)edx, &_port_value)) {
+        SET_LO8(eax, _port_value);
+      } else { RECOMP_UNIMPL("in al, dx", 0x00497D7Du); } }
     edx = MEM32(esi + 8);
     edx = edx & 0xC0000000u;
     _fa = (uint32_t)(edx) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* and result */

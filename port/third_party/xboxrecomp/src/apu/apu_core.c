@@ -126,8 +126,15 @@ uint8_t *mcpx_apu_phys(uint64_t addr)
      * (kernel_bridge.c, MmGetPhysicalAddress): unambiguous, so first. */
     if (a >= XBOX_APU_HEAP_ALIAS && a < XBOX_APU_HEAP_ALIAS + 0x04000000u)
         return g_apu_ram_ptr + (a - XBOX_APU_HEAP_ALIAS);
+#if !defined(REWW_RUNTIME) || !REWW_RUNTIME
     if (a >= g_xbox_image_lo && a < g_xbox_image_hi)
         return g_apu_ram_ptr + a;
+#endif
+    /* RE-WW: physical sample pages can numerically overlap the XBE image.
+     * WW CINE0100 voice 70 uses SGE physical 006A9000, backed by guest
+     * 806A9000. Choosing low image RAM here reads unrelated game bytes as
+     * PCM. DirectSound's ordinary RAM already has explicit HEAP_ALIAS/DMA
+     * addresses above; raw allocated physical pages belong to this arena. */
     if (a < xbox_ContiguousAllocatedBytes())
         return g_apu_ram_ptr + 0x80000000u + a;
     return g_apu_ram_ptr + (a & 0x03FFFFFFu);

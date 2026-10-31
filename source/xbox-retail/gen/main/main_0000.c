@@ -8863,7 +8863,10 @@ loc_0002956E: ;
     _fb = (uint32_t)(MEM8(eax)) & 0xFFu; _fbs = (int32_t)(int8_t)(_fb); /* add source, before the write */
     SET_LO8(eax, LO8(eax) + MEM8(eax));
     _fa = (uint32_t)(LO8(eax)) & 0xFFu; _fas = (int32_t)(int8_t)(_fa); /* add result */
-    RECOMP_UNIMPL("in al, dx", 0x00029588u); /* TODO: in al, dx */
+    { uint8_t _port_value;
+      if (xbox_ReadPort8((uint16_t)edx, &_port_value)) {
+        SET_LO8(eax, _port_value);
+      } else { RECOMP_UNIMPL("in al, dx", 0x00029588u); } }
     { uint32_t _tmp = esp;
     esp = eax;
     eax = _tmp; }

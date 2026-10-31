@@ -1,12 +1,129 @@
 /**
  * PoP Warrior Within Xbox retail - unsorted, chunk 13
  * Functions no evidence places
- * Functions: 250 (0x003FBFED - 0x00404F50)
+ * Functions: 250 (0x003FBF75 - 0x00404F20)
  */
 
 #define RECOMP_GENERATED_CODE
 #include "../recomp_funcs.h"
 #include <math.h>
+
+/**
+ * sub_003FBF75
+ * Original: 0x003FBF75 - 0x003FBFED (120 bytes, 44 insns)
+ * Folder: unsorted (none)
+ * Category: game_vtable
+ * CC: thiscall, 0 params, returns int_or_void
+ * Frame: fpo_leaf
+ */
+void sub_003FBF75(void)
+{
+    int _flags = 0; /* fallback flag var */
+    uint32_t _fa = 0, _fb = 0;
+    int32_t _fas = 0, _fbs = 0;
+    (void)_fa; (void)_fb; (void)_fas; (void)_fbs;
+    int _cf = 0; /* carry flag */
+
+loc_003FBF75: ;
+    PUSH32(esp, esi);
+    PUSH32(esp, 1);
+    esi = ecx;
+    PUSH32(esp, 0x003FBF7Fu); RECOMP_ABI_CALL(0x003FBD14u, sub_003FBD14); /* call 0x003FBD14 */
+
+loc_003FBF7F: ;
+    _cf = 0; /* logical op clears CF */
+    MEM32(esi + 0x100) = MEM32(esi + 0x100) & 0;
+    _fa = (uint32_t)(MEM32(esi + 0x100)) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* and result */
+    ecx = esi;
+    PUSH32(esp, 0x003FBF8Du); RECOMP_ABI_CALL(0x003FBB99u, sub_003FBB99); /* call 0x003FBB99 */
+
+loc_003FBF8D: ;
+    ecx = esi;
+    PUSH32(esp, 0x003FBF94u); RECOMP_ABI_CALL(0x003FBB74u, sub_003FBB74); /* call 0x003FBB74 */
+
+loc_003FBF94: ;
+    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fb = (uint32_t)(0) & 0xFFFFFFFFu;
+    _fas = (int32_t)(int32_t)(_fa); _fbs = (int32_t)(int32_t)(_fb); /* cmp eax, 0 (32-bit) */
+    _cf = 0; /* nothing borrows from zero */
+    if (CMP_L(_fas, _fbs)) goto loc_003FBF9F; /* jl: less (signed <) */
+
+loc_003FBF98: ;
+    ecx = esi;
+    PUSH32(esp, 0x003FBF9Fu); RECOMP_ABI_CALL(0x003FB701u, sub_003FB701); /* call 0x003FB701 */
+
+loc_003FBF9F: ;
+    ecx = esi;
+    PUSH32(esp, 0x003FBFA6u); RECOMP_ABI_CALL(0x003FBBC1u, sub_003FBBC1); /* call 0x003FBBC1 */
+
+loc_003FBFA6: ;
+    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fb = (uint32_t)(0) & 0xFFFFFFFFu;
+    _fas = (int32_t)(int32_t)(_fa); _fbs = (int32_t)(int32_t)(_fb); /* cmp eax, 0 (32-bit) */
+    _cf = 0; /* nothing borrows from zero */
+    if (CMP_L(_fas, _fbs)) goto loc_003FBFB1; /* jl: less (signed <) */
+
+loc_003FBFAA: ;
+    ecx = esi;
+    PUSH32(esp, 0x003FBFB1u); RECOMP_ABI_CALL(0x003FB782u, sub_003FB782); /* call 0x003FB782 */
+
+loc_003FBFB1: ;
+    eax = MEM32(esi + 0x100);
+    _fa = (uint32_t)(LO8(eax)) & 0xFFu; _fb = (uint32_t)(1) & 0xFFu;
+    _fas = (int32_t)(int8_t)(_fa); _fbs = (int32_t)(int8_t)(_fb); /* test LO8(eax), 1 (8-bit) */
+    _cf = 0; /* nothing borrows from zero */
+    if (TEST_NZ(_fa, _fb)) goto loc_003FBFBF; /* jne: not equal / not zero */
+
+loc_003FBFBB: ;
+    if (1) _cf = (int)(((eax) >> ((1) - 1)) & 1);
+    eax = eax >> 1;
+    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* shift result */
+    goto loc_003FBFC2;
+
+loc_003FBFBF: ;
+    if (1) _cf = (int)(((eax) >> ((1) - 1)) & 1);
+    eax = eax >> 1;
+    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* shift result */
+    eax++;
+    _fa = (uint32_t)(eax) & 0xFFFFFFFFu;
+    _fas = (int32_t)(int32_t)(_fa); _fb = (_fa == 0x80000000u); /* inc result/SF/OF; CF unchanged */
+
+loc_003FBFC2: ;
+    PUSH32(esp, 0x13);
+    POP32(esp, ecx);
+    _fb = (uint32_t)(eax) & 0xFFFFFFFFu; _fbs = (int32_t)(int32_t)(_fb); /* sub source, before the write */
+    _cf = (int)((uint32_t)(ecx) < (uint32_t)(eax));
+    ecx = ecx - eax;
+    _fa = (uint32_t)(ecx) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* sub result */
+    ecx = (uint32_t)((int32_t)ecx * (int32_t)0x2710);
+    MEM32(esi + 0x100) = eax;
+    _cf = 0; /* xor clears CF */
+    eax = 0; /* xor self */
+    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* xor result */
+    _cf = (int)((ecx) != 0);
+    ecx = (uint32_t)(-(int32_t)ecx);
+    _fa = (uint32_t)(ecx) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* neg result */
+    { uint64_t _t = (uint64_t)(eax) + (uint64_t)(eax) + (uint64_t)_cf; _cf = (int)((_t >> 32) & 1); eax = (uint32_t)_t; }  /* adc */
+    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* adc result */
+    edx = esi + 0x50;
+    { uint32_t _icall_esp = g_esp;
+    PUSH32(esp, edx);
+    _cf = (int)((eax) != 0);
+    eax = (uint32_t)(-(int32_t)eax);
+    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* neg result */
+    PUSH32(esp, eax);
+    PUSH32(esp, ecx);
+    _fb = (uint32_t)(0x28) & 0xFFFFFFFFu; _fbs = (int32_t)(int32_t)(_fb); /* add source, before the write */
+    _cf = (int)((((uint64_t)(esi) + (uint64_t)(0x28)) >> 32) & 1);
+    esi = esi + 0x28;
+    _fa = (uint32_t)(esi) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* add result */
+    PUSH32(esp, esi);
+    { uint32_t _icall_target = MEM32(0x54B414); PUSH32(esp, 0x003FBFEBu); RECOMP_ICALL_SAFE_AT(_icall_target, _icall_esp, 0x003FBFE5u); } /* indirect call */
+    }
+
+loc_003FBFEB: ;
+    POP32(esp, esi);
+    esp += 4; return; /* ret */
+
+}
 
 /**
  * sub_003FBFED
@@ -30622,34 +30739,6 @@ loc_00404F3D: ;
     PUSH32(esp, 0x00404F49u); RECOMP_ABI_CALL(0x00031690u, sub_00031690); /* call 0x00031690 */
 
 loc_00404F49: ;
-    esp += 4; return; /* ret */
-
-}
-
-/**
- * sub_00404F50
- * Original: 0x00404F50 - 0x00404F65 (21 bytes, 7 insns)
- * Folder: unsorted (none)
- * CC: cdecl, 0 params, returns int_or_void
- * Frame: fpo_leaf
- */
-void sub_00404F50(void)
-{
-    uint32_t _fa = 0, _fb = 0;
-    int32_t _fas = 0, _fbs = 0;
-    (void)_fa; (void)_fb; (void)_fas; (void)_fbs;
-
-loc_00404F50: ;
-    eax = MEM32(esp + 4);
-    PUSH32(esp, 0x40);
-    PUSH32(esp, 0x54DA98);
-    PUSH32(esp, eax);
-    PUSH32(esp, 0x00404F61u); RECOMP_ABI_CALL(0x00413260u, sub_00413260); /* call 0x00413260 */
-
-loc_00404F61: ;
-    _fb = (uint32_t)(0xC) & 0xFFFFFFFFu; _fbs = (int32_t)(int32_t)(_fb); /* add source, before the write */
-    esp = esp + 0xC;
-    _fa = (uint32_t)(esp) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* add result */
     esp += 4; return; /* ret */
 
 }

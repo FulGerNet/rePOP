@@ -2,6 +2,16 @@
  * Retail's forming-tank ring was traced below the normal top HUD band. */
 #ifndef RESOT_NV2A_HUD_LAYOUT_H
 #define RESOT_NV2A_HUD_LAYOUT_H
+/* RE-SoT: retail health outline (v031-health-trace.txt): its 64x32
+ * ARGB pieces span y=36.531..68.531, and upgrades extend across x=320.
+ * Anchor the whole strip to the left, including its end cap and fade. */
+static inline int nv_hw_retail_health_frame(float widen,float left,float right,
+    float top,float bottom,unsigned width,unsigned height,unsigned format)
+{
+    return widen>1 && width==64 && height==32 && format==0x06 &&
+        top>=35 && top<=38 && bottom>=67 && bottom<=70 &&
+        left>=320-320/widen-0.5f && right<=320+320/widen+0.5f && right>=left;
+}
 static inline int nv_hw_retail_forming_tank(float widen,float left,float right,
                                            float top,float bottom)
 {

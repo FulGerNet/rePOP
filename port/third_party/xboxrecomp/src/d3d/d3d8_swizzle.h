@@ -347,7 +347,10 @@ static inline int d3d8_dxt_decode_texel(const uint8_t *base, uint32_t fmt,
     uint32_t blocks_per_row = (width + 3u) / 4u;
     const uint8_t *b;
     uint32_t bx = u & 3u, by = v & 3u, texel = by * 4u + bx;
-    uint32_t c[4], idx, alpha = 255u;
+    /* RE-SoT: interpolation assembles c[2]/c[3] with read-modify-write.
+     * Initialise them before the first channel: reading indeterminate words
+     * is undefined C behaviour, including in Android's optimized build. */
+    uint32_t c[4] = {0, 0, 0, 0}, idx, alpha = 255u;
     uint32_t c0, c1, i;
 
     if (!block_bytes || !blocks_per_row)

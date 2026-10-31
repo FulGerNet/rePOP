@@ -34329,7 +34329,10 @@ loc_004CEE6B: ;
     _cf = (int)((((uint64_t)(MEM8(ecx)) + (uint64_t)(HI8(eax))) >> 8) & 1);
     MEM8(ecx) = MEM8(ecx) + HI8(eax);
     _fa = (uint32_t)(MEM8(ecx)) & 0xFFu; _fas = (int32_t)(int8_t)(_fa); /* add result */
-    RECOMP_UNIMPL("in al, dx", 0x004CEE77u); /* TODO: in al, dx */
+    { uint8_t _port_value;
+      if (xbox_ReadPort8((uint16_t)edx, &_port_value)) {
+        SET_LO8(eax, _port_value);
+      } else { RECOMP_UNIMPL("in al, dx", 0x004CEE77u); } }
     esp--;
     _fa = (uint32_t)(esp) & 0xFFFFFFFFu;
     _fas = (int32_t)(int32_t)(_fa); _fb = (_fa == 0x7FFFFFFFu); /* dec result/SF/OF; CF unchanged */
@@ -34355,7 +34358,10 @@ loc_004CEE6B: ;
     _cf = (int)((((uint64_t)(LO8(edx)) + (uint64_t)(HI8(eax))) >> 8) & 1);
     SET_LO8(edx, LO8(edx) + HI8(eax));
     _fa = (uint32_t)(LO8(edx)) & 0xFFu; _fas = (int32_t)(int8_t)(_fa); /* add result */
-    RECOMP_UNIMPL("in al, dx", 0x004CEE87u); /* TODO: in al, dx */
+    { uint8_t _port_value;
+      if (xbox_ReadPort8((uint16_t)edx, &_port_value)) {
+        SET_LO8(eax, _port_value);
+      } else { RECOMP_UNIMPL("in al, dx", 0x004CEE87u); } }
     esp--;
     _fa = (uint32_t)(esp) & 0xFFFFFFFFu;
     _fas = (int32_t)(int32_t)(_fa); _fb = (_fa == 0x7FFFFFFFu); /* dec result/SF/OF; CF unchanged */
@@ -34370,7 +34376,10 @@ loc_004CEE6B: ;
     _cf = (int)((((uint64_t)(MEM8(ecx + -889172756)) + (uint64_t)(LO8(edx))) >> 8) & 1);
     MEM8(ecx + -889172756) = MEM8(ecx + -889172756) + LO8(edx);
     _fa = (uint32_t)(MEM8(ecx + -889172756)) & 0xFFu; _fas = (int32_t)(int8_t)(_fa); /* add result */
-    RECOMP_UNIMPL("in al, dx", 0x004CEE93u); /* TODO: in al, dx */
+    { uint8_t _port_value;
+      if (xbox_ReadPort8((uint16_t)edx, &_port_value)) {
+        SET_LO8(eax, _port_value);
+      } else { RECOMP_UNIMPL("in al, dx", 0x004CEE93u); } }
     esp--;
     _fa = (uint32_t)(esp) & 0xFFFFFFFFu;
     _fas = (int32_t)(int32_t)(_fa); _fb = (_fa == 0x7FFFFFFFu); /* dec result/SF/OF; CF unchanged */
@@ -34378,7 +34387,10 @@ loc_004CEE6B: ;
     _cf = (int)((((uint64_t)(HI8(ebx)) + (uint64_t)(HI8(ebx))) >> 8) & 1);
     SET_HI8(ebx, HI8(ebx) + HI8(ebx));
     _fa = (uint32_t)(HI8(ebx)) & 0xFFu; _fas = (int32_t)(int8_t)(_fa); /* add result */
-    RECOMP_UNIMPL("in al, dx", 0x004CEE97u); /* TODO: in al, dx */
+    { uint8_t _port_value;
+      if (xbox_ReadPort8((uint16_t)edx, &_port_value)) {
+        SET_LO8(eax, _port_value);
+      } else { RECOMP_UNIMPL("in al, dx", 0x004CEE97u); } }
     esp--;
     _fa = (uint32_t)(esp) & 0xFFFFFFFFu;
     _fas = (int32_t)(int32_t)(_fa); _fb = (_fa == 0x7FFFFFFFu); /* dec result/SF/OF; CF unchanged */

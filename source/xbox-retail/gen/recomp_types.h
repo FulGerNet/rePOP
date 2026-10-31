@@ -390,6 +390,8 @@ void recomp_icall_not_code_log(uint32_t va);
  * make that division wrong by the ratio of the two clocks; the runtime scales
  * to the console's rate instead. */
 uint64_t xbox_ReadTimeStampCounter(void);
+/* RE-WW: returns false for unsupported ports, without changing *value. */
+int xbox_ReadPort8(uint16_t port, uint8_t *value);
 
 void recomp_trace_enter(const char *name, uint32_t va);
 #define RECOMP_TRACE_ENTER(name, va) recomp_trace_enter((name), (va))
@@ -426,6 +428,51 @@ void recomp_trace_esp(const char *name, const char *tag);
 /** Float/double memory access. */
 #define MEMF(addr)   (*(volatile float    *)XBOX_PTR(addr))
 #define MEMD(addr)   (*(volatile double   *)XBOX_PTR(addr))
+
+/* RE-WW: binary80 memory operands in the CRT's exp/pow dispatch. The x87
+ * register model remains binary64; decode the explicit integer bit and biased
+ * exponent rather than reading the first four bytes as an unrelated float.
+ * Stores encode a binary64 value exactly, touching only the ten guest bytes.
+ * This does not provide full x87 extended intermediate precision or payloads. */
+static inline double recomp_load80(uint32_t addr) {
+    uint64_t significand = 0;
+    uint16_t se = MEM16(addr + 8u);
+    unsigned exponent = se & 0x7fffu;
+    int i;
+    double value;
+    for (i = 0; i < 8; ++i)
+        significand |= (uint64_t)MEM8(addr + (uint32_t)i) << (i * 8);
+    if (exponent == 0x7fffu)
+        value = significand == UINT64_C(0x8000000000000000) ? INFINITY : NAN;
+    else if (exponent && !(significand >> 63))
+        value = NAN; /* unsupported unnormal encoding */
+    else
+        value = ldexp((double)significand,
+                      (int)(exponent ? exponent : 1u) - 16383 - 63);
+    return (se & 0x8000u) ? -value : value;
+}
+static inline void recomp_store80(uint32_t addr, double value) {
+    uint16_t se = signbit(value) ? 0x8000u : 0;
+    uint64_t significand;
+    int exponent, i;
+    value = fabs(value);
+    if (isnan(value)) {
+        se |= 0x7fffu;
+        significand = UINT64_C(0xc000000000000000);
+    } else if (isinf(value)) {
+        se |= 0x7fffu;
+        significand = UINT64_C(0x8000000000000000);
+    } else if (value == 0.0) {
+        significand = 0;
+    } else {
+        double fraction = frexp(value, &exponent);
+        se |= (uint16_t)(exponent + 16382);
+        significand = (uint64_t)ldexp(fraction, 64);
+    }
+    for (i = 0; i < 8; ++i)
+        MEM8(addr + (uint32_t)i) = (uint8_t)(significand >> (i * 8));
+    MEM16(addr + 8u) = se;
+}
 
 /* ================================================================
  * SSE / XMM register state

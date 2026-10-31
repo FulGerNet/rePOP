@@ -22481,7 +22481,10 @@ void sub_00439DFE(void)
 
 loc_00439DFE: ;
     edi = edi;
-    RECOMP_UNIMPL("in al, dx", 0x00439E00u); /* TODO: in al, dx */
+    { uint8_t _port_value;
+      if (xbox_ReadPort8((uint16_t)edx, &_port_value)) {
+        SET_LO8(eax, _port_value);
+      } else { RECOMP_UNIMPL("in al, dx", 0x00439E00u); } }
     POP32(esp, g_recomp_eflags); /* popfd */
     ebx++;
     _fa = (uint32_t)(ebx) & 0xFFFFFFFFu;

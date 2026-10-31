@@ -1,12 +1,32 @@
 /**
  * PoP Warrior Within Xbox retail - unsorted, chunk 19
  * Functions no evidence places
- * Functions: 26 (0x00477B70 - 0x0095AB34)
+ * Functions: 27 (0x00477B60 - 0x0095AB34)
  */
 
 #define RECOMP_GENERATED_CODE
 #include "../recomp_funcs.h"
 #include <math.h>
+
+/**
+ * sub_00477B60
+ * Original: 0x00477B60 - 0x00477B65 (5 bytes, 2 insns)
+ * Folder: unsorted (none)
+ * Category: game_vtable
+ * CC: thiscall, 0 params, returns int_or_void
+ * Frame: fpo_leaf
+ */
+void sub_00477B60(void)
+{
+    uint32_t ebp = 0;
+    ebp = g_ebp;  /* frameless: caller's frame */
+    ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
+
+loc_00477B60: ;
+    eax = MEM32(ecx);
+    g_seh_ebp = ebp; RECOMP_ITAIL(MEM32(eax + 0x20)); return; /* indirect tail jmp */
+
+}
 
 /**
  * sub_00477B70
@@ -3040,7 +3060,10 @@ loc_0095AB89: ;
     _fa = (uint32_t)(MEM8(ebp + -1157608732)) & 0xFFu; _fas = (int32_t)(int8_t)(_fa); /* add result */
 
 loc_0095ABA9: ;
-    RECOMP_UNIMPL("in al, dx", 0x0095ABA9u); /* TODO: in al, dx */
+    { uint8_t _port_value;
+      if (xbox_ReadPort8((uint16_t)edx, &_port_value)) {
+        SET_LO8(eax, _port_value);
+      } else { RECOMP_UNIMPL("in al, dx", 0x0095ABA9u); } }
 
 loc_0095ABAA: ;
     edx--;

@@ -1,12 +1,16 @@
 /* Warrior Within retail XDK integration. See docs/WW-HOOKS.md for evidence.
  * These addresses belong to SHA-256 8747A410...64599C only.
- * Code adapted from reSOT's verified XDK wrappers; no Jade/menu/projection
- * addresses or layout are imported. RECOMP_USB=1 selects original XAPI.
+ * Code adapted from reSOT's verified XDK wrappers. SoT's timer, movie-skip
+ * and Hor+ hooks are ported below to WW routines located in this XBE (the
+ * evidence is in the comments and docs/WW-HOOKS.md); no SoT address is used.
+ * RECOMP_USB=1 selects original XAPI.
  */
+#include <math.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "target.h"
 #if defined(_MSC_VER)
 #define RESOT_TLS __declspec(thread)
@@ -16,6 +20,169 @@
 extern RESOT_TLS uint32_t g_eax,g_ecx,g_edx,g_esp,g_esi;
 extern ptrdiff_t g_xbox_mem_offset;
 #define GMEM32(va) (*(volatile uint32_t *)((uintptr_t)g_xbox_mem_offset+(uint32_t)(va)))
+#define GMEMF(va)  (*(volatile float *)((uintptr_t)g_xbox_mem_offset+(uint32_t)(va)))
+
+/* ── Frame timestep (RE-WW, from RE-SoT sub_00348128_enter) ──
+ *
+ * WW's frame clock sub_000DA5F0 stores the previous/new calibrated
+ * microsecond timestamps at 0x00952CE8 / 0x00952CE0 (0x000DA5FE,
+ * 0x000DA60A, 0x000DA623). With the fixed-refresh flag 0x0091EF38 set
+ * (written as 1 at 0x000148DE and 0x0001A399, among others), it computes
+ * 1000000 / (int(refresh) >> 1) from the float at 0x00945674, which no
+ * instruction in this XBE writes: 0x000DA674/0x000DA710 are its only
+ * references. A zero refresh divides by zero, _ftol 0x0047F548 (identical
+ * to SoT's 0x00348128) returns the invalid integer at its call 0x000DA6A7,
+ * and the 1000-us minimum at 0x000DA75D makes a 60-fps picture advance
+ * 0.06 game seconds per wall second: the same failure as SoT retail.
+ *
+ * At only this _ftol call, replace the invalid reciprocal with the measured
+ * interval the game already captured. Valid refresh values keep the
+ * original path. RESOT_RAW_RETAIL_TIMESTEP=1 restores it for comparison. */
+extern RESOT_TLS double g_fp_stack[8];
+extern RESOT_TLS int g_fp_top;
+
+void sub_0047F548_enter(void)
+{
+    static int configured, raw;
+    static unsigned reports;
+    float refresh;
+    uint64_t now, previous, elapsed;
+    double input;
+    if (GMEM32(g_esp) != 0x000DA6ACu)  /* return of the call at 0x000DA6A7 */
+        return;
+    refresh = GMEMF(0x00945674u);
+    if (isfinite(refresh) && refresh >= 2.0f)
+        return;
+    if (!configured) {
+        const char *e = getenv("RESOT_RAW_RETAIL_TIMESTEP");
+        raw = e && *e && *e != '0';
+        configured = 1;
+    }
+    now = ((uint64_t)GMEM32(0x00952CE4u) << 32) | GMEM32(0x00952CE0u);
+    previous = ((uint64_t)GMEM32(0x00952CECu) << 32) | GMEM32(0x00952CE8u);
+    elapsed = now >= previous ? now - previous : 0;
+    input = g_fp_stack[(unsigned)g_fp_top & 7u];
+    if (!reports++ || (getenv("RESOT_TIMER_DIAG") && reports % 120 == 0))
+        fprintf(stderr, "[TIME] WW invalid refresh %.3f, fixed-step input %.3f;"
+                        " measured interval %llu us (%s)\n", refresh, input,
+                (unsigned long long)elapsed, raw ? "original conversion" : "calibrated clock");
+    if (!raw)
+        g_fp_stack[(unsigned)g_fp_top & 7u] = (double)elapsed;
+}
+
+/* ── Movie skip (RE-WW, from RE-SoT sub_0001E970) ──
+ *
+ * sub_0003DB90 is WW's Bink frame/status routine, with the same shape as
+ * SoT's 0x0001E970: Bink handle 0x005BEEC4 (read at 0x0003DB94), loop flag
+ * 0x0091EC98 (0x0003DB9E), frame count +8 vs current +0x10, and return 0 at
+ * EOF. Its calls are the WW matches of SoT's Bink routines: BinkWait
+ * 0x004D8190, BinkDoFrame 0x004D86B0, BinkCopyToBuffer 0x004D8670 and
+ * BinkNextFrame 0x004D8CC0 (unique normalized matches). Its only caller,
+ * 0x00031E7B, tests the loop flag at 0x00031E91 after a 0 return and then
+ * runs the normal close path (0x00031EC4 calls 0x0003E2D0, which clears the
+ * handle at 0x0003E37B). Space / pad A reports EOF even where the movie's
+ * own skip permission forbids skipping. */
+extern int resot_movie_skip_down(void);
+extern void sub_0003DB90_gen(void);
+
+void sub_0003DB90(void)
+{
+    static int was_down;
+    int down = resot_movie_skip_down();
+    int pressed = down && !was_down;
+    was_down = down;
+    if (pressed && GMEM32(0x005BEEC4u)) {
+        GMEM32(0x0091EC98u) = 0;         /* looping movies must also finish */
+        fprintf(stderr, "[VIDEO] skipped movie (Space / A)\n");
+        g_eax = 0;
+        g_esp += 4;                      /* original status routine: ret */
+        return;
+    }
+    sub_0003DB90_gen();
+}
+
+/* ── Widescreen: Hor+ (RE-WW, from RE-SoT sub_000CD970_enter) ──
+ *
+ * The renderer stretches the 640-pixel picture over a wider surface
+ * (RECOMP_HW_ASPECT); the projection's horizontal scale shrinks by the same
+ * factor so proportions stay right and more scene shows at the sides.
+ *
+ * WW's sub_000C3310 builds the projection at 0x00956480 (x scale +0x00
+ * stored at 0x000C3563/0x000C356D, y scale +0x14 at 0x000C3582), copies it
+ * (rep movsd at 0x000C35E4) to 0x00945740 and calls sub_000C8CC0 with
+ * esi = 0x009456E0, returning to 0x000C35F0. Both copies are narrowed.
+ * WW's own 16:9 flag (byte 0x00945678, never written in this XBE) also
+ * squeezes 2D/HUD; the host already keeps 2D at 4:3, so it stays clear. */
+#define PROJ_BUILT    0x00956480u
+#define PROJ_COPY     0x00945740u
+#define PROJ_HOLDER   0x009456E0u
+#define PROJ_RET      0x000C35F0u
+
+static float s_widen = -1.0f;
+
+static float widen_factor(void)
+{
+    if (s_widen < 0.0f) {
+        const char *e = getenv("RECOMP_HW_ASPECT"), *colon;
+        float aspect = 4.0f / 3.0f;
+        if (e && *e) {
+            aspect = (float)atof(e);
+            colon = strchr(e, ':');
+            if (colon && atof(colon + 1) > 0.0)
+                aspect /= (float)atof(colon + 1);
+        }
+        s_widen = (aspect >= 4.0f / 3.0f && aspect <= 4.0f) ? aspect / (4.0f / 3.0f) : 1.0f;
+        /* RESOT_NO_FOV_HOOK=1: leave the projection alone (comparison runs). */
+        if (getenv("RESOT_NO_FOV_HOOK"))
+            s_widen = 1.0f;
+        if (s_widen > 1.0f)
+            fprintf(stderr, "[BOOT] widescreen: projection widened %.4fx horizontally\n",
+                    s_widen);
+    }
+    return s_widen;
+}
+
+void sub_000C8CC0_enter(void)
+{
+    if (widen_factor() > 1.0f && GMEM32(g_esp) == PROJ_RET && g_esi == PROJ_HOLDER) {
+        GMEMF(PROJ_BUILT) /= s_widen;
+        GMEMF(PROJ_COPY) /= s_widen;
+    }
+}
+
+/* Culling planes. sub_00397AF0 is WW's CAM_Engine_ComputePlans (SoT's
+ * 0x002FD810 with the 16:9 flag test added at 0x00397AFE): half field of
+ * view, then the side planes from the cosine sub_0006C6C0 (returning to
+ * 0x00397B38) and the sine sub_0006C710 (returning to 0x00397B5F); the
+ * up/down calls return to 0x00397B7F and 0x00397B99 and keep the original
+ * angle. The cosine/sine are unique normalized matches of SoT's 0x000452F0 /
+ * 0x00045340. The side calls get atan(widen * tan h). */
+static void widen_side_plane_angle(uint32_t ret_side)
+{
+    float h, *arg;
+
+    if (widen_factor() <= 1.0f || GMEM32(g_esp) != ret_side)
+        return;
+    arg = (float *)((uintptr_t)g_xbox_mem_offset + g_esp + 4);
+    h = *arg;
+    if (h > 0.0f && h < 1.5f) {
+        static int told;
+        *arg = atanf(s_widen * tanf(h));
+        if (!told++)
+            fprintf(stderr, "[BOOT] widescreen: culling half-angle %.4f -> %.4f rad\n",
+                    h, *arg);
+    }
+}
+
+void sub_0006C6C0_enter(void)
+{
+    widen_side_plane_angle(0x00397B38u);
+}
+
+void sub_0006C710_enter(void)
+{
+    widen_side_plane_angle(0x00397B5Fu);
+}
 
 extern void xbox_Nv2aKick(void);
 extern void xbox_Nv2aWaitClear(uint32_t va, uint32_t mask);

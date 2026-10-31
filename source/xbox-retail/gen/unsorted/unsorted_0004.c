@@ -11404,6 +11404,8 @@ loc_0006C6AF: ;
  */
 void sub_0006C6C0(void)
 {
+    extern void sub_0006C6C0_enter(void);
+    sub_0006C6C0_enter();
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;
     int32_t _fas = 0, _fbs = 0;
@@ -11474,6 +11476,8 @@ loc_0006C703: ;
  */
 void sub_0006C710(void)
 {
+    extern void sub_0006C710_enter(void);
+    sub_0006C710_enter();
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;
     int32_t _fas = 0, _fbs = 0;
