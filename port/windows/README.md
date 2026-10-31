@@ -88,11 +88,13 @@ installed, both buttons work from either executable. Enter starts the
 focused button (at first, this executable's game), the arrow keys move
 between buttons, Esc closes.
 
-Choose `Game language` on the launcher to switch between English and Español.
-The choice is saved in `resot-options.ini` as `[Game] Language=1` (English)
-or `Language=5` (Spanish), and applies the next time the game starts. Windows
-defaults to English; these are the two languages confirmed in the supported
-retail ISO.
+Choose `Game language` on the launcher to cycle through the nine Original
+Xbox language IDs: English (1), Japanese (2), German (3), French (4), Spanish
+(5), Italian (6), Korean (7), Chinese (8) and Portuguese (9). The choice is
+saved in `resot-options.ini` as `[Game] Language` and applies next time the
+game starts. Windows defaults to English. English and Spanish were confirmed;
+the others are available for the user's ISO tests and may fall back to a
+language present in the game.
 
 Without any game, a file dialog asks for the game's Xbox ISO. The launcher
 runs extract-xiso (`port/third_party/extract-xiso`, built into the

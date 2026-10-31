@@ -6411,7 +6411,12 @@ Android Debug certificate and is not an official release.
 Added a persistent English / Español selector to Android and Windows launchers.
 The selected Xbox EEPROM language ID is saved in `[Game] Language` in
 `resot-options.ini` and read by the shared kernel when the game starts. Android
-defaults to Spanish and Windows to English. Only English (1) and Spanish (5)
-are offered because those are the languages confirmed for the supported retail
-ISO. Source changes are complete; builds and launcher interaction checks have
-not yet been run for this selector.
+defaults to Spanish and Windows to English. English (1) and Spanish (5) were confirmed in the retail ISO. The 2026-10-31 follow-up below expands the selector to the standard Xbox language IDs 1-9 for additional user testing.
+
+### 2026-10-31 follow-up: selector build and language probes
+
+The user built the Android debug APK successfully (52.1 MB) and confirms the
+English / Spanish launcher selector works. Expanded the launcher choices to
+Original Xbox EEPROM language IDs 1-9 for the user's ISO testing. English and
+Spanish are confirmed; IDs 2-4 and 6-9 are experimental candidates. The
+expanded selector still needs an Android rebuild and user language checks.

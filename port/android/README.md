@@ -1,13 +1,14 @@
 # reSOT for Android
 
-The launcher now lets the player choose English or Español for the game.
-It saves the Xbox language ID (English `1`, Spanish `5`) in
-`resot-options.ini` under `[Game] Language`; the selected text takes effect
-when the next game session starts. Android defaults to Español and Windows to
-English. These are the two languages confirmed in the supported retail ISO;
-this requests the game's own text and does not translate missing assets. The
-user confirms that the Spanish build starts and runs in Spanish; broader
-gameplay coverage was not recorded.
+The launcher lets the player choose among the nine Original Xbox language IDs
+in `resot-options.ini` under `[Game] Language`: English `1`, Japanese `2`,
+German `3`, French `4`, Spanish `5`, Italian `6`, Korean `7`, Chinese `8`,
+and Portuguese `9`. It saves the selection in
+that file and applies it when the next game session starts. Android defaults
+to Español and Windows to English. English and Spanish were confirmed; the
+other options are exposed for the user's ISO tests and may fall back to the
+game's available language. This requests the game's own text and does not
+translate missing assets.
 
 After 0.3.4: the Vulkan shaders no longer declare the SPIR-V extensions
 `SPV_GOOGLE_hlsl_functionality1` / `SPV_GOOGLE_user_type`, which older Mali

@@ -981,8 +981,10 @@ static void render(void)
         draw_button(BTN_GAME);
         {
             wchar_t language[96];
+            static const wchar_t *language_name[9] = {L"English", L"Japanese", L"German",
+                L"French", L"Spanish", L"Italian", L"Korean", L"Chinese", L"Portuguese"};
             swprintf(language, 96, L"Game language: %ls  \x25C2  \x25B8",
-                     L.game_language == 5 ? L"Espa\x00F1ol" : L"English");
+                     language_name[L.game_language >= 1 && L.game_language <= 9 ? L.game_language - 1 : 0]);
             link_at(BTN_LANGUAGE, language, DT_CENTER);
         }
         for (i = BTN_ISO; i <= BTN_GITHUB; ++i)
@@ -1509,7 +1511,7 @@ static void activate(int id)
     case BTN_GITHUB: ShellExecuteW(L.hwnd, L"open", GITHUB_URL, NULL, NULL, SW_SHOWNORMAL); break;
     case BTN_LANGUAGE: {
         char ini[MAX_PATH], value[8];
-        int next = L.game_language == 1 ? 5 : 1;
+        int next = L.game_language >= 9 ? 1 : L.game_language + 1;
         ini_path(ini, sizeof ini);
         sprintf_s(value, sizeof value, "%d", next);
         if (ini[0] && WritePrivateProfileStringA("Game", "Language", value, ini)) {
@@ -1727,7 +1729,7 @@ int resot_launcher_run(const char *target_id, char *game_dir, size_t game_dir_si
         char ini[MAX_PATH];
         ini_path(ini, sizeof ini);
         L.game_language = ini[0] ? (int)GetPrivateProfileIntA("Game", "Language", 1, ini) : 1;
-        if (L.game_language != 1 && L.game_language != 5) L.game_language = 1;
+        if (L.game_language < 1 || L.game_language > 9) L.game_language = 1;
     }
     /* The other target's executable: this one's name with the other ID
      * (sot-xbox-demo.exe <-> sot-xbox-retail.exe, -abi builds alike). */
