@@ -6370,3 +6370,38 @@ Restricted stream_discard_removed_locked to the verified cancellation release at
 Deployment blocked: adb install -r returned no devices/emulators found. This follow-up APK is built but NOT installed on the device. Previous installed APK remains the user-tested version without music.
 
 Deployment follow-up: device reconnected; adb install -r bin/reSOT-android.apk returned Success. Game not launched by agent. User music listening confirmation pending.
+
+### 2026-10-31: Android Spanish-language experiment
+
+Changed the Android emulated Xbox EEPROM language from English (1) to Spanish
+(5); Windows retains English. The user's Prince-of-Persia-SOT.iso was read
+locally: its retail default.xbe SHA-256 matches the supported build exactly
+(753C58B191279BF4D1A8B28A936DF36AA222ED566487AB1FBDFCD090E91EE379). The
+user had already confirmed that ISO runs in the released APK in English.
+
+No APK build or language test was run: this environment has no Android SDK,
+JDK, NDK or CMake on PATH. It is not yet known whether this disc contains
+Spanish game text or whether the title honors language ID 5. Menus and gameplay
+remain to be checked after building/installing the experimental APK.
+
+### 2026-10-31 follow-up: local debug signing
+
+The user ran tools/build-android.ps1 -Debug. Gradle completed successfully in
+9m44s, then the packaging script rejected the APK because its signer differed
+from the repository publisher pin. The APK was signed by the local Android Debug
+certificate (SHA-256 395a300d8e49ecff2b4f90d2f9138267925d77f5dbb4e5dfd7562375a632f8f3).
+Configured that local-only pin and a debug applicationIdSuffix (.es-test) so
+the experimental package can coexist with the publisher APK. Packaging rerun
+and on-device language verification are pending. This signer must not be used
+for an official release.
+
+Build follow-up: AAPT rejected the initial debug applicationId suffix .es-test because hyphens are invalid in Android package segments. Changed the suffix to .estest; rerun the incremental debug build. No APK was produced by this attempt.
+
+### 2026-10-31 follow-up: user device confirmation
+
+After changing the debug package suffix to .estest, the user reran
+	ools/build-android.ps1 -Debug; Gradle succeeded in 28s and the script verified
+the signer and produced in/reSOT-android-debug.apk (36 MB). The user
+installed it and confirms the game runs in Spanish. Broader level-by-level
+coverage was not recorded. The APK is a local debug build signed by the user's
+Android Debug certificate and is not an official release.
