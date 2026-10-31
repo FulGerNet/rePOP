@@ -76,8 +76,9 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
         base = getExternalFilesDir(null);
         if (base == null) base = getFilesDir();
         DefaultOptions.ensure(this);
-        logShare = new LogShare(this);
         view = new LauncherView(this, this);
+        view.state.gameLanguage = GameLanguage.read(base, GameLanguage.SPANISH);
+        logShare = new LogShare(this);
         setContentView(view);
         view.requestFocus();
         immersive();
@@ -182,6 +183,18 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
         case LauncherView.BTN_ISO: pickIso(); break;
         case LauncherView.BTN_DRIVER: GpuDrivers.show(this); break;
         case LauncherView.BTN_LOGS: logShare.share(); break;
+        case LauncherView.BTN_LANGUAGE: {
+            int language = GameLanguage.next(view.state.gameLanguage);
+            if (GameLanguage.write(base, language)) {
+                view.state.gameLanguage = language;
+                view.state.error = "";
+                view.state.note = "Language saved. It will apply the next time you start the game.";
+            } else {
+                view.state.error = "Could not save the language in resot-options.ini.";
+            }
+            view.invalidate();
+            break;
+        }
         case LauncherView.BTN_GITHUB:
             try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_URL))); }
             catch (ActivityNotFoundException ignored) {}

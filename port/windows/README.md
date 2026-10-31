@@ -88,6 +88,12 @@ installed, both buttons work from either executable. Enter starts the
 focused button (at first, this executable's game), the arrow keys move
 between buttons, Esc closes.
 
+Choose `Game language` on the launcher to switch between English and Español.
+The choice is saved in `resot-options.ini` as `[Game] Language=1` (English)
+or `Language=5` (Spanish), and applies the next time the game starts. Windows
+defaults to English; these are the two languages confirmed in the supported
+retail ISO.
+
 Without any game, a file dialog asks for the game's Xbox ISO. The launcher
 runs extract-xiso (`port/third_party/extract-xiso`, built into the
 executable and run in a child copy of it) to extract it into a folder named

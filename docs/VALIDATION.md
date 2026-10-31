@@ -6405,3 +6405,13 @@ the signer and produced in/reSOT-android-debug.apk (36 MB). The user
 installed it and confirms the game runs in Spanish. Broader level-by-level
 coverage was not recorded. The APK is a local debug build signed by the user's
 Android Debug certificate and is not an official release.
+
+### 2026-10-31: launcher game-language selector
+
+Added a persistent English / Español selector to Android and Windows launchers.
+The selected Xbox EEPROM language ID is saved in `[Game] Language` in
+`resot-options.ini` and read by the shared kernel when the game starts. Android
+defaults to Spanish and Windows to English. Only English (1) and Spanish (5)
+are offered because those are the languages confirmed for the supported retail
+ISO. Source changes are complete; builds and launcher interaction checks have
+not yet been run for this selector.

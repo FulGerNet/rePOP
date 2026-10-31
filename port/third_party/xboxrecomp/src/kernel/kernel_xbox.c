@@ -10,6 +10,7 @@
  */
 
 #include "kernel.h"
+#include "../../../../windows/src/options.h"
 #include <string.h>
 
 /* ============================================================================
@@ -120,7 +121,7 @@ NTSTATUS __stdcall xbox_XeUnloadSection(PXBE_SECTION_HEADER Section)
  * SMBus. For recompilation, we return sensible defaults:
  *   - Region: North America
  *   - Video: NTSC, widescreen+HDTV enabled
- *   - Language: English on Windows; Spanish in the experimental Android build
+ *   - Language: selected in reSOT Options / Launcher (English or Spanish)
  *   - Audio: Stereo, Dolby Digital
  *   - DVD Region: Region 1 (North America)
  * ============================================================================ */
@@ -136,14 +137,10 @@ NTSTATUS __stdcall xbox_ExQueryNonVolatileSetting(
 
     switch (ValueIndex) {
     case XC_LANGUAGE:
-        /* RE-SoT: Xbox language IDs are English = 1, Spanish = 5. Keep
-         * Windows at its existing default; request Spanish on Android. */
+        /* RE-SoT: Honor the saved launcher choice; unsupported values fall
+         * back to English in the options layer. */
         if (ValueLength >= sizeof(ULONG)) {
-#if defined(__ANDROID__)
-            *(PULONG)Value = 5;
-#else
-            *(PULONG)Value = 1;
-#endif
+            *(PULONG)Value = (ULONG)resot_game_language();
             if (Type) *Type = 4; /* REG_DWORD */
             if (ResultLength) *ResultLength = sizeof(ULONG);
         }
