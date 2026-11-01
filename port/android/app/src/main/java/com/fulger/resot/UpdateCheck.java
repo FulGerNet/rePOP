@@ -42,11 +42,11 @@ final class UpdateCheck {
                 Uri uri=Uri.parse("https://github.com/FulGerNet/rePOP/releases/tag/"+tag);
                 activity.runOnUiThread(() -> {
                     if(activity.isFinishing() || activity.isDestroyed()) return;
-                    activity.offerUpdate(() -> LauncherDialog.show(activity,"reSOT update available",
-                        "Version "+tag+" is available on GitHub.","Update",() -> {
+                    activity.offerUpdate(() -> LauncherDialog.show(activity,activity.getString(R.string.update_title),
+                        activity.getString(R.string.update_message,tag),activity.getString(R.string.update_button),() -> {
                             try { activity.startActivity(new Intent(Intent.ACTION_VIEW,uri)); }
                             catch(android.content.ActivityNotFoundException ignored) {}
-                        },"Close",null,true));
+                        },activity.getString(R.string.update_close),null,true));
                 });
             } catch(Exception e) {
                 // Offline, rate limited or malformed response: launch normally.

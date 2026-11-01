@@ -143,7 +143,7 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
         String[] g = Native.identify(dir.getAbsolutePath());
         int kind = KIND[0].equals(g[0]) ? 0 : KIND[1].equals(g[0]) ? 1 : -1;
         if (kind < 0) {
-            if (!g[3].isEmpty() && view.state.note.isEmpty()) view.state.note = g[3];
+            if (!g[3].isEmpty() && view.state.note.isEmpty()) view.state.note = localizedNativeNote(g[3]);
             return;
         }
         boolean exact = "1".equals(g[1]);
@@ -164,14 +164,35 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
         for (int k = 0; k < 2; k++) {
             s.installed[k] = found[k] != null;
             s.exact[k] = s.installed[k] && "1".equals(found[k][1]);
-            s.line[k] = s.installed[k] ? found[k][2] : "";
+            s.line[k] = s.installed[k] ? localizedInstallLine(k, s.exact[k], found[k][2]) : "";
             s.dir[k] = s.installed[k] ? dirs[k].getAbsolutePath() : "";
             if (s.installed[k] && !found[k][3].isEmpty() && s.note.isEmpty()) s.note = found[k][3];
         }
         if (!s.installed[0] && !s.installed[1] && s.note.isEmpty())
-            s.note = "No game files found: install from your Xbox disc image (ISO), or copy the extracted disc into "
-                   + new File(base, FOLDER[0]).getAbsolutePath() + " or " + FOLDER[1] + ".";
+            s.note = getString(R.string.launcher_no_game_files,
+                new File(base, FOLDER[0]).getAbsolutePath(), FOLDER[1]);
         view.refresh();
+    }
+
+    private String localizedInstallLine(int kind, boolean exact, String source) {
+        if (exact) return getString(kind == 0 ? R.string.launcher_demo_exact : R.string.launcher_retail_exact);
+        if (kind == 0 && source.contains("recognised"))
+            return getString(R.string.launcher_demo_files);
+        if (kind == 1 && source.contains("recognised"))
+            return getString(R.string.launcher_retail_files);
+        return getString(kind == 0 ? R.string.launcher_demo_revision : R.string.launcher_retail_revision);
+    }
+
+    private String localizedNativeNote(String note) {
+        if (note.startsWith("A default.xbe here is not the build"))
+            return getString(R.string.launcher_unsupported_xbe_note);
+        if (note.startsWith("A folder holds a default.xbe"))
+            return getString(R.string.launcher_non_game_xbe_note);
+        if (note.startsWith("default.xbe is missing"))
+            return getString(R.string.launcher_missing_xbe_note);
+        if (note.startsWith("Game files found but not identified"))
+            return getString(R.string.launcher_unidentified_game_note);
+        return note;
     }
 
     // ── buttons ──────────────────────────────────────────────
@@ -188,9 +209,9 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
             if (GameLanguage.write(base, language)) {
                 view.state.gameLanguage = language;
                 view.state.error = "";
-                view.state.note = "Language saved. It will apply the next time you start the game.";
+                view.state.note = getString(R.string.launcher_language_saved);
             } else {
-                view.state.error = "Could not save the language in resot-options.ini.";
+                view.state.error = getString(R.string.launcher_language_save_failed);
             }
             view.invalidate();
             break;
@@ -216,9 +237,9 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
         if (!s.installed[kind]) return;
         if (!s.exact[kind]) {
             new AlertDialog.Builder(this).setTitle("reSOT")
-                .setMessage("This folder's default.xbe is not the " + (kind == 0 ? "demo" : "retail")
-                    + " build reSOT was recompiled from, so the game cannot start.\n\n" + s.dir[kind])
-                .setPositiveButton(android.R.string.ok, null).show();
+                .setMessage(getString(R.string.launcher_bad_xbe,
+                    getString(kind == 0 ? R.string.launcher_demo : R.string.launcher_retail), s.dir[kind]))
+                .setPositiveButton(R.string.launcher_ok, null).show();
             return;
         }
         Intent intent = new Intent(this, GameActivity.class);
@@ -237,7 +258,7 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
         intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
             "application/x-iso9660-image", "application/octet-stream", "application/x-xbox-iso", "*/*" });
         try { startActivityForResult(intent, PICK_ISO); }
-        catch (ActivityNotFoundException e) { view.state.error = "No file picker is available on this device."; }
+        catch (ActivityNotFoundException e) { view.state.error = getString(R.string.launcher_no_file_picker); }
     }
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
@@ -285,8 +306,8 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
                 base.mkdirs();
                 long free = new StatFs(base.getPath()).getAvailableBytes();
                 if (free < total + (64L << 20))
-                    throw new XisoExtractor.ExtractException(String.format(java.util.Locale.US,
-                        "not enough free storage (%.1f GB needed)", total / 1073741824.0));
+                    throw new XisoExtractor.ExtractException(getString(R.string.launcher_not_enough_storage,
+                        total / 1073741824.0));
                 final long[] last = { 0 };
                 XisoExtractor.extractAll(channel, out, (file, done, all) -> {
                     long now = SystemClock.uptimeMillis();
@@ -312,7 +333,7 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
                 view.state.extracting = false;
                 deleteLater(out);
                 refresh();
-                view.state.error = "Installation cancelled.";
+                view.state.error = getString(R.string.launcher_install_cancelled);
             } else {
                 finished(success, message);
             }
@@ -322,9 +343,9 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
     private void cancelInstall() {
         if (!view.state.extracting) return;
         new AlertDialog.Builder(this).setTitle("reSOT")
-            .setMessage("Stop installing? The files written so far are removed.")
-            .setPositiveButton(android.R.string.yes, (d, w) -> cancelRequested = true)
-            .setNegativeButton(android.R.string.no, null).show();
+            .setMessage(getString(R.string.launcher_stop_installing))
+            .setPositiveButton(R.string.launcher_yes, (d, w) -> cancelRequested = true)
+            .setNegativeButton(R.string.launcher_no, null).show();
     }
 
     private void finished(boolean ok, String error) {
@@ -334,7 +355,8 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
         if (!ok) {
             deleteLater(out);
             refresh();
-            s.error = "Installation failed: " + (error.isEmpty() ? "extract-xiso stopped with an error" : error);
+            s.error = getString(R.string.launcher_install_failed,
+                error.isEmpty() ? getString(R.string.launcher_extractor_failed) : error);
             return;
         }
         String[] g = Native.identify(out.getAbsolutePath());
@@ -342,20 +364,20 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
         if (kind < 0) {
             deleteLater(out);
             refresh();
-            s.error = "The ISO was extracted, but it is not a supported Prince of Persia disc.";
+            s.error = getString(R.string.launcher_unsupported_disc);
             return;
         }
         File target = new File(base, FOLDER[kind]);
         if (target.exists()) {
             new AlertDialog.Builder(this).setTitle("reSOT")
-                .setMessage("The " + (kind == 0 ? "demo" : "retail game") + " is already installed in\n"
-                    + target.getAbsolutePath() + "\n\nReplace it with this disc? Its saved games are kept.")
-                .setPositiveButton("Replace", (d, w) -> {
+                .setMessage(getString(R.string.launcher_already_installed,
+                    getString(kind == 0 ? R.string.launcher_demo : R.string.launcher_retail), target.getAbsolutePath()))
+                .setPositiveButton(R.string.launcher_replace, (d, w) -> {
                     File old = new File(base, ".old-" + System.currentTimeMillis());
                     if (target.renameTo(old)) deleteLater(old);
                     adopt(out, target);
                 })
-                .setNegativeButton("Keep", (d, w) -> { deleteLater(out); refresh(); })
+                .setNegativeButton(R.string.launcher_keep, (d, w) -> { deleteLater(out); refresh(); })
                 .setCancelable(false).show();
             return;
         }
@@ -366,7 +388,7 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
         if (!out.renameTo(target)) {
             deleteLater(out);
             refresh();
-            view.state.error = "The game could not be moved to " + target.getAbsolutePath() + ".";
+            view.state.error = getString(R.string.launcher_move_failed, target.getAbsolutePath());
             return;
         }
         refresh();

@@ -6420,3 +6420,28 @@ English / Spanish launcher selector works. Expanded the launcher choices to
 Original Xbox EEPROM language IDs 1-9 for the user's ISO testing. English and
 Spanish are confirmed; IDs 2-4 and 6-9 are experimental candidates. The
 expanded selector still needs an Android rebuild and user language checks.
+
+### 2026-10-31 user language test follow-up
+
+The user reports that English (1), French (4), and Spanish (5) all work in the
+launcher build. The supported XBE hash corresponds to title ID 5553001D; xemu's
+title record identifies it as US-029. This is consistent with catalog listings
+of the USA release as English/French/Spanish, but we have not independently
+inspected the ISO's file table for its localization assets. Other language IDs
+remain unconfirmed for this disc.
+
+### 2026-10-31 follow-up: verified languages and launcher localization
+
+The user confirms English (1), French (4), and Spanish (5) work in the supported
+USA ISO. Restricted the game selector back to those three values. The launcher
+UI is now localized separately from the game language: it follows the OS UI
+language for English, French, and Spanish, and falls back to English for other
+OS languages. Android and Windows source changes are complete; this localization
+change has not yet been built or visually checked.
+
+### 2026-10-31 user confirmation: OS-language launcher localization
+
+The user built and installed the updated Android debug APK and confirms the
+launcher localization works. The launcher UI is independent from the saved
+in-game language choice. Windows source localization is included but has not
+been separately built or tested by the user.
