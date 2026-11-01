@@ -31,33 +31,33 @@ final class GpuDrivers {
     }
     static void show(Activity activity) {
         SharedPreferences p=prefs(activity);
-        String name=p.getString("name","No custom driver installed");
+        String name=p.getString("name",activity.getString(R.string.gpu_no_custom));
         boolean installed=!p.getString("dir","").isEmpty();
-        String[] choices={"Use system driver", "Install driver ZIP…", "Use installed: "+name};
+        String[] choices={activity.getString(R.string.gpu_use_system), activity.getString(R.string.gpu_install_driver_zip), activity.getString(R.string.gpu_use_installed,name)};
         // AlertDialog's message hides its list on Android. Keep the actions
         // visible and expose the document picker as a dedicated button too.
-        new AlertDialog.Builder(activity).setTitle("GPU: "+(p.getBoolean("enabled",false)?name:"System"))
+        new AlertDialog.Builder(activity).setTitle(activity.getString(R.string.gpu_title)+": "+(p.getBoolean("enabled",false)?name:activity.getString(R.string.gpu_system)))
             .setItems(choices,(d,which)->{
                 if (which==0) p.edit().putBoolean("enabled",false).apply();
                 else if (which==2 && installed) p.edit().putBoolean("enabled",true).apply();
                 else if (which==1) {
                     pickDriver(activity);
                 }
-            }).setPositiveButton("Install ZIP…",(d,w)->pickDriver(activity))
-              .setNegativeButton("Close",null).show();
+            }).setPositiveButton(R.string.gpu_install_zip,(d,w)->pickDriver(activity))
+              .setNegativeButton(R.string.gpu_close,null).show();
     }
     private static void pickDriver(Activity activity) {
         Intent pick=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
             .addCategory(Intent.CATEGORY_OPENABLE);
         try { activity.startActivityForResult(pick,PICK_DRIVER); }
-        catch (android.content.ActivityNotFoundException e) { error(activity,"No file picker available."); }
+        catch (android.content.ActivityNotFoundException e) { error(activity,activity.getString(R.string.gpu_no_picker)); }
     }
     private static void error(Activity a,String text) {
-        new AlertDialog.Builder(a).setTitle("GPU driver").setMessage(text).setPositiveButton("OK",null).show();
+        new AlertDialog.Builder(a).setTitle(a.getString(R.string.gpu_title)).setMessage(text).setPositiveButton(R.string.launcher_ok,null).show();
     }
     static void install(Activity activity,Uri uri) {
-        AlertDialog progress=new AlertDialog.Builder(activity).setTitle("GPU driver")
-            .setMessage("Importing driver…").setCancelable(false).show();
+        AlertDialog progress=new AlertDialog.Builder(activity).setTitle(activity.getString(R.string.gpu_title))
+            .setMessage(activity.getString(R.string.gpu_importing)).setCancelable(false).show();
         new Thread(()->{
             File dir=new File(activity.getFilesDir(),"gpu-drivers/driver-"+System.nanoTime());
             String message;
@@ -83,8 +83,8 @@ final class GpuDrivers {
                     .putString("name",name).putBoolean("enabled",true).commit()) throw new IOException("Cannot save driver selection.");
                 // Retain previous directories: a running :game process may still
                 // have dependencies mapped from an earlier driver package.
-                ok=true; message="Installed: "+name+"\nIt will be used the next time you start a game.";
-            } catch (Exception e) { message="Import failed: "+e.getMessage(); }
+                ok=true; message=activity.getString(R.string.gpu_imported,name);
+            } catch (Exception e) { message=activity.getString(R.string.gpu_import_failed,e.getMessage()); }
             if (!ok) remove(dir);
             final String result=message;
             activity.runOnUiThread(()->{ if(!activity.isFinishing()) { progress.dismiss(); error(activity,result); } });

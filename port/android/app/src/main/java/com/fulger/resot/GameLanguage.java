@@ -9,29 +9,26 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Xbox EEPROM language IDs exposed for retail-ISO compatibility testing. */
+/** Xbox EEPROM language IDs confirmed in the supported USA retail ISO. */
 final class GameLanguage {
-    static final int ENGLISH = 1, LAST = 9;
+    static final int ENGLISH = 1;
     static final int SPANISH = 5;
 
-    static int next(int current) { return current >= LAST ? ENGLISH : Math.max(ENGLISH, current + 1); }
+    static int next(int current) {
+        if (current == ENGLISH) return 4;
+        if (current == 4) return SPANISH;
+        return ENGLISH;
+    }
 
-    static String label(int language) {
+    static String label(int language, android.content.Context context) {
         switch (language) {
-        case 1: return "English";
-        case 2: return "Japanese";
-        case 3: return "German";
-        case 4: return "French";
-        case 5: return "Spanish";
-        case 6: return "Italian";
-        case 7: return "Korean";
-        case 8: return "Chinese";
-        case 9: return "Portuguese";
-        default: return "English";
+        case 4: return context.getString(R.string.language_french);
+        case 5: return context.getString(R.string.language_spanish);
+        default: return context.getString(R.string.language_english);
         }
     }
 
-    static boolean supported(int language) { return language >= ENGLISH && language <= LAST; }
+    static boolean supported(int language) { return language == ENGLISH || language == 4 || language == SPANISH; }
 
     static int read(File directory, int fallback) {
         File ini = new File(directory, "resot-options.ini");
