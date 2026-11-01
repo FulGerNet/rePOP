@@ -47,8 +47,6 @@ android {
 
     buildTypes {
         debug {
-            // Keep the local Spanish experiment installed beside the official app.
-            applicationIdSuffix ".estest"
             // The lifted code is far too slow without optimisation; the
             // native targets set -O2 themselves (../CMakeLists.txt).
             jniDebuggable true
