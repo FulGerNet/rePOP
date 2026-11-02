@@ -35,8 +35,8 @@ remains derived from the original game and is not covered by reSOT's MIT licence
 
 Performance depends on the device, renderer, scene and graphics settings. In a
 heavy retail scene (about 1,600 draws a frame) on Windows, Vulkan, RTX 3060 at
-225% internal resolution, v0.4.4 runs at about 140 fps (about 64 fps before the
-v0.4.4 work).
+225% internal resolution, v0.4.4 runs at about 143 fps (about 64 fps before the
+v0.4.4 work); an empty view at about 700 fps.
 
 <img src="docs/media/gameplay-xbox-retail.jpg" alt="Xbox retail running in reSOT: cutscenes, courtyard gameplay, climbing, combat and pause menu">
 
@@ -78,8 +78,8 @@ observations and limits are in [VALIDATION.md](docs/VALIDATION.md).
 | Native Direct3D 11 renderer | 🟢 Windows default | 🟢 Windows default |
 | Native Vulkan renderer | 🟢 Windows and Android | 🟢 Windows and Android |
 | Native Direct3D 12 renderer | 🟡 Optional Windows backend | 🟡 Optional Windows backend; broader gameplay checks pending |
-| Direct renderer path (on by default, `RESOT_DIRECT_DRAW=0` turns it off) | 🟡 Draws and state reach the renderer as typed tokens; tested on D3D12; fences, swap and pushbuffer replay still in the ring | 🟢 Tested on D3D12 and Vulkan; recorded pushbuffers as direct draws; game and renderer in parallel, at most one frame apart |
-| Game and renderer in parallel (asynchronous KickOff) | ⚪ Kept synchronous: with more depth the first level drew almost black | 🟢 32 submissions and one frame ahead (`RESOT_KICK_AHEAD`, `RESOT_FLIP_AHEAD`) |
+| Direct renderer path (on by default, `RESOT_DIRECT_DRAW=0` turns it off) | 🟡 Draws and state reach the renderer as typed tokens; tested on D3D12; fences, swap and pushbuffer replay still in the ring | 🟢 Tested on D3D12 and Vulkan; recorded pushbuffers as direct draws; game and renderer in parallel, at most two frames apart |
+| Game and renderer in parallel (asynchronous KickOff) | ⚪ Kept synchronous: with more depth the first level drew almost black | 🟢 32 submissions and at most two frames ahead (`RESOT_KICK_AHEAD`, `RESOT_FLIP_AHEAD`); a session longer than about 33,000 frames not yet checked for the black-level defect |
 | Widescreen Hor+ and HUD layout | 🟢 Artwork edges remain limited | 🟢 Ultrawide sand-tank alignment; some dialog layout limits remain |
 | HD menu font | 🟡 Shared 4x glyph replacement on all renderers; tested on Windows | 🟡 Same replacement; broader visual check pending |
 | HD menu logo | 🟡 Built on all renderers, not yet seen in game | 🟢 |
@@ -226,7 +226,7 @@ regenerated from the user's own checked XBE and is never edited by hand.
 
 | Version | Highlights | Notes |
 | --- | --- | --- |
-| 0.4.4 | Direct renderer on by default on every renderer; retail recorded pushbuffers as direct draws; game and renderer in parallel (heavy retail scene about 64 to 140 fps, Vulkan); light halo fix; game language in reSOT Options only. Android versionCode 14. | [v0.4.4](docs/releases/v0.4.4.md) |
+| 0.4.4 | Direct renderer on by default on every renderer; retail recorded pushbuffers as direct draws; game and renderer in parallel (heavy retail scene about 64 to 143 fps, Vulkan); light halo fix; game language in reSOT Options only. Android versionCode 14. | [v0.4.4](docs/releases/v0.4.4.md) |
 | 0.4.3 | English, French and Spanish (retail); translated launchers; one shader per render state on D3D11 and D3D12; less stutter; F8 debug views; new Android icon background. | [v0.4.3](docs/releases/v0.4.3.md) |
 | 0.4.2 | HD main menu logos; retail name keyboard with mouse and touch; sand tank HUD; Vulkan black flashes; demo 6201 PrisonA entry. | [v0.4.2](docs/releases/v0.4.2.md) |
 | 0.4.1 | Retail flicker, black scenes and GPU-thread crashes; Special Load Map crashes; loading-screen hang; Android logs tip. | [v0.4.1](docs/releases/v0.4.1.md) |

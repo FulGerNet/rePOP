@@ -124,7 +124,7 @@ int nv2a_direct_mode(void);
  * original path. Otherwise the parameter of NV097_RESOT_DIRECT_PUSHBUFFER. */
 uint32_t nv2a_direct_pushbuffer(uint32_t va, uint32_t words);
 /* Title thread, before writing a flip token: waits while the executor is more than
- * RESOT_FLIP_AHEAD flips (default 1) behind the title, at most 100 ms. */
+ * RESOT_FLIP_AHEAD flips (default 2) behind the title, at most 100 ms. */
 void nv2a_direct_flip_wait(void);
 /* Title thread: nonzero when nv2a_direct_flip_wait would wait; kick first then. */
 int nv2a_direct_flip_behind(void);

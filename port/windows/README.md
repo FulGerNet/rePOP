@@ -396,8 +396,8 @@ This is diagnostic-only; no launcher/options UI or game defaults are changed.
 
 The direct renderer path ([docs/DIRECT-RENDERER.md](../../docs/DIRECT-RENDERER.md)) is on by
 default on Direct3D 11, Direct3D 12 and Vulkan since 2026-11-02; `RESOT_DIRECT_DRAW=0`
-returns to the NV2A ring. With it, retail KickOff runs 32 submissions ahead, the game at most one
-frame ahead of the renderer (`RESOT_FLIP_AHEAD=<n>`, 0 = no limit)
+returns to the NV2A ring. With it, retail KickOff runs 32 submissions ahead, the game at most two
+frames ahead of the renderer (`RESOT_FLIP_AHEAD=<n>`, 0 = no limit)
 (`RESOT_KICK_AHEAD=<n>` overrides). The log says which: `[DIRECT] mode 1 (default)`.
 A `RESOT_DIRECT_DRAW` key in `resot-options.ini` is not read.
 

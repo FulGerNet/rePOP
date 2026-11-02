@@ -217,9 +217,9 @@ static int kick_ahead(void)
          * on Android, nor on the demo, at this depth. */
         {
             extern int nv2a_direct_mode(void);
-            /* RE-SoT: 32 since 2026-11-02 (evening), with the title held to one
-             * frame ahead of the executor at its flip (nv2a_direct_flip_wait):
-             * Vulkan, heavy scene, about 100 -> 145 fps. 32 alone drew most of the
+            /* RE-SoT: 32 since 2026-11-02 (evening), with the title held to two
+             * flips ahead of the executor (nv2a_direct_flip_wait): Vulkan, heavy
+             * scene, about 84 -> 143 fps. 32 alone drew most of the
              * level black after minutes (light probes read about two frames late);
              * the flip limit is what bounds it. */
             ahead = e ? atoi(e) : (RESOT_RUNTIME_RETAIL ? (nv2a_direct_mode() > 0 ? 32 : 1) : 0);

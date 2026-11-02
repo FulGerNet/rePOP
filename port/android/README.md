@@ -651,7 +651,7 @@ trades heat for steadier frames, so thermal caps can arrive sooner. The state ou
 the process: after a crash it stays on until the next start of the game or a reboot.
 The `[POWER] GPU turbo` lines show when it changes. Not tested on a device.
 
-**Direct renderer path.** Both native libraries are built with the direct path of [docs/DIRECT-RENDERER.md](../../docs/DIRECT-RENDERER.md) (demo and retail). Since 2026-11-02 it is on by default, as on Windows, and retail KickOff runs 32 submissions ahead with it, at most one frame ahead of the renderer. The app has no switch to turn it off (Windows: `RESOT_DIRECT_DRAW=0`). Not run on a device yet.
+**Direct renderer path.** Both native libraries are built with the direct path of [docs/DIRECT-RENDERER.md](../../docs/DIRECT-RENDERER.md) (demo and retail). Since 2026-11-02 it is on by default, as on Windows, and retail KickOff runs 32 submissions ahead with it, at most two frames ahead of the renderer. The app has no switch to turn it off (Windows: `RESOT_DIRECT_DRAW=0`). Not run on a device yet.
 
 ### APK publisher integrity (v0.3.2, versionCode 7)
 

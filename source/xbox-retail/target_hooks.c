@@ -3086,7 +3086,7 @@ void sub_0036C840(void)
         g_esp -= 4; GMEM32(g_esp) = 0x0036C893u;
         sub_0036FF60();
     }
-    nv2a_direct_flip_wait();             /* at most one frame ahead of the executor */
+    nv2a_direct_flip_wait();             /* at most RESOT_FLIP_AHEAD flips ahead */
     if (GMEM32(dev + 0x1A04) == GMEM32(dev + 0x1A14) || GMEM32(0x0037B5ACu) == 0x80000000u) {
         direct_token(dev, 0x0036C893u, NV097_RESOT_DIRECT_FLIP, 1);
     } else {

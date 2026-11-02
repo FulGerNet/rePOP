@@ -1,5 +1,21 @@
 # Validation log
 
+## 2026-11-02 (late night): RESOT_FLIP_AHEAD default 2
+
+Correction of the v0.4.4 commit and notes, which gave about 140 fps for the heavy scene: that
+figure was measured with KickOff 32 ahead and no flip limit, the configuration that later drew
+the level black. With the one-flip limit the user saw lower frame rates; the logs: heavy
+scene about 84 fps (1,710 draws a frame), empty view about 400 fps (from about 780), the
+title waiting at the flip 16-27% of its samples and the executor idle 31-35%.
+
+RESOT_FLIP_AHEAD=2 (environment, same build), retail, Vulkan, user: "perfetto". Log: about
+700 fps in an empty view, 143 fps at 1,612 draws a frame; the title never waited at the flip
+(0 waits in about 33,000 flips); no black level reported. Now the default.
+
+Not checked: a session past about 40,000 flips (the black level appeared between 40,000 and
+54,000 with no limit): at 2 the limit never engaged in this run, so it is not yet shown to
+prevent that defect. Android, the demo and D3D11/D3D12 not run.
+
 ## 2026-11-02 (night): v0.4.4 final builds
 
 KickOff 32 ahead with RESOT_FLIP_AHEAD (title at most one flip ahead of the executor), Vulkan,

@@ -164,7 +164,13 @@ static void direct_flip_init(void)
 {
     const char *e = getenv("RESOT_FLIP_AHEAD");
     if (!s_direct_flip_ev) s_direct_flip_ev = CreateEventA(NULL, FALSE, FALSE, NULL);
-    s_direct_flip_ahead = e ? atoi(e) : 1;
+    /* RE-SoT: 2 since 2026-11-02 (night). With 1 the title waited at most flips
+     * and title and executor alternated: empty view about 400 fps against 780,
+     * heavy scene about 84 against 145. With 2 (user, Vulkan, retail, about 33,000
+     * flips): about 700 and 143 fps, no black level seen, the title never waited.
+     * The black level appeared between flips 40,000 and 54,000 with no limit, so
+     * a longer session at 2 is still to be seen. */
+    s_direct_flip_ahead = e ? atoi(e) : 2;
     if (s_direct_flip_ahead < 0) s_direct_flip_ahead = 0;
     fprintf(stderr, "[DIRECT] flips ahead of the executor: at most %d%s\n",
         s_direct_flip_ahead, s_direct_flip_ahead ? "" : " (no limit)");
