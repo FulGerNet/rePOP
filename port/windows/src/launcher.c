@@ -61,15 +61,13 @@
 #define SUB_Y 256             /* THE SANDS OF TIME, its centre line */
 #define BADGE_Y 272
 #define BADGE_H 26
-#define BADGE_TEXT L"Recompiled"
-#define SUB_TEXT L"the sands of time"
 #define HEAD_RULE_Y 320
 #define HEAD_Y 336            /* INSTALLED GAMES */
 #define BTN_W 300
 #define BTN_H 56
 #define BTN_GAP 64
 #define BTN_Y 368
-#define MESSAGE_Y 510
+#define MESSAGE_Y 526
 #define FOOT_RULE_Y 560
 #define BAR_Y 420             /* installing: the progress bar */
 #define CANCEL_W 240
@@ -81,7 +79,7 @@
 #define WM_APP_EXTRACTED (WM_APP + 2)
 
 enum { GAME_NONE, GAME_DEMO, GAME_RETAIL, GAME_KINDS };
-enum { BTN_DEMO, BTN_GAME, BTN_ISO, BTN_GITHUB, BTN_CLOSE, BTN_CANCEL, BTN_COUNT };
+enum { BTN_DEMO, BTN_GAME, BTN_ISO, BTN_GITHUB, BTN_LANGUAGE, BTN_CLOSE, BTN_CANCEL, BTN_COUNT };
 
 typedef struct {
     int kind;                /* GAME_* */
@@ -120,6 +118,8 @@ static struct {
     int sub_w, head_w, badge_w;       /* widths of the spaced capitals */
     Button btn[BTN_COUNT];
     int hover, pressed, focus, tracking;
+    int game_language;
+    int ui_language;                  /* 0 English, 1 French, 2 Spanish */
     Grain sand[N_SAND];
     uint32_t rng;
     ULONGLONG last_tick;
@@ -143,6 +143,24 @@ static struct {
     wchar_t iso_w[MAX_PATH], status[260], error[400];
     char iso_a[MAX_PATH], out_a[MAX_PATH];
 } L;
+
+static const wchar_t *ui_text(const wchar_t *english, const wchar_t *french, const wchar_t *spanish)
+{
+    return L.ui_language == 1 ? french : L.ui_language == 2 ? spanish : english;
+}
+
+static void detect_ui_language(void)
+{
+    LANGID language = PRIMARYLANGID(GetUserDefaultUILanguage());
+    L.ui_language = language == LANG_FRENCH ? 1 : language == LANG_SPANISH ? 2 : 0;
+}
+
+static const wchar_t *game_language_name(int language)
+{
+    if (language == 4) return ui_text(L"French", L"Fran\u00E7ais", L"Franc\u00E9s");
+    if (language == 5) return ui_text(L"Spanish", L"Espagnol", L"Espa\u00F1ol");
+    return ui_text(L"English", L"Anglais", L"Ingl\u00E9s");
+}
 
 /* ── small helpers ─────────────────────────────────────────── */
 
@@ -241,32 +259,32 @@ static void detect_game(const char *dir, GameInfo *g)
         wchar_t name[41] = {0};
         if (!strcmp(hex, RESOT_DEMO_XBE_SHA256)) {
             g->kind = GAME_DEMO; g->exact = 1;
-            wcscpy_s(g->line, 160, L"E3 2003 demo  \x2022  2003-07-18");
+            wcscpy_s(g->line, 160, ui_text(L"E3 2003 demo  \u2022  2003-07-18", L"D\u00E9mo E3 2003  \u2022  18/07/2003", L"Demo E3 2003  \u2022  18/07/2003"));
             return;
         }
         if (!strcmp(hex, RESOT_RETAIL_XBE_SHA256)) {
             g->kind = GAME_RETAIL; g->exact = 1;
-            wcscpy_s(g->line, 160, L"NTSC retail  \x2022  2003-10-20");
+            wcscpy_s(g->line, 160, ui_text(L"NTSC retail  \u2022  2003-10-20", L"Version commerciale NTSC  \u2022  20/10/2003", L"Versi\u00F3n comercial NTSC  \u2022  20/10/2003"));
             return;
         }
         if (xbe_title(xbe, &title_id, name) && wcsstr(name, L"Prince of Persia")) {
             g->kind = title_id == 0x5553001Du ? GAME_RETAIL : GAME_DEMO;
-            swprintf(g->line, 160, L"%ls  \x2022  other revision", g->kind == GAME_RETAIL ? L"Retail" : L"Demo");
-            wcscpy_s(g->note, 200, L"A default.xbe here is not the build reSOT supports; the game may not run.");
+            swprintf(g->line, 160, L"%ls  \u2022  %ls", g->kind == GAME_RETAIL ? ui_text(L"Retail", L"Jeu complet", L"Completo") : ui_text(L"Demo", L"D\u00E9mo", L"Demo"), ui_text(L"other revision", L"autre r\u00E9vision", L"otra revisi\u00F3n"));
+            wcscpy_s(g->note, 200, ui_text(L"A default.xbe here is not the build reSOT supports; the game may not run.", L"Le default.xbe de ce dossier ne correspond pas \u00E0 la version prise en charge par reSOT ; le jeu peut ne pas d\u00E9marrer.", L"El default.xbe de esta carpeta no es la versi\u00F3n compatible con reSOT; puede que el juego no inicie."));
             return;
         }
-        wcscpy_s(g->note, 200, L"A folder holds a default.xbe that is not Prince of Persia: The Sands of Time.");
+        wcscpy_s(g->note, 200, ui_text(L"A folder holds a default.xbe that is not Prince of Persia: The Sands of Time.", L"Ce dossier contient un default.xbe qui n\u2019est pas celui de Prince of Persia : Les Sables du Temps.", L"La carpeta contiene un default.xbe que no pertenece a Prince of Persia: Las Arenas del Tiempo."));
         return;
     }
     /* No default.xbe (a portable package): what only one of them ships. */
     if (path_kind(dir, "shaders.bin") == 1 || path_kind(dir, "POP1") == 2) {
         g->kind = GAME_RETAIL;
-        wcscpy_s(g->line, 160, L"Retail  \x2022  recognised by its files");
+        wcscpy_s(g->line, 160, ui_text(L"Retail  \u2022  recognised by its files", L"Jeu complet  \u2022  reconnu par ses fichiers", L"Completo  \u2022  reconocido por sus archivos"));
     } else if (path_kind(dir, "preview.bik") == 1) {
         g->kind = GAME_DEMO;
-        wcscpy_s(g->line, 160, L"Demo  \x2022  recognised by its files");
+        wcscpy_s(g->line, 160, ui_text(L"Demo  \u2022  recognised by its files", L"D\u00E9mo  \u2022  reconnu par ses fichiers", L"Demo  \u2022  reconocido por sus archivos"));
     } else {
-        wcscpy_s(g->note, 200, L"Game files found but not identified: add the disc's default.xbe to that folder.");
+        wcscpy_s(g->note, 200, ui_text(L"Game files found but not identified: add the disc's default.xbe to that folder.", L"Fichiers de jeu non identifi\u00E9s : ajoutez le default.xbe du disque dans ce dossier.", L"Se encontraron archivos sin identificar: copia aqu\u00ED el default.xbe del disco."));
     }
 }
 
@@ -874,7 +892,7 @@ static void install_text(int kind, const RECT *button)
     wchar_t dir[MAX_PATH];
     int x = button->left - 20, w = button->right - button->left + 40;
     if (!in->dir[0]) {
-        text_at(L.f_text, RGB(120, 134, 160), L"Not installed", x, button->bottom + 12, w, 24,
+        text_at(L.f_text, RGB(120, 134, 160), ui_text(L"Not installed", L"Non install\u00E9", L"No instalado"), x, button->bottom + 12, w, 24,
                 DT_CENTER | DT_SINGLELINE);
         return;
     }
@@ -893,6 +911,7 @@ static void layout(void)
     SetRect(&L.btn[BTN_GAME].r, x0 + BTN_W + BTN_GAP, BTN_Y, x0 + 2 * BTN_W + BTN_GAP, BTN_Y + BTN_H);
     SetRect(&L.btn[BTN_ISO].r, WIN_W - 250, WIN_H - 62, WIN_W - 40, WIN_H - 34);
     SetRect(&L.btn[BTN_GITHUB].r, 40, WIN_H - 62, 330, WIN_H - 34);
+    SetRect(&L.btn[BTN_LANGUAGE].r, (WIN_W - 360) / 2, 490, (WIN_W + 360) / 2, 514);
     SetRect(&L.btn[BTN_CLOSE].r, WIN_W - 58, 18, WIN_W - 24, 52);
     SetRect(&L.btn[BTN_CANCEL].r, (WIN_W - CANCEL_W) / 2, CANCEL_Y, (WIN_W + CANCEL_W) / 2, CANCEL_Y + BTN_H);
     L.btn[BTN_CANCEL].visible = L.extracting;
@@ -904,6 +923,7 @@ static void layout(void)
     L.btn[BTN_GAME].enabled = L.inst[GAME_RETAIL].dir[0]
         && (L.this_kind == GAME_RETAIL || L.sibling_exists);
     L.btn[BTN_ISO].enabled = L.btn[BTN_GITHUB].enabled = 1;
+    L.btn[BTN_LANGUAGE].enabled = 1;
     L.btn[BTN_CLOSE].enabled = L.btn[BTN_CANCEL].enabled = 1;
     if (!L.btn[L.focus].enabled || !L.btn[L.focus].visible) {
         int mine = L.this_kind == GAME_DEMO ? BTN_DEMO : BTN_GAME;
@@ -976,6 +996,12 @@ static void render(void)
         twin((float)(cx + half), HEAD_Y + 9.0f, 4, 1);
         draw_button(BTN_DEMO);
         draw_button(BTN_GAME);
+        {
+            wchar_t language[96];
+            swprintf(language, 96, ui_text(L"Game language: %ls  \u25C2  \u25B8", L"Langue du jeu : %ls  \u25C2  \u25B8", L"Idioma del juego: %ls  \u25C2  \u25B8"),
+                     game_language_name(L.game_language));
+            link_at(BTN_LANGUAGE, language, DT_CENTER);
+        }
         for (i = BTN_ISO; i <= BTN_GITHUB; ++i)
             if (L.hover == i || L.focus == i) {
                 RECT r = L.btn[i].r;
@@ -985,48 +1011,48 @@ static void render(void)
     }
 
     SetBkMode(L.dc, TRANSPARENT);
-    caps_at(L.f_sub, 0, RGB(236, 216, 164), SUB_TEXT, 0, SUB_Y - 20, WIN_W, 40);
+    caps_at(L.f_sub, 0, RGB(236, 216, 164), ui_text(L"the sands of time", L"Les Sables du Temps", L"Las Arenas del Tiempo"), 0, SUB_Y - 20, WIN_W, 40);
     plate_fill(24,20,108,28,7,badge_top,badge_bottom,1);
     plate_edge(24,20,108,28,7,1,255,240,196,1);
     caps_at(L.f_label,1,RGB(22,30,50),L"v" RESOT_VERSION_W,24,20,108,28);
-    caps_at(L.f_badge, 2, RGB(22, 30, 50), BADGE_TEXT, 0, BADGE_Y, WIN_W, BADGE_H);
+    caps_at(L.f_badge, 2, RGB(22, 30, 50), ui_text(L"Recompiled", L"Recompil\u00E9", L"Recompilado"), 0, BADGE_Y, WIN_W, BADGE_H);
     if (L.extracting) {
         LONG64 done = L.done_bytes, total = L.total_bytes;
         const wchar_t *name = wcsrchr(L.iso_w, L'\\');
-        swprintf(text, 400, L"Installing  \x2022  %ls", name ? name + 1 : L.iso_w);
+        swprintf(text, 400, ui_text(L"Installing  \u2022  %ls", L"Installation  \u2022  %ls", L"Instalando  \u2022  %ls"), name ? name + 1 : L.iso_w);
         text_at(L.f_text, RGB(236, 240, 248), text, 60, BAR_Y - 44, WIN_W - 120, 30, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         if (total > 0)
-            swprintf(text, 400, L"%.0f%%  \x2022  %.1f of %.1f MB", 100.0 * (double)done / (double)total,
+            swprintf(text, 400, ui_text(L"%.0f%%  \u2022  %.1f of %.1f MB", L"%.0f%%  \u2022  %.1f sur %.1f Mo", L"%.0f%%  \u2022  %.1f de %.1f MB"), 100.0 * (double)done / (double)total,
                      done / 1048576.0, total / 1048576.0);
         else
-            wcscpy_s(text, 400, L"Reading the disc's file table\x2026");
+            wcscpy_s(text, 400, ui_text(L"Reading the disc's file table\u2026", L"Lecture de la table de fichiers du disque\u2026", L"Leyendo la tabla de archivos del disco\u2026"));
         text_at(L.f_small, RGB3(GOLD_LIGHT), text, 0, BAR_Y + 26, WIN_W, 20, DT_CENTER | DT_SINGLELINE);
         EnterCriticalSection(&L.lock);
         text_at(L.f_small, RGB(130, 150, 182), L.status, 120, BAR_Y + 46, WIN_W - 240, 18, DT_CENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
         LeaveCriticalSection(&L.lock);
     } else {
-        caps_at(L.f_label, 3, RGB(236, 216, 164), L"INSTALLED GAMES", 0, HEAD_Y, WIN_W, 18);
+        caps_at(L.f_label, 3, RGB(236, 216, 164), ui_text(L"INSTALLED GAMES", L"JEUX INSTALL\u00C9S", L"JUEGOS INSTALADOS"), 0, HEAD_Y, WIN_W, 18);
         install_text(GAME_DEMO, &L.btn[BTN_DEMO].r);
         install_text(GAME_RETAIL, &L.btn[BTN_GAME].r);
         text[0] = 0;
         if (L.error[0]) wcscpy_s(text, 400, L.error);
         else if (!L.inst[GAME_DEMO].dir[0] && !L.inst[GAME_RETAIL].dir[0])
-            wcscpy_s(text, 400, L.note[0] ? L.note : L"No game files found: install from your Xbox disc image (ISO).");
+            wcscpy_s(text, 400, L.note[0] ? L.note : ui_text(L"No game files found: install from your Xbox disc image (ISO).", L"Aucun fichier de jeu : installez l\u2019image disque Xbox (ISO).", L"No se encontraron archivos: instala la imagen de disco Xbox (ISO)."));
         else {
             int k;
             for (k = GAME_DEMO; k < GAME_KINDS && !text[0]; ++k)
                 if (L.inst[k].dir[0] && k != L.this_kind && !L.sibling_exists)
-                    swprintf(text, 400, L"%ls is not beside this program: copy it here to start that game.", kind_exe(k));
+                    swprintf(text, 400, ui_text(L"%ls is not beside this program: copy it here to start that game.", L"%ls n\u2019est pas dans ce dossier : copiez-le ici pour lancer ce jeu.", L"%ls no est\u00E1 junto al programa: c\u00F3pialo aqu\u00ED para iniciar ese juego."), kind_exe(k));
             for (k = GAME_DEMO; k < GAME_KINDS && !text[0]; ++k)
                 if (L.inst[k].info.note[0]) wcscpy_s(text, 400, L.inst[k].info.note);
         }
         if (text[0])
             text_at(L.f_small, L.error[0] ? RGB(255, 130, 110) : RGB(255, 200, 120), text, 60, MESSAGE_Y, WIN_W - 120, 20,
                     DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        link_at(BTN_GITHUB, L"\x2605  " GITHUB_TEXT, DT_LEFT);
-        link_at(BTN_ISO, L"Install from ISO\x2026  \x25B8", DT_RIGHT);
+        link_at(BTN_GITHUB, L"\u2605  " GITHUB_TEXT, DT_LEFT);
+        link_at(BTN_ISO, ui_text(L"Install from ISO\u2026  \u25B8", L"Installer depuis un ISO\u2026  \u25B8", L"Instalar desde ISO\u2026  \u25B8"), DT_RIGHT);
     }
-    text_at(L.f_text, L.hover == BTN_CLOSE ? RGB3(GOLD_LIGHT) : RGB3(GOLD), L"\x2715",
+    text_at(L.f_text, L.hover == BTN_CLOSE ? RGB3(GOLD_LIGHT) : RGB3(GOLD), L"\u2715",
             L.btn[BTN_CLOSE].r.left, L.btn[BTN_CLOSE].r.top, 34, 34, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     if (L.logo_dc) {
         BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
@@ -1163,13 +1189,13 @@ static void load_fonts(void)
     L.f_small = make_font(L"Segoe UI", 14, FW_NORMAL, 0, CLEARTYPE_QUALITY);
     L.f_label = make_font(L"Segoe UI", 13, FW_SEMIBOLD, 0, CLEARTYPE_QUALITY);
     L.f_badge = make_font(serif, 14, FW_BOLD, 0, CLEARTYPE_QUALITY);
-    L.sub_w = caps_width(L.f_sub, 0, SUB_TEXT);
-    L.head_w = caps_width(L.f_label, 3, L"INSTALLED GAMES");
-    L.badge_w = caps_width(L.f_badge, 2, BADGE_TEXT) + 48;
+    L.sub_w = caps_width(L.f_sub, 0, ui_text(L"the sands of time", L"Les Sables du Temps", L"Las Arenas del Tiempo"));
+    L.head_w = caps_width(L.f_label, 3, ui_text(L"INSTALLED GAMES", L"JEUX INSTALL\u00C9S", L"JUEGOS INSTALADOS"));
+    L.badge_w = caps_width(L.f_badge, 2, ui_text(L"Recompiled", L"Recompil\u00E9", L"Recompilado")) + 48;
     button = make_font(display, L.atlantis ? 28 : 24, L.atlantis ? FW_NORMAL : FW_SEMIBOLD, 0, ANTIALIASED_QUALITY);
-    L.label_demo = glow_text(button, L"Start Demo", BTN_W, BTN_H, 4);
-    L.label_game = glow_text(button, L"Start Game", BTN_W, BTN_H, 4);
-    L.label_cancel = glow_text(button, L"Cancel", CANCEL_W, BTN_H, 4);
+    L.label_demo = glow_text(button, ui_text(L"Start Demo", L"Lancer la d\u00E9mo", L"Iniciar demo"), BTN_W, BTN_H, 4);
+    L.label_game = glow_text(button, ui_text(L"Start Game", L"Lancer le jeu", L"Iniciar juego"), BTN_W, BTN_H, 4);
+    L.label_cancel = glow_text(button, ui_text(L"Cancel", L"Annuler", L"Cancelar"), CANCEL_W, BTN_H, 4);
     DeleteObject(button);
 }
 
@@ -1336,7 +1362,7 @@ static int pick_iso(wchar_t *out)
     IShellItem *item = NULL;
     PWSTR selected = NULL;
     FILEOPENDIALOGOPTIONS options;
-    COMDLG_FILTERSPEC types[] = {{L"Xbox disc image (*.iso, *.xiso)", L"*.iso;*.xiso"}, {L"All files", L"*.*"}};
+    COMDLG_FILTERSPEC types[] = {{ui_text(L"Xbox disc image (*.iso, *.xiso)", L"Image disque Xbox (*.iso, *.xiso)", L"Imagen de disco Xbox (*.iso, *.xiso)"), L"*.iso;*.xiso"}, {ui_text(L"All files", L"Tous les fichiers", L"Todos los archivos"), L"*.*"}};
     HRESULT hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
                                   &IID_IFileOpenDialog, (void **)&dialog);
     int ok = 0;
@@ -1344,8 +1370,8 @@ static int pick_iso(wchar_t *out)
         IFileOpenDialog_GetOptions(dialog, &options);
         IFileOpenDialog_SetOptions(dialog, options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_DONTADDTORECENT);
         IFileOpenDialog_SetFileTypes(dialog, 2, types);
-        IFileOpenDialog_SetTitle(dialog, L"reSOT - Choose the Xbox ISO of Prince of Persia: The Sands of Time");
-        IFileOpenDialog_SetOkButtonLabel(dialog, L"Extract and install");
+        IFileOpenDialog_SetTitle(dialog, ui_text(L"reSOT - Choose the Xbox ISO of Prince of Persia: The Sands of Time", L"reSOT - Choisir l\u2019ISO Xbox de Prince of Persia : Les Sables du Temps", L"reSOT - Elige la ISO Xbox de Prince of Persia: Las Arenas del Tiempo"));
+        IFileOpenDialog_SetOkButtonLabel(dialog, ui_text(L"Extract and install", L"Extraire et installer", L"Extraer e instalar"));
         hr = IFileOpenDialog_Show(dialog, L.hwnd);
         if (SUCCEEDED(hr)) hr = IFileOpenDialog_GetResult(dialog, &item);
         if (SUCCEEDED(hr)) hr = IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH, &selected);
@@ -1377,8 +1403,7 @@ static void begin_install(void)
     if (!to_ansi(iso, L.iso_a, sizeof L.iso_a)) {
         wchar_t short_path[MAX_PATH];
         if (!GetShortPathNameW(iso, short_path, MAX_PATH) || !to_ansi(short_path, L.iso_a, sizeof L.iso_a)) {
-            MessageBoxW(L.hwnd, L"Windows cannot give this file's path in the system code page.\n"
-                        L"Move the ISO to a folder with a plain name and try again.", L"reSOT", MB_ICONERROR);
+            MessageBoxW(L.hwnd, ui_text(L"Windows cannot give this file's path in the system code page.\nMove the ISO to a folder with a plain name and try again.", L"Windows ne peut pas convertir le chemin de ce fichier.\nD\u00E9placez l\u2019ISO dans un dossier au nom simple et r\u00E9essayez.", L"Windows no puede convertir la ruta de este archivo.\nMueve la ISO a una carpeta con un nombre sencillo e int\u00E9ntalo de nuevo."), L"reSOT", MB_ICONERROR);
             return;
         }
     }
@@ -1390,15 +1415,13 @@ static void begin_install(void)
     if (!to_ansi(out, L.out_a, sizeof L.out_a)) {
         swprintf(out, MAX_PATH, L"%ls\\Prince of Persia - The Sands of Time", L.exe_dir);
         if (!to_ansi(out, L.out_a, sizeof L.out_a)) {
-            MessageBoxW(L.hwnd, L"This program's folder has a path the game cannot open.\n"
-                        L"Move reSOT to a folder with a plain name and try again.", L"reSOT", MB_ICONERROR);
+            MessageBoxW(L.hwnd, ui_text(L"This program's folder has a path the game cannot open.\nMove reSOT to a folder with a plain name and try again.", L"Le jeu ne peut pas ouvrir le chemin de ce dossier.\nD\u00E9placez reSOT dans un dossier au nom simple et r\u00E9essayez.", L"El juego no puede abrir la ruta de esta carpeta.\nMueve reSOT a una carpeta con un nombre sencillo e int\u00E9ntalo de nuevo."), L"reSOT", MB_ICONERROR);
             return;
         }
     }
     if (game_files_present(L.out_a)) {
         wchar_t message[MAX_PATH + 200];
-        swprintf(message, MAX_PATH + 200, L"%ls already holds extracted game files.\n\n"
-                 L"Use them as they are? Choose No to extract the ISO again over them.", out);
+        swprintf(message, MAX_PATH + 200, ui_text(L"%ls already holds extracted game files.\n\nUse them as they are? Choose No to extract the ISO again over them.", L"%ls contient d\u00E9j\u00E0 les fichiers extraits du jeu.\n\nLes utiliser tels quels ? Choisissez Non pour extraire de nouveau l\u2019ISO par-dessus.", L"%ls ya contiene los archivos extra\u00EDdos del juego.\n\n\u00BFUsarlos as\u00ED? Elige No para volver a extraer la ISO encima."), out);
         switch (MessageBoxW(L.hwnd, message, L"reSOT", MB_YESNOCANCEL | MB_ICONQUESTION)) {
         case IDYES:
             adopt(L.out_a);
@@ -1417,14 +1440,14 @@ static void begin_install(void)
     if (!L.worker) {
         L.extracting = 0;
         layout();
-        wcscpy_s(L.error, 400, L"Could not start the extraction.");
+        wcscpy_s(L.error, 400, ui_text(L"Could not start the extraction.", L"Impossible de d\u00E9marrer l\u2019extraction.", L"No se pudo iniciar la extracci\u00F3n."));
     }
 }
 
 static void cancel_install(void)
 {
     if (!L.extracting) return;
-    if (MessageBoxW(L.hwnd, L"Stop installing? The files written so far stay in the folder.",
+    if (MessageBoxW(L.hwnd, ui_text(L"Stop installing? The files written so far stay in the folder.", L"Arr\u00EAter l\u2019installation ? Les fichiers d\u00E9j\u00E0 \u00E9crits resteront dans le dossier.", L"\u00BFDetener la instalaci\u00F3n? Los archivos escritos permanecer\u00E1n en la carpeta."),
                     L"reSOT", MB_YESNO | MB_ICONQUESTION) != IDYES)
         return;
     InterlockedExchange(&L.cancel, 1);
@@ -1440,20 +1463,20 @@ static void install_finished(WPARAM result)
     L.extracting = 0;
     if (result == 2) {
         refresh();
-        wcscpy_s(L.error, 400, L"Installation cancelled.");
+        wcscpy_s(L.error, 400, ui_text(L"Installation cancelled.", L"Installation annul\u00E9e.", L"Instalaci\u00F3n cancelada."));
         return;
     }
     if (result == 1 && game_files_present(L.out_a)) {
         if (adopt(L.out_a) == GAME_NONE)
-            wcscpy_s(L.error, 400, L"The ISO was extracted, but it is not a supported Prince of Persia disc.");
+            wcscpy_s(L.error, 400, ui_text(L"The ISO was extracted, but it is not a supported Prince of Persia disc.", L"L\u2019ISO a \u00E9t\u00E9 extraite, mais ce disque Prince of Persia n\u2019est pas pris en charge.", L"Se extrajo la ISO, pero el disco de Prince of Persia no es compatible."));
         return;
     }
     to_wide(s_last_error, error, 400);
     refresh();
     if (result == 1)
-        wcscpy_s(L.error, 400, L"The ISO was extracted, but it holds no Prince of Persia game files.");
+        wcscpy_s(L.error, 400, ui_text(L"The ISO was extracted, but it holds no Prince of Persia game files.", L"L\u2019ISO a \u00E9t\u00E9 extraite, mais ne contient aucun fichier du jeu Prince of Persia.", L"Se extrajo la ISO, pero no contiene archivos del juego Prince of Persia."));
     else
-        swprintf(L.error, 400, L"Installation failed: %ls", error[0] ? error : L"extract-xiso stopped with an error");
+        swprintf(L.error, 400, ui_text(L"Installation failed: %ls", L"\u00C9chec de l\u2019installation : %ls", L"Error de instalaci\u00F3n: %ls"), error[0] ? error : ui_text(L"extract-xiso stopped with an error", L"extract-xiso a rencontr\u00E9 une erreur", L"extract-xiso termin\u00F3 con un error"));
 }
 
 /* ── starting a game ───────────────────────────────────────── */
@@ -1487,7 +1510,7 @@ static void start(int kind)
     }
     _putenv_s("RESOT_ASSET_DIR", "");
     _putenv_s("RESOT_SKIP_LAUNCHER", "");
-    swprintf(L.error, 400, L"Could not start %ls (error %lu).", kind_exe(kind), GetLastError());
+    swprintf(L.error, 400, ui_text(L"Could not start %ls (error %lu).", L"Impossible de d\u00E9marrer %ls (erreur %lu).", L"No se pudo iniciar %ls (error %lu)."), kind_exe(kind), GetLastError());
 }
 
 static void activate(int id)
@@ -1498,6 +1521,20 @@ static void activate(int id)
     case BTN_GAME: start(GAME_RETAIL); break;
     case BTN_ISO: begin_install(); break;
     case BTN_GITHUB: ShellExecuteW(L.hwnd, L"open", GITHUB_URL, NULL, NULL, SW_SHOWNORMAL); break;
+    case BTN_LANGUAGE: {
+        char ini[MAX_PATH], value[8];
+        int next = L.game_language == 1 ? 4 : L.game_language == 4 ? 5 : 1;
+        ini_path(ini, sizeof ini);
+        sprintf_s(value, sizeof value, "%d", next);
+        if (ini[0] && WritePrivateProfileStringA("Game", "Language", value, ini)) {
+            L.game_language = next;
+            L.error[0] = 0;
+        } else {
+            wcscpy_s(L.error, 400, ui_text(L"Could not save the language in resot-options.ini.", L"Impossible d\u2019enregistrer la langue dans resot-options.ini.", L"No se pudo guardar el idioma en resot-options.ini."));
+        }
+        InvalidateRect(L.hwnd, NULL, FALSE);
+        break;
+    }
     case BTN_CLOSE:
         if (L.extracting) { cancel_install(); if (!L.cancel) break; }
         L.result = RESOT_LAUNCH_QUIT;
@@ -1518,7 +1555,7 @@ static int hit(int x, int y)
 
 static void move_focus(int step)
 {
-    static const int order[] = {BTN_DEMO, BTN_GAME, BTN_ISO, BTN_GITHUB};
+    static const int order[] = {BTN_DEMO, BTN_GAME, BTN_LANGUAGE, BTN_ISO, BTN_GITHUB};
     int i, at = 0, n = (int)(sizeof order / sizeof order[0]);
     for (i = 0; i < n; ++i) if (order[i] == L.focus) at = i;
     for (i = 1; i <= n; ++i) {
@@ -1569,8 +1606,13 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wp, LPARAM l
     case WM_KEYDOWN:
         if (wp == VK_ESCAPE) activate(BTN_CLOSE);
         else if (wp == VK_RETURN || wp == VK_SPACE) activate(L.extracting ? BTN_CANCEL : L.focus);
-        else if (wp == VK_LEFT || (wp == VK_TAB && GetKeyState(VK_SHIFT) < 0)) move_focus(-1);
-        else if (wp == VK_RIGHT || wp == VK_TAB) move_focus(1);
+        else if (wp == VK_LEFT || (wp == VK_TAB && GetKeyState(VK_SHIFT) < 0)) {
+            if (L.focus == BTN_LANGUAGE && wp != VK_TAB) activate(BTN_LANGUAGE);
+            else move_focus(-1);
+        } else if (wp == VK_RIGHT || wp == VK_TAB) {
+            if (L.focus == BTN_LANGUAGE && wp != VK_TAB) activate(BTN_LANGUAGE);
+            else move_focus(1);
+        }
         return 0;
     case WM_TIMER: {
         if(!L.extracting && InterlockedCompareExchange(&s_update.ready,0,1)==1) {
@@ -1632,7 +1674,7 @@ static int create_window(void)
     x = work.left + (work.right - work.left - WIN_W) / 2;
     y = work.top + (work.bottom - work.top - WIN_H) / 2;
     L.hwnd = CreateWindowExW(WS_EX_APPWINDOW, wc.lpszClassName,
-                             L"reSOT - Prince of Persia: The Sands of Time",
+                             ui_text(L"reSOT - Prince of Persia: The Sands of Time", L"reSOT - Prince of Persia : Les Sables du Temps", L"reSOT - Prince of Persia: Las Arenas del Tiempo"),
                              WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX, x, y, WIN_W, WIN_H,
                              NULL, NULL, wc.hInstance, NULL);
     if (!L.hwnd) return 0;
@@ -1686,6 +1728,7 @@ int resot_launcher_run(const char *target_id, char *game_dir, size_t game_dir_si
     int result;
 
     memset(&L, 0, sizeof L);
+    detect_ui_language();
     L.target_id = target_id;
     L.this_kind = strcmp(target_id, "xbox-retail") ? GAME_DEMO : GAME_RETAIL;
     L.flags = flags;
@@ -1695,6 +1738,12 @@ int resot_launcher_run(const char *target_id, char *game_dir, size_t game_dir_si
     if (!GetModuleFileNameW(NULL, L.exe_path, MAX_PATH) || !(slash = wcsrchr(L.exe_path, L'\\')))
         return RESOT_LAUNCH_HERE;   /* nothing to show this from: keep the old path */
     wcsncpy_s(L.exe_dir, MAX_PATH, L.exe_path, (size_t)(slash - L.exe_path));
+    {
+        char ini[MAX_PATH];
+        ini_path(ini, sizeof ini);
+        L.game_language = ini[0] ? (int)GetPrivateProfileIntA("Game", "Language", 1, ini) : 1;
+        if (L.game_language != 1 && L.game_language != 4 && L.game_language != 5) L.game_language = 1;
+    }
     /* The other target's executable: this one's name with the other ID
      * (sot-xbox-demo.exe <-> sot-xbox-retail.exe, -abi builds alike). */
     {

@@ -1,5 +1,14 @@
 # reSOT for Android
 
+The launcher UI follows the system language when it is English, French or
+Spanish; other system languages fall back to English. Its separate game
+language selector is limited to English `1`, French `4` and Spanish `5`, the
+three confirmed in the supported USA retail ISO. It saves the selection in
+`resot-options.ini` under `[Game] Language` and applies it on the next game
+start. Android defaults the game language to Spanish, while Windows defaults
+to English. This requests the game's own text; it does not translate the game
+or create missing game assets.
+
 After 0.3.4: the Vulkan shaders no longer declare the SPIR-V extensions
 `SPV_GOOGLE_hlsl_functionality1` / `SPV_GOOGLE_user_type`, which older Mali
 drivers reject at the first pipeline (closing the game after Start Game,

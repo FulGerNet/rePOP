@@ -46,13 +46,13 @@ import java.util.Random;
  * belongs in launcher.c too, and the reverse.
  */
 final class LauncherView extends View {
-    static final int BTN_DEMO = 0, BTN_GAME = 1, BTN_ISO = 2, BTN_GITHUB = 3, BTN_CLOSE = 4, BTN_CANCEL = 5, BTN_DRIVER = 6, BTN_LOGS = 7, BTN_COUNT = 8;
+    static final int BTN_DEMO = 0, BTN_GAME = 1, BTN_ISO = 2, BTN_GITHUB = 3, BTN_CLOSE = 4,
+        BTN_CANCEL = 5, BTN_DRIVER = 6, BTN_LOGS = 7, BTN_LANGUAGE = 8, BTN_COUNT = 9;
     // launcher.c's layout, on its 1000 x 640 plane
     private static final float BASE_W = 1000, BASE_H = 640;
     private static final float LOGO_Y = 0, LOGO_SIZE = 132, TEAL_X = 182, TITLE_Y = 122, TITLE_H = 124, SUB_Y = 256,
         BADGE_Y = 272, BADGE_H = 26, HEAD_RULE_Y = 320, HEAD_Y = 336, BTN_W = 300, BTN_H = 56, BTN_GAP = 64,
-        BTN_Y = 368, MESSAGE_Y = 510, BAR_Y = 420, CANCEL_W = 240, CANCEL_Y = 498;
-    private static final String BADGE_TEXT = "Recompiled", SUB_TEXT = "the sands of time";
+        BTN_Y = 368, MESSAGE_Y = 516, BAR_Y = 420, CANCEL_W = 240, CANCEL_Y = 498;
     private final String versionLabel;
     // the ornament of the ground (launcher.c, ornament())
     private static final float PATTERN = 128, PETAL = 46, PETAL_W = 9, RING = 55, STAR = 19;
@@ -71,6 +71,7 @@ final class LauncherView extends View {
         final String[] line = new String[2], dir = new String[2];
         final boolean[] installed = new boolean[2], exact = new boolean[2];
         String error = "", note = "";
+        int gameLanguage = GameLanguage.SPANISH;
         boolean extracting;
         String isoName = "", status = "";
         long done, total;
@@ -171,6 +172,7 @@ final class LauncherView extends View {
         buttons[BTN_DRIVER].set(cx - 120, H - 62, cx + 120, H - 34);
         buttons[BTN_CLOSE].set(W - 58 - insetRight, 18, W - 24 - insetRight, 52);
         buttons[BTN_CANCEL].set(cx - CANCEL_W / 2, top + CANCEL_Y, cx + CANCEL_W / 2, top + CANCEL_Y + BTN_H);
+        buttons[BTN_LANGUAGE].set(cx - 180, top + 490, cx + 180, top + 514);
         buttons[BTN_LOGS].set(insetLeft+24,20,insetLeft+132,48);
     }
 
@@ -186,6 +188,7 @@ final class LauncherView extends View {
         enabled[BTN_ISO] = enabled[BTN_GITHUB] = enabled[BTN_CLOSE] = enabled[BTN_CANCEL] = true;
         enabled[BTN_DRIVER] = true;
         enabled[BTN_LOGS] = true;
+        enabled[BTN_LANGUAGE] = true;
         if (!enabled[focus] || !visible(focus))
             focus = state.extracting ? BTN_CANCEL : enabled[BTN_DEMO] ? BTN_DEMO : enabled[BTN_GAME] ? BTN_GAME : BTN_ISO;
         invalidate();
@@ -563,7 +566,8 @@ final class LauncherView extends View {
      *  gold plate with navy lettering. */
     private void button(Canvas c, int id, String label) {
         RectF r = buttons[id];
-        float w = r.width(), h = r.height(), tip = h * 0.32f, size = atlantis ? 28 : 24;
+        float w = r.width(), h = r.height(), tip = h * 0.32f,
+              size = id == BTN_LANGUAGE ? 16 : atlantis ? 28 : 24;
         boolean on = enabled[id], hot = on && (hover == id || pressed == id), focused = on && focus == id;
         if (!on) {
             plateFill(c, r.left, r.top, w, h, tip, 0x0C1424, 0x080E1A, 0.85f);
@@ -584,7 +588,7 @@ final class LauncherView extends View {
     private void installText(Canvas c, int kind, RectF b) {
         float x = b.left - 20, w = b.width() + 40;
         if (!state.installed[kind]) {
-            text(c, "Not installed", x, b.bottom + 24, w, sans, 18, 0xFF7886A0, Paint.Align.CENTER);
+            text(c, getContext().getString(R.string.launcher_not_installed), x, b.bottom + 24, w, sans, 18, 0xFF7886A0, Paint.Align.CENTER);
             return;
         }
         text(c, state.line[kind], x, b.bottom + 24, w, sans, 18, state.exact[kind] ? 0xFFECF0F8 : 0xFFFFC878,
@@ -631,7 +635,9 @@ final class LauncherView extends View {
 
         // THE SANDS OF TIME between two gold lines ending in open diamonds
         float sub = top + SUB_Y + 0.5f;
-        float half = caps(canvas, SUB_TEXT, cx, sub, display, atlantis ? 21 : 18, 0, 0xFFECD8A4) / 2 + 18;
+        String subtitle = getContext().getString(R.string.launcher_tagline);
+        String badgeText = getContext().getString(R.string.launcher_badge);
+        float half = caps(canvas, subtitle, cx, sub, display, atlantis ? 21 : 18, 0, 0xFFECD8A4) / 2 + 18;
         line(canvas, cx - half - 130, sub, cx - half, sub, 1, GOLD, 0.9f);
         line(canvas, cx + half, sub, cx + half + 130, sub, 1, GOLD, 0.9f);
         for (int i = -1; i <= 1; i += 2) {
@@ -639,11 +645,11 @@ final class LauncherView extends View {
             diamond(canvas, cx + i * (half + 136), sub, 3, 0x0C1A32, 1);
         }
         // the badge
-        float bw = caps(null, BADGE_TEXT, 0, 0, serifBold, 14, 2, 0) + 48, bx = cx - bw / 2, by = top + BADGE_Y;
+        float bw = caps(null, badgeText, 0, 0, serifBold, 14, 2, 0) + 48, bx = cx - bw / 2, by = top + BADGE_Y;
         plateFill(canvas, bx, by, bw, BADGE_H, 9, 0xFAE8B0, 0xB0843E, 1);
         plateEdge(canvas, bx, by, bw, BADGE_H, 9, 1, 0xFFF0C4, 1);
         plateEdge(canvas, bx + 3, by + 3, bw - 6, BADGE_H - 6, 7.6f, 1, 0x785824, 0.8f);
-        caps(canvas, BADGE_TEXT, cx, by + BADGE_H / 2, serifBold, 14, 2, 0xFF161E32);
+        caps(canvas, badgeText, cx, by + BADGE_H / 2, serifBold, 14, 2, 0xFF161E32);
         float vx = buttons[BTN_LOGS].left;
         plateFill(canvas, vx, 20, 108, 28, 7, 0xFAE8B0, 0xB0843E, 1);
         plateEdge(canvas, vx, 20, 108, 28, 7, focus == BTN_LOGS || hover == BTN_LOGS ? 2 : 1, 0xFFF0C4, 1);
@@ -664,31 +670,33 @@ final class LauncherView extends View {
             line(canvas, bx0 - 3.5f, by0 + bh + 2.5f, bx0 + bw0 + 2.5f, by0 + bh + 2.5f, 1, GOLD, 1);
             diamond(canvas, bx0 - 6, by0 + bh / 2, 5, 0xDEBE7C, 1);
             diamond(canvas, bx0 + bw0 + 5, by0 + bh / 2, 5, 0xDEBE7C, 1);
-            text(canvas, "Installing  •  " + state.isoName, cx - BASE_W / 2 + 60, by0 - 29, BASE_W - 120, sans, 18,
+            text(canvas, getContext().getString(R.string.launcher_installing, state.isoName), cx - BASE_W / 2 + 60, by0 - 29, BASE_W - 120, sans, 18,
                  0xFFECF0F8, Paint.Align.CENTER);
             text(canvas, state.total > 0
-                    ? String.format(java.util.Locale.US, "%.0f%%  •  %.1f of %.1f MB", 100.0 * state.done / state.total,
-                                    state.done / 1048576.0, state.total / 1048576.0)
-                    : "Reading the disc's file table…",
+                    ? String.format(java.util.Locale.US, getContext().getString(R.string.launcher_progress_mb),
+                        100.0 * state.done / state.total, state.done / 1048576.0, state.total / 1048576.0)
+                    : getContext().getString(R.string.launcher_reading_disc),
                  cx - BASE_W / 2, by0 + 36, BASE_W, sans, 14, argb(GOLD_LIGHT, 1), Paint.Align.CENTER);
             text(canvas, state.status, cx - BASE_W / 2 + 120, by0 + 55, BASE_W - 240, sans, 14, 0xFF8296B6, Paint.Align.CENTER);
-            button(canvas, BTN_CANCEL, "Cancel");
+            button(canvas, BTN_CANCEL, getContext().getString(R.string.launcher_cancel));
         } else {
             float head = top + HEAD_Y + 9;
-            half = caps(canvas, "INSTALLED GAMES", cx, head, sansBold, 13, 3, 0xFFECD8A4) / 2 + 16;
+            half = caps(canvas, getContext().getString(R.string.launcher_installed_games), cx, head, sansBold, 13, 3, 0xFFECD8A4) / 2 + 16;
             twin(canvas, cx - half - 17, head, 4, true);
             twin(canvas, cx + half, head, 4, true);
-            button(canvas, BTN_DEMO, "Start Demo");
-            button(canvas, BTN_GAME, "Start Game");
+            button(canvas, BTN_DEMO, getContext().getString(R.string.launcher_start_demo));
+            button(canvas, BTN_GAME, getContext().getString(R.string.launcher_start_game));
+            button(canvas, BTN_LANGUAGE, getContext().getString(R.string.launcher_game_language,
+                GameLanguage.label(state.gameLanguage, getContext())));
             installText(canvas, 0, buttons[BTN_DEMO]);
             installText(canvas, 1, buttons[BTN_GAME]);
             String message = !state.error.isEmpty() ? state.error : state.note;
             if (!message.isEmpty())
                 text(canvas, message, 60 + insetLeft, top + MESSAGE_Y + 10, W - 120 - insetLeft - insetRight, sans, 14,
                      !state.error.isEmpty() ? 0xFFFF826E : 0xFFFFC878, Paint.Align.CENTER);
-            link(canvas, BTN_GITHUB, "★  github.com/FulGerNet/rePOP", Paint.Align.LEFT, 200);
-            link(canvas, BTN_DRIVER, "GPU driver…", Paint.Align.CENTER, 90);
-            link(canvas, BTN_ISO, "Install from ISO…  ▸", Paint.Align.RIGHT, 150);
+            link(canvas, BTN_GITHUB, getContext().getString(R.string.launcher_github), Paint.Align.LEFT, 200);
+            link(canvas, BTN_DRIVER, getContext().getString(R.string.launcher_gpu_driver), Paint.Align.CENTER, 90);
+            link(canvas, BTN_ISO, getContext().getString(R.string.launcher_install_iso), Paint.Align.RIGHT, 150);
         }
         text(canvas, "✕", buttons[BTN_CLOSE].left, buttons[BTN_CLOSE].centerY(), 34, sans, 18,
              argb(hover == BTN_CLOSE || focus == BTN_CLOSE ? GOLD_LIGHT : GOLD, 1), Paint.Align.CENTER);
@@ -698,7 +706,7 @@ final class LauncherView extends View {
 
     // ── the logs tip: a bubble beside the version plate, shown once a launch ──
 
-    private static final String LOGS_TIP = "The game crashed? Tap here for logs!";
+    private String logsTip() { return getContext().getString(R.string.launcher_logs_tip); }
     private static final float TIP_IN = 1.5f, TIP_HOLD = 8, TIP_FADE = 0.6f;   // seconds
     private final RectF tip = new RectF();
 
@@ -712,9 +720,10 @@ final class LauncherView extends View {
     private void drawLogsTip(Canvas c) {
         float a = tipAlpha();
         if (a <= 0) { tip.setEmpty(); return; }
+        String logsTip = logsTip();
         RectF plate = buttons[BTN_LOGS];
         paint.setTypeface(sans); paint.setTextSize(13); paint.setLetterSpacing(0);
-        float w = paint.measureText(LOGS_TIP) + 28, x = plate.right + 14 - 6 * (1 - a), y = plate.top;
+        float w = paint.measureText(logsTip) + 28, x = plate.right + 14 - 6 * (1 - a), y = plate.top;
         tip.set(x, y, x + w, plate.bottom);
         paint.setStyle(Paint.Style.FILL); paint.setShader(null);
         paint.setColor(argb(0x0C1A32, 0.92f * a));
@@ -726,7 +735,7 @@ final class LauncherView extends View {
         paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1);
         paint.setColor(argb(GOLD, 0.9f * a));
         c.drawRoundRect(tip, 8, 8, paint);
-        text(c, LOGS_TIP, x + 14, tip.centerY(), w - 28, sans, 13, argb(GOLD_LIGHT, a), Paint.Align.LEFT);
+        text(c, logsTip, x + 14, tip.centerY(), w - 28, sans, 13, argb(GOLD_LIGHT, a), Paint.Align.LEFT);
     }
 
     // ── input: touch, and a controller or keyboard moving the focus ──
@@ -760,7 +769,8 @@ final class LauncherView extends View {
     @Override public boolean performClick() { super.performClick(); return true; }
 
     private void moveFocus(int step) {
-        int[] order = state.extracting ? new int[] { BTN_CANCEL, BTN_LOGS } : new int[] { BTN_DEMO, BTN_GAME, BTN_ISO, BTN_DRIVER, BTN_GITHUB, BTN_LOGS };
+        int[] order = state.extracting ? new int[] { BTN_CANCEL, BTN_LOGS }
+            : new int[] { BTN_DEMO, BTN_GAME, BTN_LANGUAGE, BTN_ISO, BTN_DRIVER, BTN_GITHUB, BTN_LOGS };
         int at = 0;
         for (int i = 0; i < order.length; i++) if (order[i] == focus) at = i;
         for (int i = 1; i <= order.length; i++) {
@@ -771,8 +781,14 @@ final class LauncherView extends View {
 
     @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
         switch (keyCode) {
-        case KeyEvent.KEYCODE_DPAD_LEFT: case KeyEvent.KEYCODE_DPAD_UP: moveFocus(-1); return true;
-        case KeyEvent.KEYCODE_DPAD_RIGHT: case KeyEvent.KEYCODE_DPAD_DOWN: case KeyEvent.KEYCODE_TAB: moveFocus(1); return true;
+        case KeyEvent.KEYCODE_DPAD_LEFT:
+            if (focus == BTN_LANGUAGE) listener.onActivate(BTN_LANGUAGE); else moveFocus(-1);
+            return true;
+        case KeyEvent.KEYCODE_DPAD_RIGHT:
+            if (focus == BTN_LANGUAGE) listener.onActivate(BTN_LANGUAGE); else moveFocus(1);
+            return true;
+        case KeyEvent.KEYCODE_DPAD_UP: moveFocus(-1); return true;
+        case KeyEvent.KEYCODE_DPAD_DOWN: case KeyEvent.KEYCODE_TAB: moveFocus(1); return true;
         case KeyEvent.KEYCODE_DPAD_CENTER: case KeyEvent.KEYCODE_ENTER: case KeyEvent.KEYCODE_BUTTON_A:
         case KeyEvent.KEYCODE_BUTTON_START: case KeyEvent.KEYCODE_SPACE:
             listener.onActivate(focus); return true;

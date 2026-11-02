@@ -10,6 +10,7 @@
  */
 
 #include "kernel.h"
+#include "../../../../windows/src/options.h"
 #include <string.h>
 
 /* ============================================================================
@@ -120,7 +121,7 @@ NTSTATUS __stdcall xbox_XeUnloadSection(PXBE_SECTION_HEADER Section)
  * SMBus. For recompilation, we return sensible defaults:
  *   - Region: North America
  *   - Video: NTSC, widescreen+HDTV enabled
- *   - Language: English
+ *   - Language: selected in the launcher (English 1, French 4, Spanish 5)
  *   - Audio: Stereo, Dolby Digital
  *   - DVD Region: Region 1 (North America)
  * ============================================================================ */
@@ -136,9 +137,10 @@ NTSTATUS __stdcall xbox_ExQueryNonVolatileSetting(
 
     switch (ValueIndex) {
     case XC_LANGUAGE:
-        /* English = 1 */
+        /* RE-SoT: Honor the saved launcher choice; unsupported values fall
+         * back to English in the options layer. */
         if (ValueLength >= sizeof(ULONG)) {
-            *(PULONG)Value = 1;
+            *(PULONG)Value = (ULONG)resot_game_language();
             if (Type) *Type = 4; /* REG_DWORD */
             if (ResultLength) *ResultLength = sizeof(ULONG);
         }

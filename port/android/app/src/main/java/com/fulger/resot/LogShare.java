@@ -33,7 +33,7 @@ final class LogShare {
     void share() {
         if(preparing) return;
         preparing=true; handler.removeCallbacks(cleanup);
-        Toast.makeText(activity,"Preparing diagnostic logs…",Toast.LENGTH_SHORT).show();
+        Toast.makeText(activity,activity.getString(R.string.launcher_prepare_logs),Toast.LENGTH_SHORT).show();
         new Thread(() -> {
             File output=null, scratch=null;
             try {
@@ -56,19 +56,19 @@ final class LogShare {
                     Uri uri=new Uri.Builder().scheme("content").authority(activity.getPackageName()+".logs")
                         .appendPath(ready.getName()).build();
                     Intent send=new Intent(Intent.ACTION_SEND).setType("application/zip")
-                        .putExtra(Intent.EXTRA_STREAM,uri).putExtra(Intent.EXTRA_SUBJECT,"reSOT diagnostic logs")
+                        .putExtra(Intent.EXTRA_STREAM,uri).putExtra(Intent.EXTRA_SUBJECT,activity.getString(R.string.launcher_share_logs))
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                     send.setClipData(ClipData.newRawUri("reSOT logs",uri));
-                    Intent chooser=Intent.createChooser(send,"Share reSOT logs");
+                    Intent chooser=Intent.createChooser(send,activity.getString(R.string.launcher_share_title));
                     chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                     LogShareCleanupService.schedule(activity);
                     try { activity.startActivityForResult(chooser,REQUEST); }
-                    catch(ActivityNotFoundException e) { ready.delete(); error("No sharing app is available."); }
+                    catch(ActivityNotFoundException e) { ready.delete(); error(activity.getString(R.string.launcher_no_share_app)); }
                 });
             } catch(Exception e) {
                 if(output!=null) output.delete();
                 String message=e.getMessage();
-                activity.runOnUiThread(() -> { preparing=false; error("Could not prepare logs: "+message); resume(); });
+                activity.runOnUiThread(() -> { preparing=false; error(activity.getString(R.string.launcher_logs_failed,message)); resume(); });
             } finally {
                 if(scratch!=null) { File[] files=scratch.listFiles(); if(files!=null) for(File f:files) f.delete(); scratch.delete(); }
             }
@@ -76,8 +76,8 @@ final class LogShare {
     }
     private void error(String message) {
         if(!activity.isFinishing() && !activity.isDestroyed())
-            new AlertDialog.Builder(activity).setTitle("Share logs").setMessage(message)
-                .setPositiveButton(android.R.string.ok,null).show();
+            new AlertDialog.Builder(activity).setTitle(activity.getString(R.string.launcher_share_title)).setMessage(message)
+                .setPositiveButton(R.string.launcher_ok,null).show();
     }
     private void clearExports() {
         expireExports(activity,Long.MAX_VALUE);

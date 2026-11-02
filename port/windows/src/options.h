@@ -8,6 +8,13 @@
 void resot_options_init(void);
 /* Create the bundled INI only when absent, before the Windows launcher. */
 void resot_options_prepare_config(void);
+/* Xbox EEPROM language ID requested by the launcher (English=1, French=4,
+ * Spanish=5, as confirmed in the supported USA ISO). */
+int resot_game_language(void);
+static inline int resot_language_supported(int language)
+{
+    return language == 1 || language == 4 || language == 5;
+}
 /* One line with the graphics settings, for the diagnostics panel. */
 void resot_options_summary(char *out, unsigned size);
 
