@@ -1,5 +1,91 @@
 # Validation log
 
+## 2026-11-02 (night): v0.4.4 final builds
+
+KickOff 32 ahead with RESOT_FLIP_AHEAD (title at most one flip ahead of the executor), Vulkan,
+retail, heavy scene, user: black level gone; first version waited 100 ms per frame for flips
+D3D had not submitted (8 fps), fixed by waiting only while the executor has submitted work;
+then the user saw about 140 fps in the heavy scene and, in an empty view, about 780 falling to
+300 fps: the flip limit waited every frame (title waited 30%, executor 45%). Changed after that
+run: KickOff right after the flip token (sub_0036C840); not yet run.
+
+Light halos green or flashing white (user, retail Vulkan, 225%): [HALO-DRAW] factor0 values
+like FF02FEFF. Halo ratio LEQUAL/ALWAYS probe pixels at [light+0x34] (0x000CE3E2..0x000CE417)
+now kept in 0..1 by a wrapper of sub_000CE2C0; built, not yet seen.
+
+Launchers: the game language button is hidden on Windows and Android (reSOT Options only).
+Version 0.4.4, Android versionCode 14. HD menu logo headers now committed. tools/hd-font.py
+rerun on both targets: headers byte-identical to the committed ones.
+
+Checks: python tools/check-hlsl.py ok; tools/recomp.ps1 -Target xbox-retail -SkipAnalysis,
+-BuildOnly both targets and tools/build-android.ps1 built with no errors (logs/rel045-*,
+logs/rel044-*); executables report 0.4.4; aapt: versionCode 14, versionName 0.4.4.
+
+Not checked: Android not installed or run; the demo and D3D11/D3D12 not run with these changes;
+the halo fix, the kick after the flip and the hidden launcher button not seen.
+
+## 2026-11-02 (evening): direct path on by default, executor second pass
+
+At the user's request the direct path is on by default on every renderer and host
+(`nv2a_direct.inc`; `RESOT_DIRECT_DRAW=0` turns it off; the log prints `[DIRECT] mode`).
+Reason seen in the logs: the user's Windows Vulkan runs of 12:21-12:25 had
+`RESOT_DIRECT_DRAW=1` in resot-options.ini, which nothing reads; their logs show
+`KickOff: asynchronous (1 submissions ahead)`, i.e. the direct path off.
+
+Executor changes, from the perf7 profile (retail, D3D12, heavy scene: fetch_attr 10.7%,
+ng_geometry_find 6.4%, memcmp 5.5%, realloc about 1.7% of the executor's samples):
+fetch_attr's checks taken once per draw (`fetch_plan`/`fetch_planned`, D3D11 and native,
+also in the widescreen classification); geometry cache slot hash by words over at most
+about 64 indices; direct records' index range instead of a walk; snapshot buffers grown
+by powers of two.
+
+Checks: `python tools/check-hlsl.py` ok; `tools/recomp.ps1 -BuildOnly` both targets and
+`tools/build-android.ps1` built with no errors (logs/perf9-*-build.txt).
+
+Not checked: nothing was run. No FPS, image or log exists for these builds; D3D11,
+Vulkan and Android have not run the direct path; the demo stays synchronous.
+
+First run of that build, Windows Vulkan, retail, same heavy scene, played by the user
+(bin/logs/xbox-retail-err.txt, RTX 3060): `[DIRECT] mode 1 (default)`, 8 submissions ahead;
+the user saw about 98 fps; the log, 90-97 fps at 1,611 draws a frame, executor 8.1-8.3 ms a
+frame, busy 9.1 s of 10 s; title 0.9-1.2 ms, waiting 1.6 s of 10 s. No defect reported.
+Not an A/B: the earlier figures are D3D12. In the same log only about 350 draws a frame are
+direct indexed tokens (22%; the D3D12 log of the morning has the same share): `[DRAWS]` now
+counts the rest by path (built, not yet run).
+
+Run with `[DRAWS]` (Vulkan, retail, heavy scene, user, 18:16): per 5 s 199k direct indexed,
+438k ring indexed, 84k ring inline, 5k Begin/End immediate; 85 fps at 1,725 draws a frame,
+executor 8.95 ms. RESOT_PROFILE_MS and RESOT_DRAW_CENSUS did not reach that run. Ring indexed
+draws traced statically to RunPushBuffer's copy branch (DIRECT-RENDERER.md); retail now
+replaces it with `NV097_RESOT_DIRECT_PUSHBUFFER`. `tools/recomp.ps1 -Target xbox-retail
+-BuildOnly` built (logs/perf11-retail-build.txt). Not run.
+
+Run of that build (Vulkan, retail, heavy scene, user, 18:25): the user saw 94-100 fps and
+reported no defect. Log: ring indexed draws 0; pushbuffer draws 4.97 M from 343 records,
+0 changed, 0 refused, 0 table full; resident 5.63 M hits, 1 reset, 14.2 MB source; executor
+6.2-6.6 ms a frame (from 8.95), busy 7.2 s of 10 s; 92.6 fps at 1,610 draws a frame in the
+log; title waited 2.0 s of 10 s. The executor is no longer saturated: the limit is elsewhere
+(title thread or GPU), not measured: no profile in that run. Demo and Android built only.
+
+Profiled runs (Vulkan, retail, heavy scene, user, RESOT_PROFILE_MS=1, launched from
+PowerShell): executor 13% in GDI calls under ng_present (NVIDIA Vulkan present-mode query
+every frame), title thread 10% in NtQueryVirtualMemory (guest reads of extended-heap
+objects; 28% in the menu). Changed: the present-mode query only when the requested mode
+or the swapchain changes; guest_probe.h answers extended-heap reads from guest_vmem.c's
+page table. Next run, same scene: present 1.7 -> 0.1 ms a frame, neither cost left in the
+profile, about 101 fps in the log (about 90 before, also profiled); the executor now waits
+39% of its samples: the title thread is the limit. Its largest entries: D3DX matrix
+multiply 0x00352302 (9%) and inverse 0x0035244B (10%, x87). The multiply is now written
+in target_hooks.c (same operations and order); being built. Demo and Android built
+(logs/perf12-*-build.txt), not run.
+
+With it (`tools/recomp.ps1 -Target xbox-retail -SkipAnalysis`, logs/perf13-retail-build.txt;
+calls now go through RECOMP_ICALL_SAFE): 0x00352302 fell from 9% to 0.9% of the title
+thread. Profiled run, user, a heavier spot of the same scene (1,706 draws and 127,000
+vertices a frame against 1,608 and 113,000): 87 fps, executor 7.5 ms; the title waits 34% in
+KickOff and the executor 28% for a kick: they alternate rather than overlap. No defect
+reported. Not checked: the demo has the same routine (0x00293B35) and keeps the lifted one.
+
 ## 2026-11-02: v0.4.3 final builds, languages, Android icon
 
 Pull request #19 (GrandaCoder) merged into reSOT from its patch series, read but not

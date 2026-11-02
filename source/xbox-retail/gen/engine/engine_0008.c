@@ -1110,6 +1110,7 @@ loc_000CC9FB: ;
     PUSH32(esp, 0x000CCA80u); RECOMP_ABI_CALL(0x003527D8u, sub_003527D8); /* call 0x003527D8 */
 
 loc_000CCA80: ;
+    { uint32_t _icall_esp = g_esp;
     PUSH32(esp, esi);
     ecx = esp + 0xC4;
     PUSH32(esp, ecx);
@@ -1117,7 +1118,8 @@ loc_000CCA80: ;
     PUSH32(esp, edx);
     g_ebp = ebp; /* frame stays current across calls */
     g_seh_ebp = ebp;
-    PUSH32(esp, 0x000CCA96u); RECOMP_ABI_CALL(0x00352302u, sub_00352302); /* call 0x00352302 */
+    PUSH32(esp, 0x000CCA96u); RECOMP_ICALL_SAFE(0x00352302u, _icall_esp); /* manual call 0x00352302 */
+    }
 
 loc_000CCA96: ;
     ecx = 0x10;
@@ -1519,6 +1521,7 @@ loc_000CCD51: ;
 
 loc_000CCD5A: ;
     eax = esi + 0x47;
+    { uint32_t _icall_esp = g_esp;
     PUSH32(esp, eax);
     ecx = esi + 7;
     PUSH32(esp, ecx);
@@ -1527,7 +1530,8 @@ loc_000CCD5A: ;
     MEM8(esi) = 0;
     g_ebp = ebp; /* frame stays current across calls */
     g_seh_ebp = ebp;
-    PUSH32(esp, 0x000CCD6Fu); RECOMP_ABI_CALL(0x00352302u, sub_00352302); /* call 0x00352302 */
+    PUSH32(esp, 0x000CCD6Fu); RECOMP_ICALL_SAFE(0x00352302u, _icall_esp); /* manual call 0x00352302 */
+    }
 
 loc_000CCD6F: ;
     xmm0 = XMM_ZERO(); /* xorps self = zero */
@@ -1549,6 +1553,7 @@ loc_000CCD6F: ;
     MEMF(esp + 0x64) = xmm0.f[0]; /* movss */
     xmm0 = XMM_SCALAR(MEMF(0x4294D8)); /* movss */
     eax = esp + 0x30;
+    { uint32_t _icall_esp = g_esp;
     PUSH32(esp, eax);
     ecx = esp + 0x74;
     MEMF(esp + 0x5C) = xmm0.f[0]; /* movss */
@@ -1561,7 +1566,8 @@ loc_000CCD6F: ;
     MEMF(esp + 0x74) = xmm0.f[0]; /* movss */
     g_ebp = ebp; /* frame stays current across calls */
     g_seh_ebp = ebp;
-    PUSH32(esp, 0x000CCE11u); RECOMP_ABI_CALL(0x00352302u, sub_00352302); /* call 0x00352302 */
+    PUSH32(esp, 0x000CCE11u); RECOMP_ICALL_SAFE(0x00352302u, _icall_esp); /* manual call 0x00352302 */
+    }
 
 loc_000CCE11: ;
     eax = MEM32(0x440BAC);
@@ -1832,13 +1838,15 @@ loc_000CCFCA: ;
 
 loc_000CCFE4: ;
     edx = esp + 0x70;
+    { uint32_t _icall_esp = g_esp;
     PUSH32(esp, edx);
     PUSH32(esp, eax);
     ecx = esp + 0xE8;
     PUSH32(esp, ecx);
     g_ebp = ebp; /* frame stays current across calls */
     g_seh_ebp = ebp;
-    PUSH32(esp, 0x000CCFF7u); RECOMP_ABI_CALL(0x00352302u, sub_00352302); /* call 0x00352302 */
+    PUSH32(esp, 0x000CCFF7u); RECOMP_ICALL_SAFE(0x00352302u, _icall_esp); /* manual call 0x00352302 */
+    }
 
 loc_000CCFF7: ;
     eax = MEM32(0x441840);
@@ -3159,6 +3167,7 @@ void sub_000CD970(void)
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
 
 loc_000CD970: ;
+    { uint32_t _icall_esp = g_esp;
     PUSH32(esp, ecx);
     PUSH32(esp, ebx);
     PUSH32(esp, ebp);
@@ -3172,7 +3181,8 @@ loc_000CD970: ;
     edi = edi - 0x5C0;
     _fa = (uint32_t)(edi) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* sub result */
     PUSH32(esp, edi);
-    PUSH32(esp, 0x000CD98Eu); RECOMP_ABI_CALL(0x00352302u, sub_00352302); /* call 0x00352302 */
+    PUSH32(esp, 0x000CD98Eu); RECOMP_ICALL_SAFE(0x00352302u, _icall_esp); /* manual call 0x00352302 */
+    }
 
 loc_000CD98E: ;
     PUSH32(esp, edi);
@@ -3485,6 +3495,7 @@ loc_000CDB98: ;
     ecx = 0; } /* rep movsd */
     esi = MEM32(ebx + 0xCA0);
     ecx = ebx + 0x60;
+    { uint32_t _icall_esp = g_esp;
     PUSH32(esp, ecx);
     PUSH32(esp, eax);
     _fb = (uint32_t)(0x5C0) & 0xFFFFFFFFu; _fbs = (int32_t)(int32_t)(_fb); /* sub source, before the write */
@@ -3493,7 +3504,8 @@ loc_000CDB98: ;
     PUSH32(esp, esi);
     g_ebp = ebp; /* frame stays current across calls */
     g_seh_ebp = ebp;
-    PUSH32(esp, 0x000CDBBFu); RECOMP_ABI_CALL(0x00352302u, sub_00352302); /* call 0x00352302 */
+    PUSH32(esp, 0x000CDBBFu); RECOMP_ICALL_SAFE(0x00352302u, _icall_esp); /* manual call 0x00352302 */
+    }
 
 loc_000CDBBF: ;
     PUSH32(esp, esi);
@@ -4603,14 +4615,14 @@ loc_000CE2AE: ;
 }
 
 /**
- * sub_000CE2C0
+ * sub_000CE2C0_gen
  * Original: 0x000CE2C0 - 0x000CE435 (373 bytes, 101 insns)
  * Folder: engine (library: 0x000CC730 and 0x000CEA70)
  * Category: game_render
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_000CE2C0(void)
+void sub_000CE2C0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;

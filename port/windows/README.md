@@ -1,6 +1,8 @@
 # reSOT on Windows
 
-Version 0.4.3 brings faster Direct3D 11 and 12 shaders, less stutter and the F8 debug views.
+Version 0.4.4 brings the direct renderer by default, the retail pushbuffers as direct draws,
+game and renderer in parallel, the light halo fix, and drops the launcher's language button
+(the language is in reSOT Options). Version 0.4.3 brings faster Direct3D 11 and 12 shaders, less stutter and the F8 debug views.
 Known issue, to fix: in the retail Magic Fountain teleport the fade to black does not
 appear and the camera stays at the entrance on the bridge until the view is changed.
 Version 0.4.2 brings the HD menu logos, the retail name keyboard fix for the
@@ -15,7 +17,7 @@ animated Prince of Persia title to the launcher. Version 0.3.3 ran the game and 
 a retail mid-game freeze, reduces audio crackle and brings the new animated
 logo. Version 0.3.2 added Reduced/Standard/Full graphics presets and a background
 stable-release check with optional Update / Close buttons styled like the
-launcher. The displayed version is 0.4.3. Offline/rate-limit errors are ignored.
+launcher. The displayed version is 0.4.4. Offline/rate-limit errors are ignored.
 No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
 request and reSOT version in its User-Agent. Update opens the official release
 page, without downloading/installing an executable automatically.
@@ -391,6 +393,13 @@ before game startup enables this optional control. Remove it after testing.
 Windows uses the environment path directly (e.g. the run script's `-Set`).
 This is diagnostic-only; no launcher/options UI or game defaults are changed.
 
+
+The direct renderer path ([docs/DIRECT-RENDERER.md](../../docs/DIRECT-RENDERER.md)) is on by
+default on Direct3D 11, Direct3D 12 and Vulkan since 2026-11-02; `RESOT_DIRECT_DRAW=0`
+returns to the NV2A ring. With it, retail KickOff runs 32 submissions ahead, the game at most one
+frame ahead of the renderer (`RESOT_FLIP_AHEAD=<n>`, 0 = no limit)
+(`RESOT_KICK_AHEAD=<n>` overrides). The log says which: `[DIRECT] mode 1 (default)`.
+A `RESOT_DIRECT_DRAW` key in `resot-options.ini` is not read.
 
 Vulkan reuses input geometry already uploaded into its vertex/index rings
 (2026-10-22), shared with Android. It compares the complete source data,

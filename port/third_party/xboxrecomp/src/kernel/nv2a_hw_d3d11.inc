@@ -3077,9 +3077,11 @@ static int hw_draw_program_batch(void)
         float top = 1e9f, bottom = -1e9f;
         Nv2aVshOutput o;
         uint32_t k, a2;
+        FetchPlan plan[NV2A_VSH_INPUTS]; /* RE-SoT: fetch_attr's checks once per batch. */
+        for (a2 = 0; a2 < NV2A_VSH_INPUTS; a2++) fetch_plan(&s_gpu.attr[a2], &plan[a2]);
         for (k = 0; k < n; k++) {
             for (a2 = 0; a2 < NV2A_VSH_INPUTS; a2++)
-                fetch_attr(&s_gpu.attr[a2], s_gpu.idx[k], in[a2]);
+                fetch_planned(&plan[a2], s_gpu.idx[k], in[a2]);
             if (!nv2a_vsh_run((const float (*)[4])in, &o) || fabsf(o.pos[3] - 1.0f) > 0.0001f)
                 break;
             if (o.pos[0] < lo) lo = o.pos[0];
@@ -3185,6 +3187,8 @@ static int hw_draw_program_batch(void)
     vout = (uint8_t *)vmap.pData + s_hw.vb_off;
     iout = (uint16_t *)((uint8_t *)imap.pData + s_hw.ib_off);
 
+    FetchPlan plan[HW_VSP_SLOTS]; /* RE-SoT: fetch_attr's checks once per batch. */
+    for (a = 0; a < nslot; a++) fetch_plan(&s_gpu.attr[slot_attr[a]], &plan[a]);
     if (++batch_id == 0) {
         memset(stamp, 0, sizeof stamp);
         batch_id = 1;
@@ -3197,7 +3201,7 @@ static int hw_draw_program_batch(void)
         stamp[ix] = batch_id;
         remap[ix] = (uint16_t)nv;
         for (a = 0; a < nslot; a++)
-            fetch_attr(&s_gpu.attr[slot_attr[a]], ix, in[a]);
+            fetch_planned(&plan[a], ix, in[a]);
         for (; a < slots; a++)
             in[a][0] = in[a][1] = in[a][2] = in[a][3] = 0.0f;
         memcpy(vout + (size_t)nv * stride, in, stride);   /* write-combined: no reads */

@@ -188,7 +188,9 @@ final class LauncherView extends View {
         enabled[BTN_ISO] = enabled[BTN_GITHUB] = enabled[BTN_CLOSE] = enabled[BTN_CANCEL] = true;
         enabled[BTN_DRIVER] = true;
         enabled[BTN_LOGS] = true;
-        enabled[BTN_LANGUAGE] = true;
+        // reSOT 0.4.4: the game language is chosen in reSOT Options only (pause menu,
+        // Language page), as on Windows; the launcher no longer offers it.
+        enabled[BTN_LANGUAGE] = false;
         if (!enabled[focus] || !visible(focus))
             focus = state.extracting ? BTN_CANCEL : enabled[BTN_DEMO] ? BTN_DEMO : enabled[BTN_GAME] ? BTN_GAME : BTN_ISO;
         invalidate();
@@ -686,8 +688,6 @@ final class LauncherView extends View {
             twin(canvas, cx + half, head, 4, true);
             button(canvas, BTN_DEMO, getContext().getString(R.string.launcher_start_demo));
             button(canvas, BTN_GAME, getContext().getString(R.string.launcher_start_game));
-            button(canvas, BTN_LANGUAGE, getContext().getString(R.string.launcher_game_language,
-                GameLanguage.label(state.gameLanguage, getContext())));
             installText(canvas, 0, buttons[BTN_DEMO]);
             installText(canvas, 1, buttons[BTN_GAME]);
             String message = !state.error.isEmpty() ? state.error : state.note;
@@ -770,7 +770,7 @@ final class LauncherView extends View {
 
     private void moveFocus(int step) {
         int[] order = state.extracting ? new int[] { BTN_CANCEL, BTN_LOGS }
-            : new int[] { BTN_DEMO, BTN_GAME, BTN_LANGUAGE, BTN_ISO, BTN_DRIVER, BTN_GITHUB, BTN_LOGS };
+            : new int[] { BTN_DEMO, BTN_GAME, BTN_ISO, BTN_DRIVER, BTN_GITHUB, BTN_LOGS };
         int at = 0;
         for (int i = 0; i < order.length; i++) if (order[i] == focus) at = i;
         for (int i = 1; i <= order.length; i++) {

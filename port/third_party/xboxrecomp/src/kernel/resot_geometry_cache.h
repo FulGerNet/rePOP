@@ -20,6 +20,7 @@ typedef struct {
     ResotGeometryKey key;
     uint8_t *source;
     uint32_t bytes,generation,vertex_offset,index_offset,vertices,indices;
+    uint32_t capacity; /* RE-SoT: allocated bytes of source, at least bytes */
 } ResotGeometryEntry;
 typedef struct {
     ResotGeometryEntry entry[RESOT_GEOMETRY_ENTRIES];
@@ -59,10 +60,15 @@ static inline uint32_t resot_geometry_source_bytes(const ResotGeometryKey *key)
 }
 static inline ResotGeometryEntry *resot_geometry_slot(ResotGeometryCache *cache,const ResotGeometryKey *key,const uint16_t *indices)
 {
-    uint32_t hash=2166136261u;
-    const unsigned char *p=(const unsigned char*)key;
-    for(uint32_t i=0;i<sizeof *key;i++) hash=(hash^p[i])*16777619u;
-    for(uint32_t i=0;i<key->indices;i++) hash=(hash^indices[i])*16777619u;
+    /* RE-SoT: by words, and at most about 64 indices spread over the list: the
+     * hash only picks a slot, resot_geometry_match compares every byte. Byte by
+     * byte over the key and every index was most of ng_geometry_find's 6% of the
+     * executor's samples (retail, heavy scene, D3D12, 2026-11-02). */
+    uint32_t hash=2166136261u,step=key->indices>64?key->indices/64:1;
+    const uint32_t *w=(const uint32_t*)key;
+    for(uint32_t i=0;i<sizeof *key/4;i++) hash=(hash^w[i])*16777619u;
+    for(uint32_t i=0;i<key->indices;i+=step) hash=(hash^indices[i])*16777619u;
+    if(key->indices) hash=(hash^indices[key->indices-1])*16777619u;
     return &cache->entry[hash&(RESOT_GEOMETRY_ENTRIES-1)];
 }
 static inline int resot_geometry_match(const ResotGeometryEntry *entry,const ResotGeometryKey *key,
@@ -82,12 +88,19 @@ static inline int resot_geometry_store(ResotGeometryCache *cache,ResotGeometryEn
 {
     uint32_t bytes=resot_geometry_source_bytes(key),at=key->indices*2;
     if(!bytes || cache->bytes-entry->bytes+bytes>RESOT_GEOMETRY_BYTES) return 0;
-    if(entry->bytes!=bytes) {
-        uint8_t *source=(uint8_t*)realloc(entry->source,bytes);
+    /* RE-SoT: grown to a power of two and kept: a slot shared by lists of
+     * different sizes reallocated on every miss (realloc about 1.7% of the
+     * executor's samples, retail, D3D12, 2026-11-02). The budget counts bytes. */
+    if(bytes>entry->capacity) {
+        uint32_t capacity=64;
+        uint8_t *source;
+        while(capacity<bytes) capacity*=2;
+        source=(uint8_t*)realloc(entry->source,capacity);
         if(!source) return 0;
-        cache->bytes=cache->bytes-entry->bytes+bytes;
-        entry->source=source; entry->bytes=bytes;
+        entry->source=source; entry->capacity=capacity;
     }
+    cache->bytes=cache->bytes-entry->bytes+bytes;
+    entry->bytes=bytes;
     entry->key=*key;
     memcpy(entry->source,indices,at);
     for(uint32_t i=0;i<key->spans;i++) {

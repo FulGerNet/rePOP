@@ -156,13 +156,6 @@ static void detect_ui_language(void)
     L.ui_language = language == LANG_FRENCH ? 1 : language == LANG_SPANISH ? 2 : 0;
 }
 
-static const wchar_t *game_language_name(int language)
-{
-    if (language == 4) return ui_text(L"French", L"Fran\u00E7ais", L"Franc\u00E9s");
-    if (language == 5) return ui_text(L"Spanish", L"Espagnol", L"Espa\u00F1ol");
-    return ui_text(L"English", L"Anglais", L"Ingl\u00E9s");
-}
-
 /* ── small helpers ─────────────────────────────────────────── */
 
 static int to_ansi(const wchar_t *w, char *out, size_t size)
@@ -924,7 +917,9 @@ static void layout(void)
     L.btn[BTN_GAME].enabled = L.inst[GAME_RETAIL].dir[0]
         && (L.this_kind == GAME_RETAIL || L.sibling_exists);
     L.btn[BTN_ISO].enabled = L.btn[BTN_GITHUB].enabled = 1;
-    L.btn[BTN_LANGUAGE].enabled = 1;
+    /* reSOT 0.4.4: the game language is chosen in reSOT Options only (pause menu,
+     * Language page), as on Android; the launcher no longer offers it. */
+    L.btn[BTN_LANGUAGE].enabled = 0;
     L.btn[BTN_CLOSE].enabled = L.btn[BTN_CANCEL].enabled = 1;
     if (!L.btn[L.focus].enabled || !L.btn[L.focus].visible) {
         int mine = L.this_kind == GAME_DEMO ? BTN_DEMO : BTN_GAME;
@@ -997,12 +992,6 @@ static void render(void)
         twin((float)(cx + half), HEAD_Y + 9.0f, 4, 1);
         draw_button(BTN_DEMO);
         draw_button(BTN_GAME);
-        {
-            wchar_t language[96];
-            swprintf(language, 96, ui_text(L"Game language: %ls  \u25C2  \u25B8", L"Langue du jeu : %ls  \u25C2  \u25B8", L"Idioma del juego: %ls  \u25C2  \u25B8"),
-                     game_language_name(L.game_language));
-            link_at(BTN_LANGUAGE, language, DT_CENTER);
-        }
         for (i = BTN_ISO; i <= BTN_GITHUB; ++i)
             if (L.hover == i || L.focus == i) {
                 RECT r = L.btn[i].r;
@@ -1559,7 +1548,7 @@ static int hit(int x, int y)
 
 static void move_focus(int step)
 {
-    static const int order[] = {BTN_DEMO, BTN_GAME, BTN_LANGUAGE, BTN_ISO, BTN_GITHUB};
+    static const int order[] = {BTN_DEMO, BTN_GAME, BTN_ISO, BTN_GITHUB};
     int i, at = 0, n = (int)(sizeof order / sizeof order[0]);
     for (i = 0; i < n; ++i) if (order[i] == L.focus) at = i;
     for (i = 1; i <= n; ++i) {

@@ -16,7 +16,9 @@ drivers reject at the first pipeline (closing the game after Start Game,
 GitHub #8, #9). Not yet confirmed on a Mali device. The Windows Vulkan
 renderer uses the same shaders, so `port/windows` needs no separate change.
 
-Version 0.4.3 batches visibility reports, as on Windows; the Windows shader and F8 changes do not apply here.
+Version 0.4.4 brings the same renderer changes as Windows (direct renderer by default,
+retail pushbuffers as direct draws, game and renderer in parallel, halo fix) and drops the
+launcher's language button; built, not run on a device. Version 0.4.3 batches visibility reports, as on Windows; the Windows shader and F8 changes do not apply here.
 Known issue, to fix: in the retail Magic Fountain teleport the fade to black does not
 appear and the camera stays at the entrance on the bridge until the view is changed.
 Version 0.4.2 brings the HD menu logos, the retail name keyboard fix for touch
@@ -30,7 +32,7 @@ animated Prince of Persia title to the launcher. Version 0.3.3 ran the game and 
 a retail mid-game freeze, reduces audio crackle and brings the new animated
 logo. Version 0.3.2 added Reduced/Standard/Full graphics presets and a background
 stable-release check with optional Update / Close buttons styled like the
-launcher. The displayed version is 0.4.3. Offline/rate-limit errors are ignored.
+launcher. The displayed version is 0.4.4. Offline/rate-limit errors are ignored.
 No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
 request and reSOT version in its User-Agent. Update opens the official release
 page, without downloading/installing an executable automatically.
@@ -649,7 +651,7 @@ trades heat for steadier frames, so thermal caps can arrive sooner. The state ou
 the process: after a crash it stays on until the next start of the game or a reboot.
 The `[POWER] GPU turbo` lines show when it changes. Not tested on a device.
 
-**Direct renderer path.** Both native libraries are built with the direct path of [docs/DIRECT-RENDERER.md](../../docs/DIRECT-RENDERER.md) (demo and, since 2026-11-02, retail), off by default. Windows turns it on with `RESOT_DIRECT_DRAW=1`; the app has no way yet to set that variable, so on Android it stays off. Not run on a device.
+**Direct renderer path.** Both native libraries are built with the direct path of [docs/DIRECT-RENDERER.md](../../docs/DIRECT-RENDERER.md) (demo and retail). Since 2026-11-02 it is on by default, as on Windows, and retail KickOff runs 32 submissions ahead with it, at most one frame ahead of the renderer. The app has no switch to turn it off (Windows: `RESOT_DIRECT_DRAW=0`). Not run on a device yet.
 
 ### APK publisher integrity (v0.3.2, versionCode 7)
 

@@ -32,6 +32,30 @@ static struct { uint32_t prim, words; uint32_t *data; uint32_t inline_words[NV_D
 static uint32_t s_direct_up_free[NV_DIRECT_UP_SLOTS];
 static volatile LONG s_direct_up_head, s_direct_up_tail;   /* title takes at head, executor returns at tail */
 static uint32_t s_direct_array_prim;
+
+/* RE-SoT: pushbuffers D3D copies into the ring whole (NV097_RESOT_DIRECT_PUSHBUFFER).
+ * Retail Vulkan, heavy scene, 2026-11-02: about two thirds of all draws came that way,
+ * as index packets the executor decoded and whose vertices it converted again on every
+ * frame. A record is the buffer's words, split into runs of packets and draws; it lives
+ * until the title's words differ, then dies as an index record does (direct_reap). */
+#define NV_DIRECT_PB_SLOTS 4096
+#define NV_DIRECT_PB_BUCKETS 2048
+#define NV_DIRECT_PB_MAX_WORDS (1u << 20)
+typedef struct { uint32_t at, end; int32_t draw; } NvDirectPbRun;   /* draw < 0: packets [at, end) */
+typedef struct { NvDirectDraw draw; uint16_t *indices; } NvDirectPbDraw;
+typedef struct NvDirectPb {
+    struct NvDirectPb *next;
+    uint32_t va, words, slot, nruns, ndraws;
+    uint32_t *data;
+    NvDirectPbRun *runs;
+    NvDirectPbDraw *draws;
+    volatile long pending;
+} NvDirectPb;
+static NvDirectPb *s_direct_pb_bucket[NV_DIRECT_PB_BUCKETS], *s_direct_pb_dead;
+static NvDirectPb *volatile s_direct_pb_slot[NV_DIRECT_PB_SLOTS];
+static uint32_t s_direct_pb_free[NV_DIRECT_PB_SLOTS], s_direct_pb_free_count;
+static uint64_t s_direct_pb_runs, s_direct_pb_records, s_direct_pb_changed, s_direct_pb_refused;
+static uint64_t s_direct_pb_full, s_direct_pb_draws;
 static uint64_t s_direct_arrays, s_direct_ups, s_direct_up_words, s_direct_up_refused;
 
 int nv2a_direct_mode(void)
@@ -44,9 +68,13 @@ int nv2a_direct_mode(void)
             InitializeCriticalSection(&s_direct_lock);
             for (uint32_t i = 1; i < NV_DIRECT_SLOTS; i++) s_direct_free[s_direct_free_count++] = NV_DIRECT_SLOTS - i;
             for (uint32_t i = 0; i < NV_DIRECT_UP_SLOTS; i++) s_direct_up_free[i] = i;
+            for (uint32_t i = 1; i < NV_DIRECT_PB_SLOTS; i++) s_direct_pb_free[s_direct_pb_free_count++] = NV_DIRECT_PB_SLOTS - i;
             s_direct_up_tail = NV_DIRECT_UP_SLOTS;
-            /* Off unless asked for until the picture is confirmed. */
-            s_direct_modeval = e ? atoi(e) : 0;
+            /* RE-SoT: on by default on every renderer and host since 2026-11-02, at
+             * the user's request, after the demo and retail were played with it
+             * (D3D12). RESOT_DIRECT_DRAW=0 returns to the NV2A ring. */
+            s_direct_modeval = e ? atoi(e) : 1;
+            fprintf(stderr, "[DIRECT] mode %d (%s)\n", s_direct_modeval, e ? "RESOT_DIRECT_DRAW" : "default");
         }
         while (s_direct_modeval < 0) Sleep(0);
     }
@@ -119,6 +147,193 @@ uint32_t nv2a_direct_prepare(uint32_t prim, uint32_t count, uint32_t indices_va)
     return token;
 }
 
+/* RE-SoT: how far the title may run ahead, in frames. Retail Vulkan, heavy scene,
+ * 2026-11-02, KickOff 32 submissions ahead: 145 fps instead of about 100, but after
+ * some minutes most of the level drew black, while the light probes' zero results rose
+ * from 24% to 42% of reports: the title reads a query's report a fixed number of
+ * frames after issuing it, and about two frames ahead it read them unfinished. The
+ * KickOff limit counts submissions (about 17 a frame there), so it cannot say
+ * frames; this does. The title may compute the next frame while the executor draws
+ * this one, as it did with 8 submissions, but not flip again before the executor
+ * has executed its previous flip. */
+static volatile LONG s_direct_flips_issued, s_direct_flips_done;
+static HANDLE s_direct_flip_ev;
+static uint64_t s_direct_flip_waits, s_direct_flip_timeouts;
+static int s_direct_flip_ahead = -1;
+static void direct_flip_init(void)
+{
+    const char *e = getenv("RESOT_FLIP_AHEAD");
+    if (!s_direct_flip_ev) s_direct_flip_ev = CreateEventA(NULL, FALSE, FALSE, NULL);
+    s_direct_flip_ahead = e ? atoi(e) : 1;
+    if (s_direct_flip_ahead < 0) s_direct_flip_ahead = 0;
+    fprintf(stderr, "[DIRECT] flips ahead of the executor: at most %d%s\n",
+        s_direct_flip_ahead, s_direct_flip_ahead ? "" : " (no limit)");
+}
+/* Title thread: whether nv2a_direct_flip_wait would wait. The title then kicks
+ * first, so that the commands up to its previous flip reach the executor: without
+ * that kick the flip waited for was often still unsubmitted, and the title sat out
+ * the 100 ms timeout on most frames (8 fps, 2026-11-02). */
+int nv2a_direct_flip_behind(void)
+{
+    if (s_direct_flip_ahead < 0) direct_flip_init();
+    return s_direct_flip_ahead > 0 && s_direct_flips_issued - s_direct_flips_done >= s_direct_flip_ahead;
+}
+/* Only while the executor still has submitted work: an idle executor has executed
+ * everything it was given, so it is not behind, and the flip waited for was never
+ * submitted (D3D can hold it back, e.g. KickOff's 0x2000 branch, which writes no
+ * DMA_PUT). Waiting for it then only ran into the timeout: 8 fps after some minutes,
+ * even with the kick in sub_0036C840 (2026-11-02). */
+void nv2a_direct_flip_wait(void)
+{
+    extern int xbox_Nv2aExecutorIdle(void);
+    if (s_direct_flip_ahead < 0) direct_flip_init();
+    if (nv2a_direct_flip_behind() && !xbox_Nv2aExecutorIdle()) {
+        DWORD start = GetTickCount();
+        s_direct_flip_waits++;
+        while (nv2a_direct_flip_behind() && !xbox_Nv2aExecutorIdle()) {
+            if (GetTickCount() - start > 100) { s_direct_flip_timeouts++; break; }
+            if (s_direct_flip_ev) WaitForSingleObject(s_direct_flip_ev, 1);
+            else Sleep(0);
+        }
+    }
+    InterlockedIncrement(&s_direct_flips_issued);
+}
+/* Executor thread, at a flip token. */
+static void direct_flip_done(void)
+{
+    InterlockedIncrement(&s_direct_flips_done);
+    if (s_direct_flip_ev) SetEvent(s_direct_flip_ev);
+}
+
+static void direct_pb_free(NvDirectPb *r)
+{
+    for (uint32_t i = 0; i < r->ndraws; i++) {
+        s_direct_source_bytes -= r->draws[i].draw.resident.bytes;
+        free(r->draws[i].draw.resident.source);
+        free(r->draws[i].indices);
+    }
+    free(r->draws); free(r->runs); free(r->data); free(r);
+}
+
+/* Title thread. The words as packets: only plain method headers (no JUMP, CALL or
+ * RETURN), each wholly inside the buffer. A draw is a one-method SET_BEGIN_END with a
+ * primitive, then only ARRAY_ELEMENT16 (non-incrementing or single) and ARRAY_ELEMENT32
+ * (single) packets, then a one-method SET_BEGIN_END 0, all on subchannel 0, with 1 to
+ * NV_MAX_INDICES indices: exactly what the executor's BEGIN, element and END cases turn
+ * into a draw_primitive. Anything else stays packets. NULL: not plain packets. */
+static NvDirectPb *direct_pb_parse(const uint32_t *w, uint32_t n)
+{
+    NvDirectPb *r;
+    uint32_t at, start = 0, draws = 0, packets = 0;
+    for (at = 0; at < n; ) {
+        uint32_t h = w[at], count = (h >> 18) & 0x7FFu;
+        if ((h & 0x00030003u) || ((h & 0xE0000000u) && (h & 0xE0000000u) != 0x40000000u) || at + 1 + count > n)
+            return NULL;
+        at += 1 + count;
+        packets++;
+    }
+    r = (NvDirectPb *)calloc(1, sizeof *r);
+    if (!r) return NULL;
+    r->data = (uint32_t *)malloc((size_t)n * 4);
+    r->runs = (NvDirectPbRun *)malloc((size_t)(packets + 1) * sizeof *r->runs);
+    r->draws = (NvDirectPbDraw *)calloc(packets / 2 + 1, sizeof *r->draws);
+    if (!r->data || !r->runs || !r->draws) { direct_pb_free(r); return NULL; }
+    memcpy(r->data, w, (size_t)n * 4);
+    r->words = n;
+    for (at = 0; at < n; ) {
+        uint32_t h = w[at], count = (h >> 18) & 0x7FFu, q, indices = 0;
+        if (h == 0x000417FCu && w[at + 1]) {
+            for (q = at + 2; q < n; ) {
+                uint32_t e = w[q], c = (e >> 18) & 0x7FFu;
+                int noninc = (e & 0xE0000000u) == 0x40000000u;
+                if (((e & 0x1FFCu) == 0x1800u && !(e & 0xE000u) && (noninc || c == 1)))
+                    indices += 2 * c;
+                else if (e == 0x00041808u)
+                    indices += 1;
+                else
+                    break;
+                q += 1 + c;
+            }
+            if (q + 1 < n && w[q] == 0x000417FCu && !w[q + 1] && indices && indices <= NV_MAX_INDICES) {
+                NvDirectPbDraw *d = &r->draws[draws];
+                uint32_t k = 0, lo = 65535, hi = 0;
+                d->indices = (uint16_t *)malloc((size_t)indices * 2);
+                if (!d->indices) { r->ndraws = draws; direct_pb_free(r); return NULL; }
+                for (uint32_t p = at + 2; p < q; ) {
+                    uint32_t e = w[p], c = (e >> 18) & 0x7FFu;
+                    for (uint32_t i = 1; i <= c; i++) {
+                        if ((e & 0x1FFCu) == 0x1800u) {
+                            d->indices[k++] = (uint16_t)(w[p + i] & 0xFFFF);
+                            d->indices[k++] = (uint16_t)(w[p + i] >> 16);
+                        } else d->indices[k++] = (uint16_t)(w[p + i] & 0xFFFF);
+                    }
+                    p += 1 + c;
+                }
+                for (uint32_t i = 0; i < k; i++) {
+                    if (d->indices[i] < lo) lo = d->indices[i];
+                    if (d->indices[i] > hi) hi = d->indices[i];
+                }
+                d->draw.prim = w[at + 1]; d->draw.count = k;
+                d->draw.lo = (uint16_t)lo; d->draw.hi = (uint16_t)hi;
+                if (at > start) r->runs[r->nruns++] = (NvDirectPbRun){start, at, -1};
+                r->runs[r->nruns++] = (NvDirectPbRun){at, q + 2, (int32_t)draws};
+                draws++;
+                at = start = q + 2;
+                continue;
+            }
+        }
+        at += 1 + count;
+    }
+    if (n > start) r->runs[r->nruns++] = (NvDirectPbRun){start, n, -1};
+    r->ndraws = draws;
+    return r;
+}
+
+uint32_t nv2a_direct_pushbuffer(uint32_t va, uint32_t words)
+{
+    const uint32_t *guest = (const uint32_t *)((const uint8_t *)xbox_GetMemoryOffset() + va);
+    uint32_t b = ((va >> 2) ^ (words * 2654435761u)) % NV_DIRECT_PB_BUCKETS;
+    NvDirectPb *r, **p;
+    if (nv2a_direct_mode() <= 0 || !words || words > NV_DIRECT_PB_MAX_WORDS) return 0;
+    EnterCriticalSection(&s_direct_lock);
+    for (p = &s_direct_pb_bucket[b]; *p && ((*p)->va != va || (*p)->words != words); p = &(*p)->next) {}
+    r = *p;
+    if (r && memcmp(r->data, guest, (size_t)words * 4)) {
+        *p = r->next;
+        r->next = s_direct_pb_dead; s_direct_pb_dead = r;
+        s_direct_pb_changed++;
+        r = NULL;
+    }
+    if (!r) {
+        if (!s_direct_pb_free_count) {
+            /* Slots return when the executor reaps, at its next flip. */
+            for (uint32_t i = 0; i < NV_DIRECT_PB_BUCKETS; i++)
+                while (s_direct_pb_bucket[i]) {
+                    NvDirectPb *d = s_direct_pb_bucket[i];
+                    s_direct_pb_bucket[i] = d->next;
+                    d->next = s_direct_pb_dead; s_direct_pb_dead = d;
+                }
+            s_direct_pb_full++;
+            LeaveCriticalSection(&s_direct_lock);
+            return 0;
+        }
+        if (!(r = direct_pb_parse(guest, words))) {
+            s_direct_pb_refused++;
+            LeaveCriticalSection(&s_direct_lock);
+            return 0;
+        }
+        r->va = va;
+        r->slot = s_direct_pb_free[--s_direct_pb_free_count];
+        s_direct_pb_slot[r->slot] = r;
+        r->next = s_direct_pb_bucket[b]; s_direct_pb_bucket[b] = r;
+        s_direct_pb_records++;
+    }
+    InterlockedIncrement(&r->pending);
+    s_direct_pb_runs++;
+    LeaveCriticalSection(&s_direct_lock);
+    return r->slot;
+}
+
 uint32_t *nv2a_direct_up_begin(uint32_t prim, uint32_t words, uint32_t *token)
 {
     uint32_t *data, t;
@@ -172,7 +387,56 @@ static void direct_reap(void)
         free(r->draw.resident.source);
         free(r->indices); free(r);
     }
+    {
+        NvDirectPb **q = &s_direct_pb_dead;
+        while (*q) {
+            NvDirectPb *r = *q;
+            if (r->pending) { q = &r->next; continue; }
+            *q = r->next;
+            s_direct_pb_slot[r->slot] = NULL;
+            s_direct_pb_free[s_direct_pb_free_count++] = r->slot;
+            direct_pb_free(r);
+        }
+    }
     LeaveCriticalSection(&s_direct_lock);
+}
+
+/* Executor thread: what the copied words would have done. A draw is the BEGIN, element
+ * and END cases of nv2a_pb_exec_method run as one, as direct_execute runs an index
+ * record, so the native encoder keeps the draw's resident geometry across frames. */
+static void direct_execute_pushbuffer(uint32_t token)
+{
+    NvDirectPb *r = token < NV_DIRECT_PB_SLOTS ? s_direct_pb_slot[token] : NULL;
+    if (!r) {
+        static unsigned told;
+        nv2a_pb_dump_recent("unknown pushbuffer token");
+        if (told++ < 8) fprintf(stderr, "[DIRECT] unknown pushbuffer token %u\n", token);
+        return;
+    }
+    for (uint32_t k = 0; k < r->nruns; k++) {
+        const NvDirectPbRun *run = &r->runs[k];
+        if (run->draw < 0) {
+            for (uint32_t at = run->at; at < run->end; ) {
+                uint32_t w = r->data[at++], count = (w >> 18) & 0x7FFu;
+                int noninc = (w & 0xE0000000u) == 0x40000000u;
+                for (uint32_t i = 0; i < count && at < run->end; i++)
+                    nv2a_pb_exec_method((w >> 13) & 7u, noninc ? (w & 0x1FFCu) : (w & 0x1FFCu) + i * 4, r->data[at++]);
+            }
+        } else {
+            NvDirectPbDraw *d = &r->draws[run->draw];
+            s_gpu.prim = d->draw.prim;
+            s_gpu.inline_count = 0; s_gpu.imm_count = 0;
+            memcpy(s_gpu.idx, d->indices, (size_t)d->draw.count * sizeof s_gpu.idx[0]);
+            s_gpu.idx_count = d->draw.count;
+            g_nv2a_direct_draw = &d->draw;
+            draw_primitive();
+            g_nv2a_direct_draw = NULL;
+            s_gpu.prim = 0;
+            s_gpu.inline_count = 0; s_gpu.imm_count = 0;
+            s_direct_pb_draws++;
+        }
+    }
+    InterlockedDecrement(&r->pending);
 }
 
 /* Executor thread: what walking the list would have ended in. draw_primitive
@@ -497,6 +761,20 @@ static void direct_flip(void)
         (unsigned long long)s_direct_draws, (unsigned long long)s_direct_indices,
         (unsigned long long)s_direct_records, (unsigned long long)s_direct_changed,
         (unsigned long long)s_direct_full, (unsigned long long)s_direct_long);
+    fprintf(stderr, "[DRAWS] by path: direct indexed %llu, pushbuffer %llu, user-pointer %llu; Begin/End token "
+        "immediate %llu inline %llu indexed %llu; ring immediate %llu inline %llu indexed %llu\n",
+        (unsigned long long)s_direct_draws, (unsigned long long)s_direct_pb_draws, (unsigned long long)s_direct_ups,
+        (unsigned long long)s_draw_path[0][0], (unsigned long long)s_draw_path[0][1],
+        (unsigned long long)s_draw_path[0][2], (unsigned long long)s_draw_path[1][0],
+        (unsigned long long)s_draw_path[1][1], (unsigned long long)s_draw_path[1][2]);
+    fprintf(stderr, "[DIRECT] flips: %ld issued, %ld executed; title waited %llu times, %llu after 100 ms\n",
+        (long)s_direct_flips_issued, (long)s_direct_flips_done,
+        (unsigned long long)s_direct_flip_waits, (unsigned long long)s_direct_flip_timeouts);
+    fprintf(stderr, "[DIRECT] pushbuffers: %llu runs, %llu draws, %llu records, %llu changed, "
+        "%llu not plain packets, %llu table full\n",
+        (unsigned long long)s_direct_pb_runs, (unsigned long long)s_direct_pb_draws,
+        (unsigned long long)s_direct_pb_records, (unsigned long long)s_direct_pb_changed,
+        (unsigned long long)s_direct_pb_refused, (unsigned long long)s_direct_pb_full);
     fprintf(stderr, "[DIRECT] %llu array draws, %llu user-pointer draws, %llu words; %llu refused\n",
         (unsigned long long)s_direct_arrays, (unsigned long long)s_direct_ups,
         (unsigned long long)s_direct_up_words, (unsigned long long)s_direct_up_refused);

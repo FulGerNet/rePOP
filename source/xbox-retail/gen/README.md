@@ -24,7 +24,7 @@ which evidence put it in its folder (`Folder:` line).
 | `xdk/d3d8/` | 337 | Direct3D 8 for the NV2A (D3D section) |
 | `xdk/d3dx8/` | 144 | D3DX 8 helpers (D3DX section) |
 | `xdk/dsound/` | 395 | DirectSound for the MCPX (DSOUND section) |
-| `xdk/libc/` | 841 | Microsoft C runtime (LIBCMT) |
+| `xdk/libc/` | 840 | Microsoft C runtime (LIBCMT) |
 | `xdk/libcpmt/` | 58 | Microsoft C++ library (LIBCPMT) |
 | `xdk/wmadec/` | 8 | WMA decoder (WMADEC section) |
 | `xdk/xapi/` | 115 | Xbox API (XAPILIB): start-up, disc and save storage |

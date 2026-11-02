@@ -217,7 +217,12 @@ static int kick_ahead(void)
          * on Android, nor on the demo, at this depth. */
         {
             extern int nv2a_direct_mode(void);
-            ahead = e ? atoi(e) : (RESOT_RUNTIME_RETAIL ? (nv2a_direct_mode() > 0 ? 8 : 1) : 0);
+            /* RE-SoT: 32 since 2026-11-02 (evening), with the title held to one
+             * frame ahead of the executor at its flip (nv2a_direct_flip_wait):
+             * Vulkan, heavy scene, about 100 -> 145 fps. 32 alone drew most of the
+             * level black after minutes (light probes read about two frames late);
+             * the flip limit is what bounds it. */
+            ahead = e ? atoi(e) : (RESOT_RUNTIME_RETAIL ? (nv2a_direct_mode() > 0 ? 32 : 1) : 0);
         }
         if (ahead < 0) ahead = 0;
         fprintf(stderr, "  [NV2A] KickOff: %s (%d submissions ahead)\n",
@@ -1207,6 +1212,17 @@ int xbox_Nv2aCaughtUp(void)
     for (int i = 0; i < g_fence_mirror_count; i++)
         if (g_fence_mirrors[i].pending_ptr) return 0;   /* published after the scan */
     return 1;
+}
+
+/* RE-SoT: has the executor executed every submission it was given? Unlike
+ * xbox_Nv2aCaughtUp, fences still to be published do not count: nothing more
+ * can reach the executor until the title kicks again. nv2a_direct_flip_wait. */
+int xbox_Nv2aExecutorIdle(void)
+{
+    if (!g_nv2a_memory) return 1;
+    return s_kick_issued == s_kick_done &&
+        *(volatile uint32_t *)((char *)g_nv2a_memory + NV2A_USER_DMA_GET)
+        == *(volatile uint32_t *)((char *)g_nv2a_memory + NV2A_USER_DMA_PUT);
 }
 
 void xbox_Nv2aSoftwareNotify(uint32_t param)

@@ -556,6 +556,116 @@ static int fetch_attr(const VertexAttr *a, uint32_t index, float out[4])
     }
 }
 
+/* RE-SoT: fetch_attr with its per-attribute decisions taken once per batch.
+ * The GPU vertex-program paths convert every distinct vertex of every draw
+ * whose geometry is not cached (about 113,000 a frame in a heavy retail scene,
+ * fetch_attr 11% of the executor's samples, D3D12, 2026-11-02). Same values,
+ * same bounds: fetch_planned(p, i) == fetch_attr(a, i) after fetch_plan(a, p),
+ * while the attribute, its current value and the inline payload stay as they
+ * were. */
+enum { FETCH_VALUE, FETCH_COLOR, FETCH_FLOAT, FETCH_UBYTE, FETCH_SHORTN, FETCH_SHORT, FETCH_PACKED };
+typedef struct {
+    const uint8_t *base;    /* guest memory or the inline payload */
+    size_t offset, limit;   /* limit: inline payload bytes, 0 for guest memory */
+    uint32_t stride, kind, size;
+    float value[4];         /* FETCH_VALUE, and an inline read past its end */
+} FetchPlan;
+
+static void fetch_plan(const VertexAttr *a, FetchPlan *p)
+{
+    p->kind = FETCH_VALUE;
+    p->value[0] = p->value[1] = p->value[2] = 0.0f;
+    p->value[3] = 1.0f;
+    p->limit = 0;
+    if (a >= s_gpu.attr && a < s_gpu.attr + NV_VERTEX_ATTRS
+        && (!a->size || !a->stride || (!s_gpu.inline_active && !a->offset))) {
+        memcpy(p->value, s_gpu.imm_attr[a - s_gpu.attr], 4 * sizeof(float));
+        return;
+    }
+    if (!a->size || !a->stride)
+        return;
+    if (s_gpu.inline_active) {
+        p->base = (const uint8_t *)s_gpu.inline_buf;
+        p->limit = (size_t)s_gpu.inline_count * 4;
+        if (p->limit < 4)
+            return;
+    } else {
+        if (!a->offset)
+            return;
+        p->base = (const uint8_t *)xbox_GetMemoryOffset();
+    }
+    p->offset = a->offset;
+    p->stride = a->stride;
+    p->size = a->size < 4 ? a->size : 4;
+    switch (a->type) {
+    case 0: p->kind = FETCH_COLOR; break;
+    case 2: p->kind = FETCH_FLOAT; break;
+    case 4: p->kind = FETCH_UBYTE; break;
+    case 1: p->kind = FETCH_SHORTN; break;
+    case 5: p->kind = FETCH_SHORT; break;
+    case 6: p->kind = FETCH_PACKED; break;
+    default: break;
+    }
+}
+
+static inline void fetch_planned(const FetchPlan *p, uint32_t index, float out[4])
+{
+    const uint8_t *s;
+    size_t at;
+    uint32_t i;
+    if (p->kind == FETCH_VALUE) {
+        memcpy(out, p->value, 4 * sizeof(float));
+        return;
+    }
+    at = p->offset + (size_t)index * p->stride;
+    if (p->limit && at + 4 > p->limit) {
+        out[0] = out[1] = out[2] = 0.0f;
+        out[3] = 1.0f;
+        return;
+    }
+    s = p->base + at;
+    switch (p->kind) {
+    case FETCH_COLOR:
+        out[0] = (float)s[2] / 255.0f;
+        out[1] = (float)s[1] / 255.0f;
+        out[2] = (float)s[0] / 255.0f;
+        out[3] = (float)s[3] / 255.0f;
+        return;
+    case FETCH_FLOAT:
+        out[1] = out[2] = 0.0f;
+        out[3] = 1.0f;
+        memcpy(out, s, p->size * sizeof(float));
+        return;
+    default:
+        break;
+    }
+    out[0] = out[1] = out[2] = 0.0f;
+    out[3] = 1.0f;
+    switch (p->kind) {
+    case FETCH_UBYTE:
+        for (i = 0; i < p->size; i++)
+            out[i] = (float)s[i] / 255.0f;
+        return;
+    case FETCH_SHORTN:
+        for (i = 0; i < p->size; i++)
+            out[i] = (float)((const int16_t *)s)[i] / 32767.0f;
+        return;
+    case FETCH_SHORT:
+        for (i = 0; i < p->size; i++)
+            out[i] = (float)((const int16_t *)s)[i];
+        return;
+    case FETCH_PACKED: {
+        uint32_t v = *(const uint32_t *)s;
+        out[0] = (float)((int32_t)(v << 21) >> 21) / 1023.0f;
+        out[1] = (float)((int32_t)(v << 10) >> 21) / 1023.0f;
+        out[2] = (float)((int32_t)v >> 22) / 511.0f;
+        return;
+    }
+    default:
+        return;
+    }
+}
+
 static uint32_t surface_bpp(void);
 
 static void note_drawn(void)
@@ -2206,6 +2316,11 @@ extern uint64_t g_nv2a_exec_ticks;      /* nv2a_pb_scan.c: time spent executing 
 static uint64_t s_direct_res_hits, s_direct_res_changed, s_direct_res_new, s_direct_res_ring;
 static uint64_t s_direct_res_upload, s_direct_res_avoided, s_direct_res_resets;
 static uint32_t s_direct_source_bytes;
+/* RE-SoT: draws by how they reached the executor: [0] a direct Begin/End token,
+ * [1] SET_BEGIN_END in the ring; then immediate, inline, indexed. Retail D3D12 and
+ * Vulkan logs (2026-11-02) count about 1,600 draws a frame of which about 350 are
+ * direct indexed tokens: this says where the rest come from. */
+static uint64_t s_draw_path[2][3];
 #include "nv2a_hw_d3d11.inc"
 
 #if RESOT_RUNTIME_RETAIL && (defined(_WIN32) || defined(__ANDROID__))
@@ -3516,6 +3631,10 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
         direct_execute_packets(param);
         break;
 
+    case NV097_RESOT_DIRECT_PUSHBUFFER:           /* RE-SoT: nv2a_direct.h */
+        direct_execute_pushbuffer(param);
+        break;
+
     case NV097_RESOT_DIRECT_COMBINER:             /* RE-SoT: nv2a_direct.h */
         direct_execute_combiner(param);
         break;
@@ -3586,6 +3705,7 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
         break;
 
     case NV097_RESOT_DIRECT_END:                  /* RE-SoT: as SET_BEGIN_END 0 */
+        s_draw_path[0][s_gpu.imm_count ? 0 : s_gpu.inline_count ? 1 : 2]++;
         if (s_gpu.imm_count)
             draw_immediate();
         else if (s_gpu.inline_count)
@@ -3598,6 +3718,7 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
         break;
 
     case NV097_RESOT_DIRECT_FLIP:                 /* RE-SoT: the executor's one flip */
+        direct_flip_done();
         nv2a_pb_exec_method(0, NV097_FLIP_INCREMENT_WRITE, 0);
         if (param) nv2a_pb_exec_method(0, NV097_FLIP_STALL, 0);
         break;
@@ -3636,6 +3757,8 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
             /* Three ways a batch can have arrived, and only one is in use at
              * a time: vertices completed by SET_VERTEX4F, a payload written
              * with INLINE_ARRAY, or indices into the title's own arrays. */
+            if (s_gpu.prim && (s_gpu.imm_count || s_gpu.inline_count || s_gpu.idx_count))
+                s_draw_path[1][s_gpu.imm_count ? 0 : s_gpu.inline_count ? 1 : 2]++; /* RE-SoT */
             if (s_gpu.imm_count)
                 draw_immediate();
             else if (s_gpu.inline_count)

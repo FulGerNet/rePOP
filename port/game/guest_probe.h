@@ -34,6 +34,19 @@ static int resot_guest_read_word(ptrdiff_t offset, uint64_t va, uint32_t *value)
             memcpy(value,(const void *)address,sizeof *value);
             return 1;
         }
+        /* reSOT: the extended heap (RECOMP_EXT_VMA) has its own page table; its
+         * committed pages are host memory committed read-write and never
+         * reprotected or released while the process lives (guest_vmem.c).
+         * Objects there sent every menu-pointer and label read to VirtualQuery:
+         * 28% of the title thread's samples in the retail menu, 9% in a heavy
+         * scene (RESOT_PROFILE_MS, Vulkan and D3D12, 2026-11-02). */
+        {
+            extern int guest_vmem_accessible(uint32_t address, uint32_t bytes);
+            if (guest_vmem_accessible(a,4)) {
+                memcpy(value,(const void *)address,sizeof *value);
+                return 1;
+            }
+        }
         const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
                                PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
         if (address > UINTPTR_MAX-4 ||

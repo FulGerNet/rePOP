@@ -1,104 +1,12 @@
 /**
  * PoP SoT xbox-retail - xdk/libc, chunk 3
  * Microsoft C runtime (LIBCMT)
- * Functions: 91 (0x003659B5 - 0x00367BCC)
+ * Functions: 90 (0x00365A55 - 0x00367BCC)
  */
 
 #define RECOMP_GENERATED_CODE
 #include "../../recomp_funcs.h"
 #include <math.h>
-
-/**
- * sub_003659B5
- * Original: 0x003659B5 - 0x00365A55 (160 bytes, 51 insns)
- * Folder: xdk/libc (between: 0x0035244B and 0x003673F5)
- * CC: cdecl, 2 params, returns int_or_void
- * Frame: fpo_leaf
- */
-void sub_003659B5(void)
-{
-    int _flags = 0; /* fallback flag var */
-    uint32_t _fa = 0, _fb = 0;
-    int32_t _fas = 0, _fbs = 0;
-    (void)_fa; (void)_fb; (void)_fas; (void)_fbs;
-
-loc_003659B5: ;
-    PUSH32(esp, esi);
-    esi = MEM32(esp + 0xC);
-    PUSH32(esp, edi);
-    edi = MEM32(esp + 0xC);
-    ecx = (uint32_t)(int32_t)SMEM16(edi + 0x28);
-    edx = MEM32(edi + 0x20);
-    SET_LO16(ecx, MEM16(edx + ecx * 2 + -2));
-    eax = MEM32(edi);
-    SET_LO16(ecx, LO16(ecx) + 1);
-    _fa = (uint32_t)(LO16(ecx)) & 0xFFFFu;
-    _fas = (int32_t)(int16_t)(_fa); _fb = (_fa == 0x8000u); /* inc result/SF/OF; CF unchanged */
-    _fa = (uint32_t)(MEM8(esi + 0x14C)) & 0xFFu; _fb = (uint32_t)(0) & 0xFFu;
-    _fas = (int32_t)(int8_t)(_fa); _fbs = (int32_t)(int8_t)(_fb); /* cmp MEM8(esi + 0x14C), 0 (8-bit) */
-    ecx = ZX16(LO16(ecx));
-    PUSH32(esp, ecx);
-    PUSH32(esp, eax);
-    PUSH32(esp, eax);
-    if (CMP_EQ(_fa, _fb)) goto loc_00365A15; /* je: equal / zero */
-
-loc_003659DE: ;
-    PUSH32(esp, MEM32(esi + 0xA4));
-    eax = esi + 0xE0;
-    PUSH32(esp, eax);
-    PUSH32(esp, 0x003659F0u); RECOMP_ABI_CALL(0x00365722u, sub_00365722); /* call 0x00365722 */
-
-loc_003659F0: ;
-    ecx = (uint32_t)(int32_t)SMEM16(edi + 0x28);
-    edx = MEM32(edi + 0x20);
-    SET_LO16(ecx, MEM16(edx + ecx * 2 + -2));
-    eax = MEM32(edi + 4);
-    SET_LO16(ecx, LO16(ecx) + 1);
-    _fa = (uint32_t)(LO16(ecx)) & 0xFFFFu;
-    _fas = (int32_t)(int16_t)(_fa); _fb = (_fa == 0x8000u); /* inc result/SF/OF; CF unchanged */
-    ecx = ZX16(LO16(ecx));
-    PUSH32(esp, ecx);
-    PUSH32(esp, eax);
-    PUSH32(esp, eax);
-    PUSH32(esp, MEM32(esi + 0xA8));
-    _fb = (uint32_t)(0xF0) & 0xFFFFFFFFu; _fbs = (int32_t)(int32_t)(_fb); /* add source, before the write */
-    esi = esi + 0xF0;
-    _fa = (uint32_t)(esi) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* add result */
-    goto loc_00365A4A;
-
-loc_00365A15: ;
-    PUSH32(esp, MEM32(esi + 0x9C));
-    eax = esi + 0xC0;
-    PUSH32(esp, eax);
-    PUSH32(esp, 0x00365A27u); RECOMP_ABI_CALL(0x00365722u, sub_00365722); /* call 0x00365722 */
-
-loc_00365A27: ;
-    ecx = (uint32_t)(int32_t)SMEM16(edi + 0x28);
-    edx = MEM32(edi + 0x20);
-    SET_LO16(ecx, MEM16(edx + ecx * 2 + -2));
-    eax = MEM32(edi + 4);
-    SET_LO16(ecx, LO16(ecx) + 1);
-    _fa = (uint32_t)(LO16(ecx)) & 0xFFFFu;
-    _fas = (int32_t)(int16_t)(_fa); _fb = (_fa == 0x8000u); /* inc result/SF/OF; CF unchanged */
-    ecx = ZX16(LO16(ecx));
-    PUSH32(esp, ecx);
-    PUSH32(esp, eax);
-    PUSH32(esp, eax);
-    PUSH32(esp, MEM32(esi + 0xA0));
-    _fb = (uint32_t)(0xD0) & 0xFFFFFFFFu; _fbs = (int32_t)(int32_t)(_fb); /* add source, before the write */
-    esi = esi + 0xD0;
-    _fa = (uint32_t)(esi) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* add result */
-
-loc_00365A4A: ;
-    PUSH32(esp, esi);
-    PUSH32(esp, 0x00365A50u); RECOMP_ABI_CALL(0x00365722u, sub_00365722); /* call 0x00365722 */
-
-loc_00365A50: ;
-    POP32(esp, edi);
-    POP32(esp, esi);
-    esp += 12; return; /* ret 8 */
-
-}
 
 /**
  * sub_00365A55

@@ -7,8 +7,8 @@ there when given). It is fitted to 1024x256, four times the title's 256x64 logo
 texture, on premultiplied colour; colour is extended under transparent pixels
 so the filter leaves no fringe.
 
-Output: port/game/resot_hd_logo_<target>.h, ignored like the image: it holds
-the user's artwork, so a checkout without it builds and draws the game's logo.
+Output: port/game/resot_hd_logo_<target>.h, published since v0.4.4 (the image
+stays ignored); a checkout without it builds and draws the game's logo.
 Runs of (count, 0xAARRGGBB), upright. The runtime is resot_hd_logo.h.
 """
 import shutil

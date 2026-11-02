@@ -63,6 +63,11 @@
  * order. Still NV2A methods, decoded by the executor: the bridge for routines not yet
  * rewritten by hand, not their translation. */
 #define NV097_RESOT_DIRECT_PACKETS 0x1FCC
+/* A pushbuffer D3D would copy into the ring whole (retail RunPushBuffer, 0x00376D40):
+ * the parameter is a record of its words, kept across runs and compared word for word
+ * by the title before each one. Its Begin, index and End packets are direct draws with
+ * resident geometry; every other packet is still applied as an NV2A method, in order. */
+#define NV097_RESOT_DIRECT_PUSHBUFFER 0x1F7C
 /* Vertex arrays: a slot of 34 words, see direct_execute_arrays_state. */
 #define NV097_RESOT_DIRECT_VERTEX_STATE 0x1FD4
 /* One texture stage's address, filter and control: a slot of stage and three words. */
@@ -115,6 +120,14 @@ uint32_t *nv2a_direct_up_begin(uint32_t prim, uint32_t words, uint32_t *token);
 /* Fewer words than asked for turned out to be needed. */
 void nv2a_direct_up_trim(uint32_t token, uint32_t words);
 int nv2a_direct_mode(void);
+/* Title thread: a record for the pushbuffer of `words` words at `va`. 0: use the
+ * original path. Otherwise the parameter of NV097_RESOT_DIRECT_PUSHBUFFER. */
+uint32_t nv2a_direct_pushbuffer(uint32_t va, uint32_t words);
+/* Title thread, before writing a flip token: waits while the executor is more than
+ * RESOT_FLIP_AHEAD flips (default 1) behind the title, at most 100 ms. */
+void nv2a_direct_flip_wait(void);
+/* Title thread: nonzero when nv2a_direct_flip_wait would wait; kick first then. */
+int nv2a_direct_flip_behind(void);
 #ifdef __cplusplus
 }
 #endif

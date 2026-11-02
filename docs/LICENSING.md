@@ -101,9 +101,10 @@ coverage of letters rendered from this face, and of the user's HD drawings
 of the menu font, compiled into both executables: the same check applies.
 
 `port/game/resot_hd_logo_<target>.h` (made by `tools/hd-logo.py`) holds the
-user's HD image of the game's logo, a trademark. It is ignored and not published
-with the source; an executable built with it embeds the image, so check this
-before publishing such a build. Without the header the game's own logo is drawn.
+user's HD image of the game's logo, a trademark. Since v0.4.4 it is published
+with the source at the user's request, as the release builds embed it: the
+game's logo remains its owner's and is not covered by reSOT's MIT licence.
+Without the header the game's own logo is drawn.
 
 **Not covered by any grant here:**
 

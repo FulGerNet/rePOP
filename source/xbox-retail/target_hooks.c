@@ -1599,8 +1599,32 @@ void sub_00376AD0(void)
     static unsigned copied, refused;
     static int in_place;                 /* a run in place may still be read from the buffer */
 
-    if (!nv2a_direct_mode() || (GMEM32(dev + 8) & 4) || (int32_t)GMEM32(buffer) < 0) {
+    if (!nv2a_direct_mode() || (GMEM32(dev + 8) & 4)) {
         sub_00376AD0_gen();
+        return;
+    }
+    /* A buffer flagged in its first word D3D copies into the ring whole (0x00376D40):
+     * ([buffer+0xC]-4)/4 words from [buffer+4], room reserved with 0x00370400, after the
+     * state flush at 0x00376AE2; no fix-up, stamp or fence. Retail Vulkan, heavy scene
+     * (2026-11-02, [DRAWS]): about two thirds of all draws, as index packets. One token
+     * instead, for a record the title compares word for word (nv2a_direct_pushbuffer):
+     * its draws become direct draws with resident geometry. The lookup reads the buffer
+     * only, so a refusal still takes the original from its start. */
+    if ((int32_t)GMEM32(buffer) < 0) {
+        n = (GMEM32(buffer + 0xC) - 4) >> 2;
+        if (!(token = nv2a_direct_pushbuffer(GMEM32(buffer + 4), n))) {
+            sub_00376AD0_gen();
+            return;
+        }
+        g_ecx = dev;
+        g_esp -= 4; GMEM32(g_esp) = 0;
+        g_esp -= 4; GMEM32(g_esp) = 0x00376AE7u;
+        sub_00375110();
+        put = ring_room(dev, 0x00376D4Fu);
+        GMEM32(put) = 0x00040000u | NV097_RESOT_DIRECT_PUSHBUFFER;
+        GMEM32(put + 4) = token;
+        GMEM32(dev) = put + 8;
+        g_esp += 12;                     /* ret 8 */
         return;
     }
     g_ecx = dev;
@@ -3057,6 +3081,12 @@ void sub_0036C840(void)
     }
     GMEM32(prev + 4) = first_addr;
     GMEM32(prev + 8) = first_size;
+    if (nv2a_direct_flip_behind()) {     /* submit up to the previous flip first */
+        g_ecx = dev;
+        g_esp -= 4; GMEM32(g_esp) = 0x0036C893u;
+        sub_0036FF60();
+    }
+    nv2a_direct_flip_wait();             /* at most one frame ahead of the executor */
     if (GMEM32(dev + 0x1A04) == GMEM32(dev + 0x1A14) || GMEM32(0x0037B5ACu) == 0x80000000u) {
         direct_token(dev, 0x0036C893u, NV097_RESOT_DIRECT_FLIP, 1);
     } else {
@@ -3064,5 +3094,62 @@ void sub_0036C840(void)
         direct_token(dev, 0x0036C893u, NV097_RESOT_DIRECT_FLIP, 0);
     }
     direct_token(dev, 0x0036C893u, NV097_RESOT_DIRECT_COLOR, GMEM32(GMEM32(dev + 0x1A14) + 4));
+    /* The frame's last commands go to the executor now: D3D kicked them only at its
+     * next KickOff, so at the next flip the executor had only just received this one,
+     * and title and executor ran frame by frame in series (a view of 84 draws: about
+     * 780 fps at first, 300 once the flip limit waited every frame, 2026-11-02). */
+    g_ecx = dev;
+    g_esp -= 4; GMEM32(g_esp) = 0x0036C893u;
+    sub_0036FF60();
     g_esp += 4;
+}
+
+/* sub_00352302 is D3DX's SSE 4x4 matrix multiply (out, m1, m2), ret 0xC, returns out
+ * in eax: each row of out is m1's row splatted against m2's rows, summed as
+ * ((x*r0 + y*r1) + z*r2) + w*r3 (0x00352302..0x003523F5), every row read before
+ * the four stores, so out may be m1 or m2. 9% of the title thread's samples in a heavy
+ * scene (RESOT_PROFILE_MS, Vulkan, 2026-11-02), through the lifted SSE macros. Same
+ * single-precision operations in the same order, one per statement so that nothing
+ * is fused into a multiply-add: the same bits. */
+void sub_00352302(void)
+{
+    uint32_t out = GMEM32(g_esp + 4), m1 = GMEM32(g_esp + 8), m2 = GMEM32(g_esp + 12);
+    const float *a = (const float *)((uintptr_t)g_xbox_mem_offset + m1);
+    const float *b = (const float *)((uintptr_t)g_xbox_mem_offset + m2);
+    float r[16];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            float p0 = a[i * 4 + 0] * b[0 + j];
+            float p1 = a[i * 4 + 1] * b[4 + j];
+            float p2 = a[i * 4 + 2] * b[8 + j];
+            float p3 = a[i * 4 + 3] * b[12 + j];
+            float s = p0 + p1;
+            s = s + p2;
+            r[i * 4 + j] = s + p3;
+        }
+    }
+    memcpy((void *)((uintptr_t)g_xbox_mem_offset + out), r, sizeof r);
+    g_eax = out;
+    g_esp += 16;                         /* ret 0xC */
+}
+
+/* sub_000CE2C0, esi a light's halo record: draws its two visibility probes (ALWAYS at
+ * 0x000CE324, LEQUAL at 0x000CE35C), then from the reports of earlier frames stores
+ * LEQUAL pixels / ALWAYS pixels at [esi+0x34] (0x000CE3E2..0x000CE417), the factor
+ * 0x00067CE0 applies to the halo's colour (0x000CE7F0). The probes are quads of about
+ * one guest pixel at slightly different places; at the console's 640x480 the two
+ * counts agree, at a raised internal resolution they cover differing sample counts
+ * and the ratio exceeds 1: halos flashing white or green (user, retail Vulkan, 225%,
+ * 2026-11-02; factor0 values like FF02FEFF in [HALO-DRAW]). Kept in [0, 1], what the
+ * routine assumes. Presentation correction, not console behaviour. */
+extern void sub_000CE2C0_gen(void);
+void sub_000CE2C0(void)
+{
+    uint32_t light = g_esi;
+    float ratio;
+    sub_000CE2C0_gen();
+    ratio = GMEMF(light + 0x34);
+    if (!(ratio >= 0.0f)) ratio = 0.0f;  /* also NaN */
+    else if (ratio > 1.0f) ratio = 1.0f;
+    GMEMF(light + 0x34) = ratio;
 }

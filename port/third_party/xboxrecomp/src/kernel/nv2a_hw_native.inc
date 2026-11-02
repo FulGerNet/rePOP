@@ -2059,13 +2059,16 @@ static int ng_simple_combiner(void)
  * target-independent NV2A state, not an inferred mesh identity or address.
  * Inline payloads retain the original path; sparse/oversized ranges bypass. */
 static ResotGeometryEntry *ng_geometry_find(const uint8_t *inputs,uint32_t ninputs,uint32_t stride,
-                                           ResotGeometryKey *key)
+                                           const NvDirectDraw *direct,ResotGeometryKey *key)
 {
     uint32_t lo=65535,hi=0,n=s_gpu.idx_count;
     if(!s_ng.geometry_enabled || s_gpu.inline_active || ninputs>8) return NULL;
     memset(key,0,sizeof *key);
     key->primitive=s_gpu.prim; key->inputs=ninputs; key->stride=stride; key->indices=n;
-    for(uint32_t i=0;i<n;i++) { if(s_gpu.idx[i]<lo) lo=s_gpu.idx[i]; if(s_gpu.idx[i]>hi) hi=s_gpu.idx[i]; }
+    /* RE-SoT: a direct record's range was taken from these same indices when it
+     * was made (nv2a_direct_prepare): no walk per draw. */
+    if(direct && direct->count==n) { lo=direct->lo; hi=direct->hi; }
+    else for(uint32_t i=0;i<n;i++) { if(s_gpu.idx[i]<lo) lo=s_gpu.idx[i]; if(s_gpu.idx[i]>hi) hi=s_gpu.idx[i]; }
     for(uint32_t i=0;i<ninputs;i++) {
         const VertexAttr *at=&s_gpu.attr[inputs[i]];
         key->attributes[i][0]=inputs[i];
@@ -2239,9 +2242,11 @@ static int ng_draw_program_batch(void)
         float in[NV2A_VSH_INPUTS][4], lo = 1e9f, hi = -1e9f, top = 1e9f, bottom = -1e9f;
         Nv2aVshOutput o;
         uint32_t k;
+        FetchPlan plan[NV2A_VSH_INPUTS]; /* RE-SoT: fetch_attr's checks once per batch. */
+        for (a = 0; a < ninputs; a++) fetch_plan(&s_gpu.attr[inputs[a]], &plan[a]);
         for (k = 0; k < n; k++) {
             for (a = 0; a < ninputs; a++)
-                fetch_attr(&s_gpu.attr[inputs[a]], s_gpu.idx[k], in[inputs[a]]);
+                fetch_planned(&plan[a], s_gpu.idx[k], in[inputs[a]]);
             if (!nv2a_vsh_run((const float (*)[4])in, &o) || fabsf(o.pos[3] - 1.0f) > 0.0001f)
                 break;
             if (o.pos[0] < lo) lo = o.pos[0];
@@ -2286,7 +2291,7 @@ static int ng_draw_program_batch(void)
         }
     }
     if(direct && !resident) s_direct_res_ring++;
-    if(!resident) geometry=ng_geometry_find(inputs,ninputs,stride,&geometry_key);
+    if(!resident) geometry=ng_geometry_find(inputs,ninputs,stride,g_nv2a_direct_draw,&geometry_key);
     if(resident) {
         /* RE-SoT: neither the ring's hash and index compare nor its generation. */
     } else if(geometry && resot_geometry_match(geometry,&geometry_key,s_gpu.idx,
@@ -2360,6 +2365,8 @@ static int ng_draw_program_batch(void)
     /* RE-SoT: a resident draw's indices follow its vertices; their place is known
      * only once the distinct vertices are counted. */
     iout = resident ? ng_resident_iout : (uint16_t *)(s_ng.queued_indices + s_ng.queued_index_bytes);
+    FetchPlan plan[NV2A_VSH_INPUTS]; /* RE-SoT: fetch_attr's checks once per batch. */
+    for (a = 0; a < ninputs; a++) fetch_plan(&s_gpu.attr[inputs[a]], &plan[a]);
     if (++batch_id == 0) { memset(stamp, 0, sizeof stamp); batch_id = 1; }
     for (i = 0; i < n; i++) {
         uint16_t ix = s_gpu.idx[i];
@@ -2369,7 +2376,7 @@ static int ng_draw_program_batch(void)
         remap[ix] = (uint16_t)nv;
         slot = (float (*)[4])(vout + (size_t)nv * stride);
         for (a = 0; a < ninputs; a++)
-            fetch_attr(&s_gpu.attr[inputs[a]], ix, slot[a]);
+            fetch_planned(&plan[a], ix, slot[a]);
         for (; a < slots; a++)
             slot[a][0] = slot[a][1] = slot[a][2] = slot[a][3] = 0.0f;
         nv++;
@@ -2762,9 +2769,20 @@ static void ng_present(int sync)
     QueryPerformanceCounter(&before);
     /* RE-SoT: with VSync off and no tearing support, mailbox still lets the
      * game run unthrottled; plain VSync would silently ignore the option. */
-    if (!SDL_WindowSupportsGPUPresentMode(s_ng.device,s_ng.window,mode))
-        mode = !enabled && SDL_WindowSupportsGPUPresentMode(s_ng.device,s_ng.window,SDL_GPU_PRESENTMODE_MAILBOX)
-            ? SDL_GPU_PRESENTMODE_MAILBOX : SDL_GPU_PRESENTMODE_VSYNC;
+    /* RE-SoT: asked once per requested mode and swapchain, not every frame: on
+     * Vulkan with the NVIDIA driver the query enumerates display devices through
+     * GDI, about 13% of the executor's samples in a heavy retail scene
+     * (RESOT_PROFILE_MS, Windows, 2026-11-02). */
+    {
+        static int requested = -1, resolved = -1;
+        if (requested != (int)mode || resolved < 0 || s_ng.present_mode < 0) {
+            requested = (int)mode;
+            if (!SDL_WindowSupportsGPUPresentMode(s_ng.device,s_ng.window,mode))
+                mode = !enabled && SDL_WindowSupportsGPUPresentMode(s_ng.device,s_ng.window,SDL_GPU_PRESENTMODE_MAILBOX)
+                    ? SDL_GPU_PRESENTMODE_MAILBOX : SDL_GPU_PRESENTMODE_VSYNC;
+            resolved = (int)mode;
+        } else mode = (SDL_GPUPresentMode)resolved;
+    }
     if (s_ng.present_mode != (int)mode) {
         ng_submit();
         /* RE-SoT: SDL's composition/present support queries can fail while an

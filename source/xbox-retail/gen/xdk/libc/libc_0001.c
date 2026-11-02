@@ -1,7 +1,7 @@
 /**
  * PoP SoT xbox-retail - xdk/libc, chunk 1
  * Microsoft C runtime (LIBCMT)
- * Functions: 250 (0x003504DC - 0x0035D745)
+ * Functions: 250 (0x003504DC - 0x0035D79D)
  */
 
 #define RECOMP_GENERATED_CODE
@@ -6676,89 +6676,6 @@ loc_003522BC: ;
     xmm2 = XMM_ADD(xmm2, xmm3); /* addps */
     xmm2 = XMM_ADD(xmm2, xmm4); /* addps */
     XMM_STORE(eax, xmm2); /* movups */
-    esp += 16; return; /* ret 12 */
-
-}
-
-/**
- * sub_00352302
- * Original: 0x00352302 - 0x00352400 (254 bytes, 69 insns)
- * Folder: xdk/libc (match: xbox-demo 0x00293B35, between)
- * CC: cdecl, 3 params, returns int_or_void
- * Frame: fpo_leaf
- */
-void sub_00352302(void)
-{
-
-loc_00352302: ;
-    eax = MEM32(esp + 8);
-    ecx = MEM32(esp + 0xC);
-    xmm2 = XMM_MEM(eax); /* movaps */
-    xmm2 = XMM_SHUFFLE(xmm2, xmm2, 0); /* shufps */
-    xmm2 = XMM_MUL(xmm2, XMM_MEM(ecx)); /* mulps */
-    xmm1 = XMM_MEM(eax); /* movaps */
-    xmm1 = XMM_SHUFFLE(xmm1, xmm1, 0x55); /* shufps */
-    xmm1 = XMM_MUL(xmm1, XMM_MEM(ecx + 0x10)); /* mulps */
-    xmm0 = XMM_MEM(eax); /* movaps */
-    xmm0 = XMM_SHUFFLE(xmm0, xmm0, 0xAA); /* shufps */
-    xmm0 = XMM_MUL(xmm0, XMM_MEM(ecx + 0x20)); /* mulps */
-    xmm2 = XMM_ADD(xmm2, xmm1); /* addps */
-    xmm1 = XMM_MEM(eax); /* movaps */
-    xmm1 = XMM_SHUFFLE(xmm1, xmm1, 0xFF); /* shufps */
-    xmm1 = XMM_MUL(xmm1, XMM_MEM(ecx + 0x30)); /* mulps */
-    xmm2 = XMM_ADD(xmm2, xmm0); /* addps */
-    xmm3 = XMM_MEM(eax + 0x10); /* movaps */
-    xmm3 = XMM_SHUFFLE(xmm3, xmm3, 0); /* shufps */
-    xmm2 = XMM_ADD(xmm2, xmm1); /* addps */
-    xmm3 = XMM_MUL(xmm3, XMM_MEM(ecx)); /* mulps */
-    xmm1 = XMM_MEM(eax + 0x10); /* movaps */
-    xmm1 = XMM_SHUFFLE(xmm1, xmm1, 0x55); /* shufps */
-    xmm1 = XMM_MUL(xmm1, XMM_MEM(ecx + 0x10)); /* mulps */
-    xmm0 = XMM_MEM(eax + 0x10); /* movaps */
-    xmm0 = XMM_SHUFFLE(xmm0, xmm0, 0xAA); /* shufps */
-    xmm0 = XMM_MUL(xmm0, XMM_MEM(ecx + 0x20)); /* mulps */
-    xmm3 = XMM_ADD(xmm3, xmm1); /* addps */
-    xmm1 = XMM_MEM(eax + 0x10); /* movaps */
-    xmm1 = XMM_SHUFFLE(xmm1, xmm1, 0xFF); /* shufps */
-    xmm1 = XMM_MUL(xmm1, XMM_MEM(ecx + 0x30)); /* mulps */
-    xmm3 = XMM_ADD(xmm3, xmm0); /* addps */
-    xmm4 = XMM_MEM(eax + 0x20); /* movaps */
-    xmm4 = XMM_SHUFFLE(xmm4, xmm4, 0); /* shufps */
-    xmm3 = XMM_ADD(xmm3, xmm1); /* addps */
-    xmm4 = XMM_MUL(xmm4, XMM_MEM(ecx)); /* mulps */
-    xmm1 = XMM_MEM(eax + 0x20); /* movaps */
-    xmm1 = XMM_SHUFFLE(xmm1, xmm1, 0x55); /* shufps */
-    xmm1 = XMM_MUL(xmm1, XMM_MEM(ecx + 0x10)); /* mulps */
-    xmm0 = XMM_MEM(eax + 0x20); /* movaps */
-    xmm0 = XMM_SHUFFLE(xmm0, xmm0, 0xAA); /* shufps */
-    xmm0 = XMM_MUL(xmm0, XMM_MEM(ecx + 0x20)); /* mulps */
-    xmm4 = XMM_ADD(xmm4, xmm1); /* addps */
-    xmm1 = XMM_MEM(eax + 0x20); /* movaps */
-    xmm1 = XMM_SHUFFLE(xmm1, xmm1, 0xFF); /* shufps */
-    xmm1 = XMM_MUL(xmm1, XMM_MEM(ecx + 0x30)); /* mulps */
-    xmm4 = XMM_ADD(xmm4, xmm0); /* addps */
-    xmm5 = XMM_MEM(eax + 0x30); /* movaps */
-    xmm5 = XMM_SHUFFLE(xmm5, xmm5, 0); /* shufps */
-    xmm4 = XMM_ADD(xmm4, xmm1); /* addps */
-    xmm5 = XMM_MUL(xmm5, XMM_MEM(ecx)); /* mulps */
-    xmm1 = XMM_MEM(eax + 0x30); /* movaps */
-    xmm1 = XMM_SHUFFLE(xmm1, xmm1, 0x55); /* shufps */
-    xmm1 = XMM_MUL(xmm1, XMM_MEM(ecx + 0x10)); /* mulps */
-    xmm0 = XMM_MEM(eax + 0x30); /* movaps */
-    xmm0 = XMM_SHUFFLE(xmm0, xmm0, 0xAA); /* shufps */
-    xmm0 = XMM_MUL(xmm0, XMM_MEM(ecx + 0x20)); /* mulps */
-    xmm5 = XMM_ADD(xmm5, xmm1); /* addps */
-    xmm1 = XMM_MEM(eax + 0x30); /* movaps */
-    xmm1 = XMM_SHUFFLE(xmm1, xmm1, 0xFF); /* shufps */
-    xmm1 = XMM_MUL(xmm1, XMM_MEM(ecx + 0x30)); /* mulps */
-    ecx = MEM32(esp + 4);
-    xmm5 = XMM_ADD(xmm5, xmm0); /* addps */
-    xmm5 = XMM_ADD(xmm5, xmm1); /* addps */
-    XMM_STORE(ecx, xmm2); /* movaps */
-    XMM_STORE(ecx + 0x10, xmm3); /* movaps */
-    XMM_STORE(ecx + 0x20, xmm4); /* movaps */
-    XMM_STORE(ecx + 0x30, xmm5); /* movaps */
-    eax = MEM32(esp + 4);
     esp += 16; return; /* ret 12 */
 
 }
@@ -41453,5 +41370,52 @@ loc_0035D795: ;
     MEM32(eax + 0x10) = eax;
     POP32(esp, esi);
     esp += 8; return; /* ret 4 */
+
+}
+
+/**
+ * sub_0035D79D
+ * Original: 0x0035D79D - 0x0035D7C9 (44 bytes, 14 insns)
+ * Folder: xdk/libc (between: 0x0035244B and 0x003673F5)
+ * CC: cdecl, 3 params, returns int_or_void
+ * Frame: fpo_leaf
+ */
+void sub_0035D79D(void)
+{
+    int _flags = 0; /* fallback flag var */
+    uint32_t _fa = 0, _fb = 0;
+    int32_t _fas = 0, _fbs = 0;
+    (void)_fa; (void)_fb; (void)_fas; (void)_fbs;
+
+loc_0035D79D: ;
+    eax = MEM32(esp + 8);
+    ecx = MEM32(esp + 0xC);
+    _fb = (uint32_t)(3) & 0xFFFFFFFFu; _fbs = (int32_t)(int32_t)(_fb); /* add source, before the write */
+    eax = eax + 3;
+    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* add result */
+    _fb = (uint32_t)(3) & 0xFFFFFFFFu; _fbs = (int32_t)(int32_t)(_fb); /* add source, before the write */
+    ecx = ecx + 3;
+    _fa = (uint32_t)(ecx) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* add result */
+    eax = eax & 0xFFFFFFFCu;
+    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* and result */
+    ecx = ecx & 0xFFFFFFFCu;
+    _fa = (uint32_t)(ecx) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* and result */
+    _fa = (uint32_t)(MEM8(esp + 4)) & 0xFFu; _fb = (uint32_t)(4) & 0xFFu;
+    _fas = (int32_t)(int8_t)(_fa); _fbs = (int32_t)(int8_t)(_fb); /* test MEM8(esp + 4), 4 (8-bit) */
+    if (TEST_NZ(_fa, _fb)) goto loc_0035D7C0; /* jne: not equal / not zero */
+
+loc_0035D7B8: ;
+    eax = ecx + eax * 4;
+    eax = eax << 2;
+    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* shift result */
+    goto loc_0035D7C6;
+
+loc_0035D7C0: ;
+    eax = ecx + eax * 2;
+    eax = eax << 3;
+    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* shift result */
+
+loc_0035D7C6: ;
+    esp += 16; return; /* ret 12 */
 
 }

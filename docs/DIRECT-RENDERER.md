@@ -2,7 +2,8 @@
 
 Goal: move from `game -> Xbox GPU commands -> interpretation -> host draw` towards
 `game -> host renderer`, one recognised operation at a time. This is the first
-segment. It is **off by default** (`RESOT_DIRECT_DRAW=1` enables it) and most of the
+segment. It is **on by default** on every renderer and host since 2026-11-02, at the
+user's request (`RESOT_DIRECT_DRAW=0` turns it off), and most of the
 graphics path still goes through NV2A. Observations are in
 [VALIDATION.md](VALIDATION.md).
 
@@ -164,6 +165,23 @@ host renderer still does a pushbuffer draw's work for every draw. In a scene of 
 - What would: upload the guest's vertex bytes as they are and decode the formats in the vertex
   shader, so a draw costs a copy rather than a conversion; then the per-draw state, pipeline and
   binding work (`ng_draw_program_batch`, `ng_constants`, SDL and the driver: about 20%).
+
+Second pass (2026-11-02, built, not measured): `fetch_attr`'s per-attribute checks are taken once
+per draw (`fetch_plan`/`fetch_planned`, same values) on D3D11 and the native encoder, including the
+widescreen classification loop; the ring geometry cache hashes its key by words and at most about
+64 indices instead of byte by byte; a direct record's index range replaces the walk over the
+indices; cache snapshots grow by powers of two instead of a `realloc` per miss.
+
+Where the draws come from (retail, Windows Vulkan, heavy scene, 2026-11-02, `[DRAWS]`): per
+5 s about 199,000 direct indexed tokens, 438,000 indexed draws decoded from the ring, 84,000
+inline arrays (Jade's own writers, `0x000D1190`..`0x000D1700`, `0x000CFF00`, `0x000D05A0`),
+5,000 Begin/End. The only writer of index packets in the retail XBE is DrawIndexedVertices
+(`0x00375B50`): the ring's come from pushbuffers recorded with it and replayed by
+RunPushBuffer's copy branch (`0x00376D40`, buffers flagged in their first word), which
+copies the whole buffer into the ring on every run. The hook now writes one
+`NV097_RESOT_DIRECT_PUSHBUFFER` token instead: a record of the buffer's words, compared word
+for word by the title before each run, split once into runs of packets and draws; the draws
+run like index records, with resident geometry. Built, not yet run.
 
 ## Next, in order
 
