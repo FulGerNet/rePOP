@@ -1,5 +1,22 @@
 # Validation log
 
+## 2026-11-02: v0.4.3 final builds, languages, Android icon
+
+Pull request #19 (GrandaCoder) merged into reSOT from its patch series, read but not
+run, as the user asked. Corrected after the merge: English is the default language on
+Android too (the pull request defaulted it to Spanish there), the demo always reports
+English, and the Windows launcher's left arrow steps back. Retail reSOT Options gained
+a Language page (English 1, French 4, Spanish 5): saved at once, applied at the next
+start. The Android adaptive icon's background is now a square of the launcher's own
+ground (`tools/icon-background.py`, from launcher.c `build_background`), checked as an
+image over the logo with a round mask.
+
+Checks: `python tools/check-hlsl.py` ok; `tools/recomp.ps1 -BuildOnly` both targets and
+`tools/build-android.ps1` built with no errors (logs/rel043-*.txt).
+
+Not checked: none of this was run. No French or Spanish game text, Language page,
+translated launcher or new icon has been seen on a screen; Android not installed.
+
 ## 2026-11-02 (later): direct path performance, retail
 
 All runs Windows D3D12, `run.ps1 -Target xbox-retail -Windowed`, `RESOT_DIRECT_DRAW=1`, played by the

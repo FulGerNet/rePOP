@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The app icon in two layers: the launcher's night-blue ornament behind, the
+<!-- The app icon in two layers: the launcher's night-blue ornament behind (a
+     square of the launcher's own ground, written by tools/icon-background.py), the
      reSOT logo (docs/media/reSOT_logo.png as it is) in the safe zone in front.
      The legacy mipmap-*/ic_launcher.png stay as a fallback. -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">

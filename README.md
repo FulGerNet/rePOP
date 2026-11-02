@@ -148,10 +148,14 @@ The release also retains the v0.3.0 features below.
   HUD clearance, repaired log-source selection, and retained the shared
   graphics, input and diagnostic options.
 
-Version 0.4.3 gives Direct3D 11 and 12 their own shader for each render state, reduces
-stutter in effect-heavy scenes on every renderer and adds the F8 debug views on
-Windows. Known issue, to fix: in the retail Magic Fountain teleport the fade to black does not
-appear and the camera stays at the entrance on the bridge until the view is changed.
+Version 0.4.3 lets the retail game run in English, French or Spanish (from the
+launchers or reSOT Options; English by default), translates the launchers, gives
+Direct3D 11 and 12 their own shader for each render state, reduces stutter in
+effect-heavy scenes, adds the F8 debug views on Windows, a new Android icon
+background and the experimental direct renderer (`RESOT_DIRECT_DRAW=1`).
+Known issue, to fix: in the retail Magic Fountain teleport the fade to black does not
+appear and the camera stays at the entrance on the bridge until the view is changed
+([release notes](docs/releases/v0.4.3.md)).
 Version 0.4.2 adds HD main menu logos to both games and fixes the retail name
 keyboard with mouse and touch, the sand tanks' HUD position, Vulkan black
 flashes and the demo's 6201 PrisonA entry ([release notes](docs/releases/v0.4.2.md)).
@@ -201,6 +205,7 @@ every level, device or exact console accuracy.
 | Native Vulkan renderer | 🟢 Windows and Android runs; shader/GPU comparisons pass | 🟢 Windows and Android runs; gameplay and GPU comparisons recorded |
 | Retail Vulkan black flashes / Farah Room main gate | Not reported for demo | 🟡 Framebuffer alias lifetime correction confirmed by the user on Windows; main gate not fixed: alpha test rejected it (stale diffuse alpha 0.41 logged), correction confirmed by the user on D3D11 only; Vulkan driver fault not fixed, query reuse restored without proof of cause |
 | Direct renderer path (`RESOT_DIRECT_DRAW=1`, off by default) | 🟡 Draws and most state reach the renderer as typed tokens; user played inside a level, clean log; fences, swap and pushbuffer replay still in the ring | 🟡 Same routines carried over at retail addresses and built; not yet run |
+| Game language (English, French, Spanish) | ⚪ English only: the demo's languages are not checked | 🟡 Saved choice from the launchers and reSOT Options, applied at start; built, not seen in game |
 | Native Direct3D 11 renderer | 🟢 Windows default | 🟢 Windows default |
 | Native Direct3D 12 renderer | 🟡 Optional Windows backend; startup and GPU tests pass | 🟡 Optional Windows backend; broader gameplay checks pending |
 | Widescreen Hor+ and HUD layout | 🟢 Widened view with preserved HUD proportions; artwork edges remain limited | 🟢 Widened view; ultrawide sand-tank alignment confirmed; some dialog layout limits remain |
