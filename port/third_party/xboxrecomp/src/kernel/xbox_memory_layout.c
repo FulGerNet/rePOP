@@ -207,8 +207,18 @@ static int kick_ahead(void)
          * then garbage texture, palette and report addresses, flicker, black
          * scenes and faults. The GPU idle/empty bits always read idle, so the
          * title may reuse what up to 16 queued submissions still name. One
-         * submission ahead is the depth the demo drew correctly with. */
-        ahead = e ? atoi(e) : (RESOT_RUNTIME_RETAIL ? 1 : 0);
+         * submission ahead is the depth the demo drew correctly with.
+         * RE-SoT: retail with the direct path (RESOT_DIRECT_DRAW=1): 8. There
+         * indices, user-pointer vertices, state and pushbuffer replays live in
+         * host copies, not in guest memory the title reuses. 2026-11-02, Windows
+         * D3D12, user's run: no defect in several scenes; a heavy scene (1,607
+         * draws a frame) from 64-67 to 82-88 fps, the title no longer waiting on
+         * the executor segment by segment. Not run with the direct path off, nor
+         * on Android, nor on the demo, at this depth. */
+        {
+            extern int nv2a_direct_mode(void);
+            ahead = e ? atoi(e) : (RESOT_RUNTIME_RETAIL ? (nv2a_direct_mode() > 0 ? 8 : 1) : 0);
+        }
         if (ahead < 0) ahead = 0;
         fprintf(stderr, "  [NV2A] KickOff: %s (%d submissions ahead)\n",
                 ahead ? "asynchronous" : "synchronous", ahead);

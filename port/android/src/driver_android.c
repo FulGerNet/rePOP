@@ -8,6 +8,28 @@
 
 extern void SDLCALL RESOT_SetAndroidVulkanGetInstanceProcAddr(SDL_FunctionPointer);
 static void *s_driver; /* Keep the isolated namespace and hooks alive. */
+static int s_turbo_option, s_turbo_applied;
+
+/* RE-SoT: holds the Adreno at its top clocks while the game is shown (Pinyon
+ * Shift's GPU turbo, through the libadrenotools already linked here). Off by
+ * default: it trades heat for steadier frames. KGSL keeps the state after the
+ * process, so a crash leaves it on until the next start or a reboot. No-op
+ * without /dev/kgsl-3d0 (Mali), on either driver. */
+void resot_android_gpu_turbo(int shown)
+{
+    int turbo = shown && s_turbo_option;
+    if (turbo == s_turbo_applied) return;
+    adrenotools_set_turbo(turbo != 0);
+    s_turbo_applied = turbo;
+    fprintf(stderr,"[POWER] GPU turbo %s\n",turbo?"on":"off");
+}
+void resot_android_gpu_turbo_option(int enabled)
+{
+    s_turbo_option = enabled != 0;
+    /* RE-SoT: unconditionally clears what an earlier crash left on. */
+    if (!enabled) adrenotools_set_turbo(false);
+    resot_android_gpu_turbo(1);
+}
 
 void resot_android_driver_init(int argc, char **argv)
 {

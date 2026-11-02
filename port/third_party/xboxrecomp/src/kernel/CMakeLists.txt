@@ -80,6 +80,12 @@ endif()
 
 if(MSVC)
     target_compile_options(xbox_kernel PRIVATE /W4 /WX- /O2 /GS- /Gy)
+    # RE-SoT: names for the runtime's static functions in Release. The /Zi the top
+    # CMakeLists.txt adds to CMAKE_C_FLAGS_RELEASE did not reach this target (its
+    # Release DebugInformationFormat was empty): the profiler and the crash report
+    # named the nearest public symbol instead (vsscanf_l for the renderer, 2026-11-02).
+    set_property(TARGET xbox_kernel PROPERTY MSVC_DEBUG_INFORMATION_FORMAT ProgramDatabase)
+    target_compile_options(xbox_kernel PRIVATE /Zi)
     target_compile_definitions(xbox_kernel PRIVATE _CRT_SECURE_NO_WARNINGS)
 else()
     target_compile_options(xbox_kernel PRIVATE -Wall -Wextra -Wno-unused-parameter -O2)

@@ -1,5 +1,152 @@
 # Validation log
 
+## 2026-11-02 (later): direct path performance, retail
+
+All runs Windows D3D12, `run.ps1 -Target xbox-retail -Windowed`, `RESOT_DIRECT_DRAW=1`, played by the
+user; the heavy scene is the same place each time (about 1,607 draws a frame). Logs kept as
+logs/perf1..perf7-retail-err.txt.
+
+Measured with `RESOT_PROFILE_MS=1`, after two fixes to the profiler itself: frames are unwound
+with the loader's tables (RtlVirtualUnwind), and the runtime library is built with debug
+information in Release (its static functions were named after the nearest public symbol, such as
+`vsscanf_l` for the renderer). Profiles from before those fixes misattributed samples; the
+RunPushBuffer share read from the first one is not trusted.
+
+| Step | Heavy scene | Title thread | Executor |
+| --- | --- | --- | --- |
+| Start (perf2) | 63-64 fps | 6.8 ms/frame | 9.6 ms/frame |
+| Guest reads without VirtualQuery (perf5) | 66-70 fps | 4.6 ms/frame, 44% waiting | 9.0-9.5 ms/frame, 33% waiting |
+| `RESOT_KICK_AHEAD=8` (perf6) | 85-86 fps; user: 82-88, no defect | 2.0 ms/frame | 9.3-9.6 ms/frame, 17% waiting |
+| Same, as the default (perf7) | 84 fps; user: about 86 | 1.9 ms/frame | 9.1-9.6 ms/frame |
+
+Light scenes reached 130-170 fps (from 75-95 at the start of the day, different places).
+Changes: `port/game/guest_probe.h` (guest RAM and the contiguous window read without a system
+call, as on Android); the direct path's slots without malloc or lock; RunPushBuffer copies
+the buffer behind a token (its message never appeared in these runs: not exercised);
+`RESOT_KICK_AHEAD` default 8 on retail when the direct path is on. Tried and removed:
+retrying resident copies of lists whose vertices changed (uploads up fivefold, no gain).
+
+What limits the heavy scene now: the executor. Of its samples, about 40% are per-draw vertex
+work: `fetch_attr` converting about 113,000 vertices a frame, the ring geometry cache's
+lookup and byte comparison, `memcpy`, and the CPU vertex program run for widescreen
+classification. Half of the direct draws have vertices that change every frame.
+
+Not checked: the demo and Android with these changes (built only); D3D11 and Vulkan.
+
+## 2026-11-02: retail direct path carried over from the demo
+
+Before it, the demo with `RESOT_DIRECT_DRAW=1`: the user played inside a level; the log was clean
+at about 7.9 M draws (user's report of that run).
+
+Changed: `source/xbox-retail/target_hooks.c` now has the demo's whole direct section (70 routines
+wrapped, plus the two KickOffs already replaced), RunPushBuffer wait included, at retail addresses.
+How the addresses were found and the hand checks: [DIRECT-RENDERER.md](DIRECT-RENDERER.md), retail
+section. The alignment found the same instruction shapes in all 76 routine pairs; one pairing was
+wrong (`0x0029C2B0`, now `0x0036DFF0`). DrawVertices has no retail counterpart and is not hooked.
+
+Commands: `tools/recomp.ps1 -Target xbox-retail -SkipAnalysis`: 14418/14420 functions lifted,
+0 failed, built, no warning in `target_hooks.c` (logs/direct10-retail-build.txt).
+`python tools/check-hlsl.py` ok. `tools/build-android.ps1` built the APK with both native
+libraries rebuilt (logs/direct10-android-build.txt). `tools/recomp.ps1 -Target xbox-demo -BuildOnly`
+ok; the demo executable was up to date, the shared runtime having no change in this step
+(logs/direct10-demo-build.txt).
+
+First run, 2026-11-02 11:17-11:19, D3D12, `run.ps1 -Target xbox-retail -Windowed -Set @{RESOT_DIRECT_DRAW='1'}`,
+played by the user: log (logs/xbox-retail-err.txt) closed normally, no crash, no stream-lost or unknown-token line;
+1,146,592 indexed tokens, 0 refused, 0 table full; about 2.85 M draws; 72-96 fps at 278-417 draws a frame;
+KickOff asynchronous, fence pair matched. The user saw it work well, with no defect.
+
+Not checked: retail with the switch off on this build. Android was
+not installed or run; on Android the switch cannot be set yet.
+
+## 2026-11-01: demo vertex programs by token, black picture after the videos
+
+Seen by the user with the rewrites of `0x0029A770` and neighbours: black after the videos. Log: every program
+3 instructions with 0 inputs; `resident: 0 hits`. Cause, seen in the token log: a shader object's body at +0x114 is
+ring packets (`00800B00` headers among the instructions), loaded whole. Change: only the payload is loaded;
+`RESOT_DIRECT_PROGRAMS=0` returns to the captured form. The user reported the demo starts normally after it.
+
+Not checked: how far play went, nor a log read for that run; D3D11, Vulkan, Android.
+
+## 2026-11-01: demo combiners, viewport, programs, clear rewritten by hand (direct path)
+
+The previous build (captured routines), D3D12: the user saw it work; that log was clean at about
+3.17 M draws. Since then rewritten as typed tokens: combiner programs, immediate mode, scissor, clear,
+constants, vertex programs, viewport, stage program. `0x002A55F0` keeps its compiler and has its result
+decoded on the title thread. `tools/recomp.ps1 -Target xbox-demo -SkipAnalysis` built (logs/direct9-demo-build.txt).
+
+Not checked: this build was not run. Still captured, so still NV2A methods at the executor: `0x0029BD20`,
+`0x0029A870`, `0x00299A50`. In the ring: fences, swap, `0x002A2DB0`, device set-up, RunPushBuffer, `0x00299340`,
+`0x00299460`, `0x0029DA80`, the final combiner in `0x002A12F0`. Retail and Android not built with this.
+
+## 2026-11-01: demo state, surfaces and combiners off the ring (direct path)
+
+Fog, with the earlier build, D3D12: the user saw it work ("funziona perfettamente"); that log had
+no stream-lost or unknown-token line. Later hooks: see DIRECT-RENDERER.md for typed, dropped, captured
+and ring routines. `tools/recomp.ps1 -Target xbox-demo -SkipAnalysis` built with no errors
+(logs/direct7-demo-build.txt).
+
+Not checked: this build was not run: no image, FPS or log exists for it. Android and retail were
+not built with these changes. Captured routines still produce NV2A methods; fences and swaps are in the ring.
+
+## 2026-11-01: demo black scene with the direct path, RunPushBuffer
+
+Seen with `RESOT_DIRECT_DRAW=1`, D3D12, twice by the user: 3D went black, UI stayed, with
+`[DIRECT] unknown UP token` and `[PB] walk left physical memory`. The added `[PB] stream lost`
+dump showed JUMP at 0x8002B5B8 to a buffer whose closing JUMP led to 0x8002B7A0, past PUT 0x8002B698.
+Change: the demo's `sub_002A39A0` wrapper kicks and waits for the executor first (direct mode only).
+Inferred, not observed: that a second run repatched the closing JUMP before the first was read.
+
+After: the user reported it solved. That run's log has no stream-lost, unknown-token or walk line,
+at 256,964 array draws (the failures came at about 221,000 and 400,000, so that count alone does
+not exclude the problem). KickOffs rose from about 9,000 to about 30,000-40,000 per 10 s;
+83-104 fps at 414-516 draws a frame against about 125 at 265, different scenes, no A/B.
+
+Not checked: the fix on retail, which does not have it; Android.
+
+## 2026-11-01: direct path, DrawVertices and DrawVerticesUP
+
+Changed, all behind `RESOT_DIRECT_DRAW=1` (default off): demo `0x002A2980` and `0x002A2810`,
+retail `0x003759E0`, now write a token in place of vertex or index words. See
+[DIRECT-RENDERER.md](DIRECT-RENDERER.md), which also lists the D3D routines still using the ring.
+Retail's lifted source has no `0x40001810` constant, so no retail DrawVertices was replaced.
+
+Checks: `python tools/check-hlsl.py` ok. `tools/recomp.ps1 -SkipAnalysis` on both targets
+built with no compiler or linker errors (logs/direct2-demo-build.txt, logs/direct2-retail-build.txt).
+`tools/build-android.ps1` built (logs/direct2-android-build.txt). The retail and demo
+DrawVerticesUP were compared by disassembly.
+
+Not checked: the game was not run with these builds, on any renderer or host, with the switch on
+or off. No image, FPS or token count exists for them. No state, surface, clear, present or query
+call was translated. This log has no earlier entry for the first segment (indexed draws): the
+census counts and observations cited in DIRECT-RENDERER.md have no entry here to back them.
+
+## 2026-10-31: fewer render passes, big cores, GPU turbo (from a study of Pinyon Shift)
+
+Read for comparison: pinyon-shift-android and its ShiftGlue SDK (android-port 2db6813,
+shallow clone outside the repository, no code copied). Its largest gains were per-draw
+caches at about 5000 draws a frame; reSOT has about 300, so its tile-GPU work applies
+instead. Changes, in the native encoder on both targets unless stated (the demo issues no
+visibility queries, so that change does nothing there):
+
+- full clears become the load op of the target's next pass (`RESOT_NATIVE_FOLD_CLEARS=0`);
+- visibility methods stay in the draw queue, with queries inside one pass
+  (`RESOT_NATIVE_VIS_SAME_PASS=0`);
+- log line `[HW native] per frame: ... render passes, ...`;
+- Android: game threads off the little cores (`RESOT_BIG_CORES=0`), and `GpuTurbo=1` in
+  the INI, default off.
+
+Checks: `ctest` in build/tests/native-gpu with `RESOT_GPU_BINDINGS_SMOKE=1` 14/14 (logs/perf-gputest.txt).
+The native suite gained two query segments inside one pass, on D3D12 and Vulkan: 4096 samples
+for the visible draw, 0 for the occluded one, with queries reset before the pass.
+`tools/recomp.ps1 -BuildOnly` both targets and `tools/build-android.ps1` built
+(logs/perf-*-build.txt).
+
+Not checked: the game was not run with these builds on any renderer or host, so no FPS,
+pass count, image or heat result exists. No test covers a folded clear's colour against
+the former solid draw. No device was connected: core selection, turbo and queries inside a
+pass on Adreno or Mali are unseen. Depth stores between passes remain; nothing here reduces them.
+
 ## 2026-10-31: v0.4.3, retail Magic Fountain teleport left open
 
 The user confirmed the F8 modes work after the camera offset fix. Open, by the

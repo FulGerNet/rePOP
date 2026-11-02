@@ -2201,6 +2201,11 @@ static uint64_t s_hw_stat_vsh_ticks, s_hw_stat_draw_ticks, s_hw_stat_verts;
 extern uint64_t g_nv2a_exec_ticks;      /* nv2a_pb_scan.c: time spent executing */
 
 /* RE-SoT: the Direct3D 11 rasteriser, which reads the state above. */
+#include "nv2a_direct.h" /* RE-SoT: read by the native encoder. */
+/* RE-SoT: executor thread; the native encoder adds to these, nv2a_direct.inc reports them. */
+static uint64_t s_direct_res_hits, s_direct_res_changed, s_direct_res_new, s_direct_res_ring;
+static uint64_t s_direct_res_upload, s_direct_res_avoided, s_direct_res_resets;
+static uint32_t s_direct_source_bytes;
 #include "nv2a_hw_d3d11.inc"
 
 #if RESOT_RUNTIME_RETAIL && (defined(_WIN32) || defined(__ANDROID__))
@@ -3292,6 +3297,7 @@ static void tex_stage_method(uint32_t method, uint32_t param)
 
 /* RE-SoT: bounded scanner payload runs share the exact upload state below. */
 #include "nv2a_pb_payload.inc"
+#include "nv2a_direct.inc" /* RE-SoT: mesh replays recognised before the ring. */
 
 void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
 {
@@ -3477,6 +3483,149 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
             zbuf_clear();
         break;
 
+    case NV097_RESOT_DIRECT_RUN:                  /* RE-SoT: nv2a_direct.h */
+        direct_execute(param);
+        break;
+
+    case NV097_RESOT_DIRECT_CULL:                 /* RE-SoT: nv2a_direct.h */
+        s_hw.cull_enable = param & 1u;
+        if (param >> 16) s_hw.cull_face = param >> 16;
+        break;
+
+    case NV097_RESOT_DIRECT_FRONT:
+        s_hw.front_face = param;
+        break;
+
+    case NV097_RESOT_DIRECT_FOG_COLOR:
+        s_gpu.fog_color = param;
+        break;
+
+    case NV097_RESOT_DIRECT_DEPTH_TEST:
+        s_gpu.depth_test = param;
+        break;
+
+    case NV097_RESOT_DIRECT_VERTEX_STATE:         /* RE-SoT: nv2a_direct.h */
+        direct_execute_vertex_state(param);
+        break;
+
+    case NV097_RESOT_DIRECT_TEXTURE:
+        direct_execute_texture(param);
+        break;
+
+    case NV097_RESOT_DIRECT_PACKETS:              /* RE-SoT: nv2a_direct.h */
+        direct_execute_packets(param);
+        break;
+
+    case NV097_RESOT_DIRECT_COMBINER:             /* RE-SoT: nv2a_direct.h */
+        direct_execute_combiner(param);
+        break;
+
+    case NV097_RESOT_DIRECT_FACTOR:
+        for (int i = 0; i < 8; i++) s_gpu.rc.factor0[i] = s_gpu.rc.factor1[i] = param;
+        break;
+
+    case NV097_RESOT_DIRECT_BUMP:
+        direct_execute_bump(param);
+        break;
+
+    case NV097_RESOT_DIRECT_IMMEDIATE:
+        direct_execute_immediate(param);
+        break;
+
+    case NV097_RESOT_DIRECT_BEGIN:
+        s_gpu.prim = param;
+        s_gpu.idx_count = 0;
+        s_gpu.inline_count = 0;
+        s_gpu.imm_count = 0;
+        break;
+
+    case NV097_RESOT_DIRECT_CLIP:
+        direct_execute_clip(param);
+        break;
+
+    case NV097_RESOT_DIRECT_CLEAR:
+        direct_execute_clear(param);
+        break;
+
+    case NV097_RESOT_DIRECT_FORMAT:
+        s_gpu.format = param;
+        break;
+
+    case NV097_RESOT_DIRECT_CONSTANTS:            /* RE-SoT: nv2a_direct.h */
+        direct_execute_constants(param);
+        break;
+
+    case NV097_RESOT_DIRECT_PROGRAM:              /* RE-SoT: nv2a_direct.h */
+        direct_execute_program(param);
+        break;
+
+    case NV097_RESOT_DIRECT_START:
+        nv2a_vsh_set_start_slot(param);
+        break;
+
+    case NV097_RESOT_DIRECT_MODE:
+        s_gpu.xf_mode = (param >> 8) & 0xFFFFu;
+        if (param >> 31) nv2a_vsh_set_cxt_write(param & 1u);
+        break;
+
+    case NV097_RESOT_DIRECT_VIEWPORT:             /* RE-SoT: nv2a_direct.h */
+        direct_execute_viewport(param);
+        break;
+
+    case NV097_RESOT_DIRECT_STAGES:               /* RE-SoT: nv2a_direct.h */
+        s_gpu.rc.stage_program = param;
+        break;
+
+    case NV097_RESOT_DIRECT_FIXED_COMBINER:
+        direct_execute_fixed_combiner(param);
+        break;
+
+    case NV097_RESOT_DIRECT_FINAL:                /* RE-SoT: nv2a_direct.h */
+        s_gpu.rc.final0 = param;
+        s_gpu.rc.final1 = 0x1C80u;
+        break;
+
+    case NV097_RESOT_DIRECT_END:                  /* RE-SoT: as SET_BEGIN_END 0 */
+        if (s_gpu.imm_count)
+            draw_immediate();
+        else if (s_gpu.inline_count)
+            draw_inline_array();
+        else
+            draw_primitive();
+        s_gpu.prim = 0;
+        s_gpu.inline_count = 0;
+        s_gpu.imm_count = 0;
+        break;
+
+    case NV097_RESOT_DIRECT_FLIP:                 /* RE-SoT: the executor's one flip */
+        nv2a_pb_exec_method(0, NV097_FLIP_INCREMENT_WRITE, 0);
+        if (param) nv2a_pb_exec_method(0, NV097_FLIP_STALL, 0);
+        break;
+
+    case NV097_RESOT_DIRECT_COLOR:
+        s_gpu.color_offset = param;
+        break;
+
+    case NV097_RESOT_DIRECT_SURFACE:              /* RE-SoT: nv2a_direct.h */
+        direct_execute_surface(param);
+        break;
+
+    case NV097_RESOT_DIRECT_FOG:                  /* RE-SoT: nv2a_direct.h */
+        direct_execute_fog(param);
+        break;
+
+    case NV097_RESOT_DIRECT_ARRAYS:               /* RE-SoT: nv2a_direct.h */
+        s_direct_array_prim = param;
+        break;
+
+    case NV097_RESOT_DIRECT_ARRAYS_RUN:
+        direct_execute_arrays(param);
+        break;
+
+    case NV097_RESOT_DIRECT_UP:
+        direct_execute_up(param);
+        break;
+
     case NV097_SET_BEGIN_END:
         if (param) {
             s_gpu.prim = param;
@@ -3575,6 +3724,7 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
         return;
 
     case NV097_FLIP_STALL:
+        direct_flip();                            /* RE-SoT */
         if (s_ftrace == 2)
             fprintf(stderr, "[FTRACE] FLIP_STALL presenting %08X (color now %08X)%c",
                     s_gpu.drawn_offset, s_gpu.color_offset, 10);

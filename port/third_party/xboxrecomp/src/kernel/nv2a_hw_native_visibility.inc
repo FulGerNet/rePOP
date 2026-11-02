@@ -7,6 +7,8 @@
 #include "../../../sdl-gpu-query/resot_gpu_query.h"
 #include <stdint.h>
 
+#define NG_VIS_EVENTS 256
+
 typedef struct NgVisFence {
     SDL_GPUFence *gpu;
     uint32_t refs;
@@ -39,15 +41,35 @@ typedef struct NgVisibility {
      * readback resource every time adds avoidable driver/allocator work. */
     void *idle_queries[64];
     uint32_t idle_count;
+    /* RE-SoT: queries reset ahead of a render pass, for segments that start
+     * inside it: Vulkan forbids vkCmdResetQueryPool within a pass. */
+    void *spare[NG_VIS_EVENTS];
+    uint32_t spare_count;
     int pool_disabled; /* RE-SoT: opt-in live A/B, bit 1 in the developer control. */
     uint64_t allocated, reused;
     int enabled, failed;
 } NgVisibility;
 typedef void (*NgVisComplete)(void *, uint32_t, uint64_t, uint32_t);
 
+/* RE-SoT: call outside a render pass. A spare stays valid until it is used,
+ * across submissions: its reset is recorded ahead of any later begin. */
+static int ng_vis_reserve(NgVisibility *v, SDL_GPUCommandBuffer *cmd, uint32_t need)
+{
+    if (need > NG_VIS_EVENTS) need = NG_VIS_EVENTS;
+    while (v->spare_count < need) {
+        void *query;
+        if (!v->pool_disabled && v->idle_count) { query = v->idle_queries[--v->idle_count]; v->reused++; }
+        else { query = v->api->create(v->device); if (query) v->allocated++; }
+        if (!query) { v->failed = 1; return 0; }
+        v->api->reset(cmd,query);
+        v->spare[v->spare_count++] = query;
+    }
+    return 1;
+}
 static NgVisSegment *ng_vis_prepare(NgVisibility *v, SDL_GPUCommandBuffer *cmd, double scale)
 {
     NgVisSegment *s;
+    int spare;
     if (!v->enabled) return NULL;
     if (v->failed) return NULL;
     if (v->count == v->capacity) {
@@ -60,14 +82,16 @@ static NgVisSegment *ng_vis_prepare(NgVisibility *v, SDL_GPUCommandBuffer *cmd, 
     if (!s) { v->failed = 1; SDL_SetError("native visibility segment allocation failed"); return NULL; }
     /* RE-SoT: only queries whose submission fence completed and whose samples
      * were copied into their immutable segment can enter this free list. */
-    if (!v->pool_disabled && v->idle_count) { s->query = v->idle_queries[--v->idle_count]; v->reused++; }
+    spare = v->spare_count != 0;
+    if (spare) s->query = v->spare[--v->spare_count];
+    else if (!v->pool_disabled && v->idle_count) { s->query = v->idle_queries[--v->idle_count]; v->reused++; }
     else { s->query = v->api->create(v->device); if (s->query) v->allocated++; }
     if (!s->query) { free(s); v->failed = 1; return NULL; }
     s->refs = 1; s->pixel_scale = scale > 0 ? scale : 1;
     s->all_next = v->all; v->all = s;
     s->pending_next = v->pending; v->pending = s;
     v->counter[v->count++] = s; v->queries++;
-    v->api->reset(cmd,s->query); /* Vulkan reset is outside the render pass. */
+    if (!spare) v->api->reset(cmd,s->query); /* Vulkan reset is outside the render pass. */
     return s;
 }
 static void ng_vis_clear(NgVisibility *v)
@@ -167,5 +191,6 @@ static void ng_vis_destroy(NgVisibility *v)
     }
     /* RE-SoT: active and pooled resources have disjoint ownership. */
     while (v->idle_count) v->api->destroy(v->device,v->idle_queries[--v->idle_count]);
+    while (v->spare_count) v->api->destroy(v->device,v->spare[--v->spare_count]);
     free(v->counter); memset(v,0,sizeof *v);
 }

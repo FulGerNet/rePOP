@@ -108,6 +108,10 @@ static void set_foreground(int active)
     s_foreground = active;
     pthread_cond_broadcast(&s_foreground_changed);
     pthread_mutex_unlock(&s_foreground_lock);
+    {
+        extern void resot_android_gpu_turbo(int);
+        resot_android_gpu_turbo(active); /* RE-SoT: never held for a hidden game. */
+    }
     fprintf(stderr,"[POWER] renderer %s\n",active?"resumed":"suspended in background");
 }
 
@@ -376,6 +380,10 @@ static void *game_main(void *unused)
     (void)unused;
     if (setpriority(PRIO_PROCESS, 0, 0) != 0)
         fprintf(stderr, "[THREAD] game normal priority failed: %s\n", strerror(errno));
+    {
+        extern void resot_android_thread_cores(int);
+        resot_android_thread_cores(1); /* RE-SoT: inherited by what this thread starts. */
+    }
 
     if ((missing = missing_game_file()) != NULL) {
         snprintf(why, sizeof why, "The folder %s does not contain the %s game files.\n\nMissing: %s",

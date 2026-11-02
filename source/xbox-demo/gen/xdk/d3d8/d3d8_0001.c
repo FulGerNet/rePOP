@@ -1805,14 +1805,14 @@ loc_002A3989: ;
 }
 
 /**
- * sub_002A39A0
+ * sub_002A39A0_gen
  * Original: 0x002A39A0 - 0x002A3C3C (668 bytes, 211 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 2 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_002A39A0(void)
+void sub_002A39A0_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */
@@ -5221,14 +5221,14 @@ loc_002A55A8: ;
 }
 
 /**
- * sub_002A55F0
+ * sub_002A55F0_gen
  * Original: 0x002A55F0 - 0x002A5B47 (1367 bytes, 373 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 2 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_002A55F0(void)
+void sub_002A55F0_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */

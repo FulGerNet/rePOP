@@ -722,14 +722,14 @@ loc_00373AC7: ;
 }
 
 /**
- * sub_00373AD0
+ * sub_00373AD0_gen
  * Original: 0x00373AD0 - 0x00373C35 (357 bytes, 99 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 1 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00373AD0(void)
+void sub_00373AD0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;
@@ -895,14 +895,14 @@ loc_00373C1E: ;
 }
 
 /**
- * sub_00373C40
+ * sub_00373C40_gen
  * Original: 0x00373C40 - 0x00373FBC (892 bytes, 306 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 1 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00373C40(void)
+void sub_00373C40_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;
@@ -1716,14 +1716,14 @@ loc_00373FA9: ;
 }
 
 /**
- * sub_00373FC0
+ * sub_00373FC0_gen
  * Original: 0x00373FC0 - 0x003741A5 (485 bytes, 142 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 2 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00373FC0(void)
+void sub_00373FC0_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */
@@ -2003,14 +2003,14 @@ loc_0037419B: ;
 }
 
 /**
- * sub_003741B0
+ * sub_003741B0_gen
  * Original: 0x003741B0 - 0x0037438C (476 bytes, 130 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 1 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_003741B0(void)
+void sub_003741B0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;
@@ -2282,14 +2282,14 @@ loc_0037435E: ;
 }
 
 /**
- * sub_00374390
+ * sub_00374390_gen
  * Original: 0x00374390 - 0x00374710 (896 bytes, 278 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 1 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00374390(void)
+void sub_00374390_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */
@@ -3203,14 +3203,14 @@ loc_00374B2F: ;
 }
 
 /**
- * sub_00374B40
+ * sub_00374B40_gen
  * Original: 0x00374B40 - 0x00374E8E (846 bytes, 240 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 2 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00374B40(void)
+void sub_00374B40_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */
@@ -3625,14 +3625,14 @@ loc_00374E8E: ;
 }
 
 /**
- * sub_00374E90
+ * sub_00374E90_gen
  * Original: 0x00374E90 - 0x00375083 (499 bytes, 154 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 2 params, returns int_or_void
  * Frame: standard_frame
  */
-void sub_00374E90(void)
+void sub_00374E90_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* prologue saves caller's frame */
@@ -4045,14 +4045,14 @@ loc_003750FF: ;
 }
 
 /**
- * sub_00375110
+ * sub_00375110_gen
  * Original: 0x00375110 - 0x003752A1 (401 bytes, 127 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 1 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00375110(void)
+void sub_00375110_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */
@@ -4304,14 +4304,14 @@ loc_00375299: ;
 }
 
 /**
- * sub_003752B0
+ * sub_003752B0_gen
  * Original: 0x003752B0 - 0x003753EE (318 bytes, 91 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_003752B0(void)
+void sub_003752B0_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */
@@ -4595,14 +4595,14 @@ loc_00375460: ;
 }
 
 /**
- * sub_00375480
+ * sub_00375480_gen
  * Original: 0x00375480 - 0x00375673 (499 bytes, 124 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 1 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00375480(void)
+void sub_00375480_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */
@@ -5541,14 +5541,14 @@ loc_003759D6: ;
 }
 
 /**
- * sub_003759E0
+ * sub_003759E0_gen
  * Original: 0x003759E0 - 0x00375B45 (357 bytes, 118 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 4 params, returns int_or_void
  * Frame: standard_frame
  */
-void sub_003759E0(void)
+void sub_003759E0_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* prologue saves caller's frame */
@@ -5791,14 +5791,14 @@ loc_00375B3F: ;
 }
 
 /**
- * sub_00375B50
+ * sub_00375B50_gen
  * Original: 0x00375B50 - 0x00375DA7 (599 bytes, 192 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 3 params, returns int_or_void
  * Frame: standard_frame
  */
-void sub_00375B50(void)
+void sub_00375B50_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* prologue saves caller's frame */
@@ -6140,14 +6140,14 @@ loc_00375DA1: ;
 }
 
 /**
- * sub_00375DB0
+ * sub_00375DB0_gen
  * Original: 0x00375DB0 - 0x00375DE7 (55 bytes, 17 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 3 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00375DB0(void)
+void sub_00375DB0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;
@@ -6183,14 +6183,14 @@ loc_00375DC3: ;
 }
 
 /**
- * sub_00375DF0
+ * sub_00375DF0_gen
  * Original: 0x00375DF0 - 0x00375E49 (89 bytes, 27 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 5 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00375DF0(void)
+void sub_00375DF0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;
@@ -6248,14 +6248,14 @@ loc_00375E1C: ;
 }
 
 /**
- * sub_00375E50
+ * sub_00375E50_gen
  * Original: 0x00375E50 - 0x00375E9C (76 bytes, 24 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 2 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00375E50(void)
+void sub_00375E50_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;
@@ -6303,14 +6303,14 @@ loc_00375E64: ;
 }
 
 /**
- * sub_00375EA0
+ * sub_00375EA0_gen
  * Original: 0x00375EA0 - 0x00375ED5 (53 bytes, 15 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 1 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00375EA0(void)
+void sub_00375EA0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;
@@ -6347,14 +6347,14 @@ loc_00375EB8: ;
 }
 
 /**
- * sub_00375EE0
+ * sub_00375EE0_gen
  * Original: 0x00375EE0 - 0x00375F21 (65 bytes, 20 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00375EE0(void)
+void sub_00375EE0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     uint32_t _fa = 0, _fb = 0;
@@ -8195,14 +8195,14 @@ loc_00376AB9: ;
 }
 
 /**
- * sub_00376AD0
+ * sub_00376AD0_gen
  * Original: 0x00376AD0 - 0x00376D6C (668 bytes, 211 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 2 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00376AD0(void)
+void sub_00376AD0_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */
@@ -11611,14 +11611,14 @@ loc_003786D8: ;
 }
 
 /**
- * sub_00378720
+ * sub_00378720_gen
  * Original: 0x00378720 - 0x00378C77 (1367 bytes, 373 insns)
  * Folder: xdk/d3d8 (section: D3D)
  * Category: game_render
  * CC: cdecl, 2 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00378720(void)
+void sub_00378720_gen(void)
 {
     uint32_t ebp = 0;
     ebp = g_ebp;  /* frameless: caller's frame */

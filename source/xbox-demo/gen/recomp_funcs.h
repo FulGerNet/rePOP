@@ -9184,7 +9184,7 @@ void sub_00297AD0(void);
 void sub_00297B00(void);
 void sub_00297B50(void);
 void sub_00297BB0(void);
-void sub_00297C20(void);
+void sub_00297C20_gen(void);
 void sub_00297EA0(void);
 void sub_00297EF0(void);
 void sub_00297F10(void);
@@ -9193,7 +9193,7 @@ void sub_00298160(void);
 void sub_00298310(void);
 void sub_002983A0(void);
 void sub_002983D0(void);
-void sub_002984B0(void);
+void sub_002984B0_gen(void);
 void sub_002987B0(void);
 void sub_00298800(void);
 void sub_0029899A(void);
@@ -9202,7 +9202,7 @@ void sub_002989F2(void);
 void sub_002989FF(void);
 void sub_00298A10(void);
 void sub_00298A21(void);
-void sub_00298A50(void);
+void sub_00298A50_gen(void);
 void sub_00298E40(void);
 void sub_00298E90(void);
 void sub_00298F30(void);
@@ -9219,7 +9219,7 @@ void sub_002995E0(void);
 void sub_00299670(void);
 void sub_002996E0(void);
 void sub_00299860(void);
-void sub_00299A50(void);
+void sub_00299A50_gen(void);
 void sub_00299B60(void);
 void sub_00299BA0(void);
 void sub_00299C90(void);
@@ -9233,62 +9233,62 @@ void sub_0029A230(void);
 void sub_0029A330(void);
 void sub_0029A470(void);
 void sub_0029A4D0(void);
-void sub_0029A580(void);
+void sub_0029A580_gen(void);
 void sub_0029A660(void);
 void sub_0029A6A0(void);
 void sub_0029A6E0(void);
-void sub_0029A770(void);
-void sub_0029A7D0(void);
-void sub_0029A870(void);
-void sub_0029A990(void);
+void sub_0029A770_gen(void);
+void sub_0029A7D0_gen(void);
+void sub_0029A870_gen(void);
+void sub_0029A990_gen(void);
 void sub_0029A9D0(void);
-void sub_0029A9F0(void);
-void sub_0029AAE0(void);
-void sub_0029AC50(void);
+void sub_0029A9F0_gen(void);
+void sub_0029AAE0_gen(void);
+void sub_0029AC50_gen(void);
 void sub_0029AE00(void);
 void sub_0029AE30(void);
 void sub_0029AE60(void);
 void sub_0029AEC0(void);
 void sub_0029AFF0(void);
-void sub_0029B130(void);
-void sub_0029B170(void);
-void sub_0029B1B0(void);
-void sub_0029B200(void);
-void sub_0029B270(void);
-void sub_0029B2B0(void);
-void sub_0029B2F0(void);
-void sub_0029B350(void);
-void sub_0029B3C0(void);
+void sub_0029B130_gen(void);
+void sub_0029B170_gen(void);
+void sub_0029B1B0_gen(void);
+void sub_0029B200_gen(void);
+void sub_0029B270_gen(void);
+void sub_0029B2B0_gen(void);
+void sub_0029B2F0_gen(void);
+void sub_0029B350_gen(void);
+void sub_0029B3C0_gen(void);
 void sub_0029B440(void);
-void sub_0029B4C0(void);
-void sub_0029B520(void);
-void sub_0029B570(void);
-void sub_0029B5D0(void);
-void sub_0029B650(void);
+void sub_0029B4C0_gen(void);
+void sub_0029B520_gen(void);
+void sub_0029B570_gen(void);
+void sub_0029B5D0_gen(void);
+void sub_0029B650_gen(void);
 void sub_0029B6A0(void);
 void sub_0029B7B0(void);
 void sub_0029B820(void);
 void sub_0029B860(void);
 void sub_0029B8A0(void);
 void sub_0029B990(void);
-void sub_0029BA00(void);
+void sub_0029BA00_gen(void);
 void sub_0029BBF0(void);
-void sub_0029BC50(void);
-void sub_0029BD20(void);
-void sub_0029C080(void);
-void sub_0029C110(void);
-void sub_0029C1A0(void);
+void sub_0029BC50_gen(void);
+void sub_0029BD20_gen(void);
+void sub_0029C080_gen(void);
+void sub_0029C110_gen(void);
+void sub_0029C1A0_gen(void);
 void sub_0029C210(void);
-void sub_0029C240(void);
-void sub_0029C2B0(void);
+void sub_0029C240_gen(void);
+void sub_0029C2B0_gen(void);
 void sub_0029C320(void);
 void sub_0029C340(void);
 void sub_0029C360(void);
 void sub_0029C380(void);
 void sub_0029C3B0(void);
-void sub_0029C3E0(void);
-void sub_0029C460(void);
-void sub_0029C4B0(void);
+void sub_0029C3E0_gen(void);
+void sub_0029C460_gen(void);
+void sub_0029C4B0_gen(void);
 void sub_0029C500(void);
 void sub_0029C560(void);
 void sub_0029C660(void);
@@ -9320,7 +9320,7 @@ void sub_0029DA80(void);
 void sub_0029E020(void);
 void sub_0029E4F0(void);
 void sub_0029E6A0(void);
-void sub_0029E6F0(void);
+void sub_0029E6F0_gen(void);
 void sub_0029E740(void);
 void sub_0029E7A0(void);
 void sub_0029E7C0(void);
@@ -9403,30 +9403,30 @@ void sub_002A06F6(void);
 void sub_002A08E4(void);
 void sub_002A09A6(void);
 void sub_002A0B70(void);
-void sub_002A0C10(void);
-void sub_002A0D80(void);
-void sub_002A1100(void);
-void sub_002A12F0(void);
-void sub_002A14D0(void);
+void sub_002A0C10_gen(void);
+void sub_002A0D80_gen(void);
+void sub_002A1100_gen(void);
+void sub_002A12F0_gen(void);
+void sub_002A14D0_gen(void);
 void sub_002A1890(void);
 void sub_002A1980(void);
 void sub_002A1B40(void);
-void sub_002A1C80(void);
-void sub_002A1FD0(void);
+void sub_002A1C80_gen(void);
+void sub_002A1FD0_gen(void);
 void sub_002A21D0(void);
-void sub_002A2250(void);
-void sub_002A23F0(void);
+void sub_002A2250_gen(void);
+void sub_002A23F0_gen(void);
 void sub_002A2530(void);
-void sub_002A2580(void);
+void sub_002A2580_gen(void);
 void sub_002A2780(void);
-void sub_002A2810(void);
-void sub_002A2980(void);
-void sub_002A2A20(void);
-void sub_002A2C80(void);
-void sub_002A2CC0(void);
-void sub_002A2D20(void);
-void sub_002A2D70(void);
-void sub_002A2DB0(void);
+void sub_002A2810_gen(void);
+void sub_002A2980_gen(void);
+void sub_002A2A20_gen(void);
+void sub_002A2C80_gen(void);
+void sub_002A2CC0_gen(void);
+void sub_002A2D20_gen(void);
+void sub_002A2D70_gen(void);
+void sub_002A2DB0_gen(void);
 void sub_002A2E00(void);
 void sub_002A2E50(void);
 void sub_002A2E8F(void);
@@ -9444,7 +9444,7 @@ void sub_002A3880(void);
 void sub_002A38A0(void);
 void sub_002A38C0(void);
 void sub_002A3900(void);
-void sub_002A39A0(void);
+void sub_002A39A0_gen(void);
 void sub_002A3C40(void);
 void sub_002A3CD0(void);
 void sub_002A3D40(void);
@@ -9468,7 +9468,7 @@ void sub_002A512F(void);
 void sub_002A5252(void);
 void sub_002A52D3(void);
 void sub_002A5550(void);
-void sub_002A55F0(void);
+void sub_002A55F0_gen(void);
 void sub_002A5BB0(void);
 void sub_002A5C60(void);
 void sub_002A5C70(void);
@@ -11229,8 +11229,66 @@ void sub_000C05D0(void);  /* 0x000C05D0 */
 void sub_001104E0(void);  /* 0x001104E0 */
 void sub_00117580(void);  /* 0x00117580 */
 void sub_0023F040(void);  /* 0x0023F040 */
+void sub_00297C20(void);  /* 0x00297C20 */
+void sub_002984B0(void);  /* 0x002984B0 */
+void sub_00298A50(void);  /* 0x00298A50 */
+void sub_00299A50(void);  /* 0x00299A50 */
+void sub_0029A580(void);  /* 0x0029A580 */
+void sub_0029A770(void);  /* 0x0029A770 */
+void sub_0029A7D0(void);  /* 0x0029A7D0 */
+void sub_0029A870(void);  /* 0x0029A870 */
+void sub_0029A990(void);  /* 0x0029A990 */
+void sub_0029A9F0(void);  /* 0x0029A9F0 */
+void sub_0029AAE0(void);  /* 0x0029AAE0 */
+void sub_0029AC50(void);  /* 0x0029AC50 */
+void sub_0029B130(void);  /* 0x0029B130 */
+void sub_0029B170(void);  /* 0x0029B170 */
+void sub_0029B1B0(void);  /* 0x0029B1B0 */
+void sub_0029B200(void);  /* 0x0029B200 */
+void sub_0029B270(void);  /* 0x0029B270 */
+void sub_0029B2B0(void);  /* 0x0029B2B0 */
+void sub_0029B2F0(void);  /* 0x0029B2F0 */
+void sub_0029B350(void);  /* 0x0029B350 */
+void sub_0029B3C0(void);  /* 0x0029B3C0 */
+void sub_0029B4C0(void);  /* 0x0029B4C0 */
+void sub_0029B520(void);  /* 0x0029B520 */
+void sub_0029B570(void);  /* 0x0029B570 */
+void sub_0029B5D0(void);  /* 0x0029B5D0 */
+void sub_0029B650(void);  /* 0x0029B650 */
+void sub_0029BA00(void);  /* 0x0029BA00 */
+void sub_0029BC50(void);  /* 0x0029BC50 */
+void sub_0029BD20(void);  /* 0x0029BD20 */
+void sub_0029C080(void);  /* 0x0029C080 */
+void sub_0029C110(void);  /* 0x0029C110 */
+void sub_0029C1A0(void);  /* 0x0029C1A0 */
+void sub_0029C240(void);  /* 0x0029C240 */
+void sub_0029C2B0(void);  /* 0x0029C2B0 */
+void sub_0029C3E0(void);  /* 0x0029C3E0 */
+void sub_0029C460(void);  /* 0x0029C460 */
+void sub_0029C4B0(void);  /* 0x0029C4B0 */
 void sub_0029D0C0(void);  /* 0x0029D0C0 */
 void sub_0029D170(void);  /* 0x0029D170 */
+void sub_0029E6F0(void);  /* 0x0029E6F0 */
+void sub_002A0C10(void);  /* 0x002A0C10 */
+void sub_002A0D80(void);  /* 0x002A0D80 */
+void sub_002A1100(void);  /* 0x002A1100 */
+void sub_002A12F0(void);  /* 0x002A12F0 */
+void sub_002A14D0(void);  /* 0x002A14D0 */
+void sub_002A1C80(void);  /* 0x002A1C80 */
+void sub_002A1FD0(void);  /* 0x002A1FD0 */
+void sub_002A2250(void);  /* 0x002A2250 */
+void sub_002A23F0(void);  /* 0x002A23F0 */
+void sub_002A2580(void);  /* 0x002A2580 */
+void sub_002A2810(void);  /* 0x002A2810 */
+void sub_002A2980(void);  /* 0x002A2980 */
+void sub_002A2A20(void);  /* 0x002A2A20 */
+void sub_002A2C80(void);  /* 0x002A2C80 */
+void sub_002A2CC0(void);  /* 0x002A2CC0 */
+void sub_002A2D20(void);  /* 0x002A2D20 */
+void sub_002A2D70(void);  /* 0x002A2D70 */
+void sub_002A2DB0(void);  /* 0x002A2DB0 */
+void sub_002A39A0(void);  /* 0x002A39A0 */
+void sub_002A55F0(void);  /* 0x002A55F0 */
 void sub_00315FD6(void);  /* 0x00315FD6 */
 void sub_00315FF8(void);  /* 0x00315FF8 */
 void sub_0031C450(void);  /* 0x0031C450 */

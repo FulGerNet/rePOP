@@ -2,6 +2,8 @@
  * Synthetic memory only; rejected reads must not fault or consume a guard. */
 #include "../../../../game/guest_probe.h"
 #include <stdio.h>
+/* RE-SoT: no guest RAM here, so every read below takes the VirtualQuery path. */
+size_t g_xbox_total_ram, g_xbox_map_size;
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"probe check failed at %d: %s\n",__LINE__,#x); return 1; } } while (0)
 int main(void)
 {

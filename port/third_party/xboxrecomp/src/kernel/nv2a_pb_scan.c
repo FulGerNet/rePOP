@@ -195,9 +195,42 @@ void nv2a_pb_scan_report(void)
  * been misread or overwritten, and this is where to start looking. */
 static uint32_t s_last_word, s_last_word_va;
 
+/* RE-SoT: the walk's recent past, printed once at the first sign that it has lost
+ * the stream, to show where a packet stopped matching what the title wrote. */
+#define PB_RECENT_WORDS 32768u
+static struct { uint32_t va, word; } s_recent_words[PB_RECENT_WORDS];
+static struct { uint32_t start, put; } s_recent_segments[16];
+static uint32_t s_recent_word, s_recent_segment, s_recent_segment_word;
+
+void nv2a_pb_dump_recent(const char *why)
+{
+    static int done;
+    if (done) return;
+    done = 1;
+    fprintf(stderr, "[PB] stream lost (%s). Segments, oldest first:\n", why);
+    for (uint32_t i = 0; i < 16; i++) {
+        uint32_t at = (s_recent_segment + i) & 15u;
+        fprintf(stderr, "[PB]   %08X -> %08X\n", s_recent_segments[at].start, s_recent_segments[at].put);
+    }
+    /* The current segment: its start and its last words. A JUMP or CALL anywhere
+     * in it is printed too, as those are what can carry the walk past PUT. */
+    {
+        uint32_t n = (s_recent_word - s_recent_segment_word) & (PB_RECENT_WORDS - 1u);
+        fprintf(stderr, "[PB] Current segment, %u headers and control words:\n", n);
+        for (uint32_t i = 0; i < n; i++) {
+            uint32_t at = (s_recent_segment_word + i) & (PB_RECENT_WORDS - 1u);
+            uint32_t w = s_recent_words[at].word;
+            if (i < 32 || i + 64 >= n || (w & 3u) || (w & 0xE0000003u) == 0x20000000u ||
+                    ((w & 0x1FFCu) >= 0x1FF0u))
+                fprintf(stderr, "[PB]   %08X: %08X\n", s_recent_words[at].va, w);
+        }
+    }
+}
+
 static void pb_left_memory(uint32_t va, int in_call)
 {
     static unsigned shown;
+    nv2a_pb_dump_recent("walk left physical memory");
     if (shown++ < 12)
         fprintf(stderr, "  [PB] walk left physical memory at 0x%08X (%s), after word"
                         " %08X at 0x%08X\n", va, in_call ? "in a CALL" : "ring",
@@ -321,6 +354,10 @@ static void pb_scan_to(uint32_t start_va, uint32_t put_va)
         s_exec_enabled = getenv("RECOMP_PB_EXEC") != NULL;
     if (!s_exec_enabled && !getenv("RECOMP_PB_SCAN"))
         return;
+    s_recent_segments[s_recent_segment & 15u].start = start_va;
+    s_recent_segments[s_recent_segment & 15u].put = put_va;
+    s_recent_segment = (s_recent_segment + 1) & 15u;
+    s_recent_segment_word = s_recent_word;
     while (va != put_va && words < 0x100000u) {
         uint32_t w;
 
@@ -329,6 +366,9 @@ static void pb_scan_to(uint32_t start_va, uint32_t put_va)
             break;                               /* left physical memory */
         }
         w = *(const uint32_t *)(mem + va);
+        s_recent_words[s_recent_word].va = va;
+        s_recent_words[s_recent_word].word = w;
+        s_recent_word = (s_recent_word + 1) & (PB_RECENT_WORDS - 1u);
         va += 4;
         words++;
         if ((w & 3u) == 1u || (w & 0xE0000003u) == 0x20000000u) {    /* JUMP */

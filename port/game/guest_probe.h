@@ -19,8 +19,21 @@ static int resot_guest_read_word(ptrdiff_t offset, uint64_t va, uint32_t *value)
     if (!value || !va || va > UINT32_MAX-3u) return 0;
 #if defined(_WIN32)
     {
+        /* reSOT: guest RAM from 0x10000 and the contiguous window are views
+         * mapped once for the process lifetime (xbox_MemoryLayoutInit), as on
+         * Android below: no system call for them. Asking VirtualQuery for every
+         * word of the per-frame menu and cheat checks was 17% of the title
+         * thread's samples in a heavy retail scene (RESOT_PROFILE_MS, 2026-11-02). */
+        extern size_t g_xbox_total_ram, g_xbox_map_size;
         MEMORY_BASIC_INFORMATION info;
         uintptr_t address = (uintptr_t)offset+(uint32_t)va;
+        uint32_t a = (uint32_t)va;
+        size_t ram = g_xbox_map_size ? g_xbox_map_size : g_xbox_total_ram;
+        if ((a >= 0x10000u && a < ram && 4 <= ram-a) ||
+            (a >= 0x80000000u && a-0x80000000u < (64u << 20) && 4 <= (64u << 20)-(a-0x80000000u))) {
+            memcpy(value,(const void *)address,sizeof *value);
+            return 1;
+        }
         const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
                                PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
         if (address > UINTPTR_MAX-4 ||

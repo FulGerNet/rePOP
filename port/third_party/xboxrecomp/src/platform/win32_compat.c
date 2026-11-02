@@ -788,6 +788,57 @@ BOOL ReleaseMutex(HANDLE h)
 /* Threads                                                               */
 /* ===================================================================== */
 
+#if defined(__ANDROID__)
+/* RE-SoT: the cores of at least half the largest capacity (the kernel's relative
+ * performance): on a 1+4+3 phone, all but the little ones. Pinyon Shift's choice
+ * for its critical threads (idea only). A title thread landing on a little core
+ * costs a frame; the scheduler's own migration comes too late for that.
+ * Zero: all alike, kernel silent, or RESOT_BIG_CORES=0. */
+static cpu_set_t s_core_all, s_core_big;
+static int s_core_big_valid;
+static pthread_once_t s_core_once = PTHREAD_ONCE_INIT;
+static void core_scan(void)
+{
+    unsigned capacity[64], cpu, count = 0, smallest = ~0u, largest = 0;
+    char listing[256] = "";
+    const char *e = getenv("RESOT_BIG_CORES");
+    size_t used = 0;
+    CPU_ZERO(&s_core_all); CPU_ZERO(&s_core_big);
+    for (cpu = 0; cpu < 64; cpu++) {
+        char path[64];
+        FILE *f;
+        snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%u/cpu_capacity", cpu);
+        f = fopen(path, "r");
+        if (!f) break;
+        if (fscanf(f, "%u", &capacity[cpu]) != 1) { fclose(f); break; }
+        fclose(f);
+        if (capacity[cpu] < smallest) smallest = capacity[cpu];
+        if (capacity[cpu] > largest) largest = capacity[cpu];
+        if (used < sizeof listing)
+            used += (size_t)snprintf(listing + used, sizeof listing - used, "%u ", capacity[cpu]);
+        CPU_SET(cpu, &s_core_all);
+        count++;
+    }
+    if (!count || smallest == largest || (e && *e == '0')) {
+        fprintf(stderr, "[THREAD] CPU capacities: %s; no core preference\n", count ? listing : "not reported");
+        return;
+    }
+    for (cpu = 0; cpu < count; cpu++)
+        if (capacity[cpu]*2 >= largest) CPU_SET(cpu, &s_core_big);
+    s_core_big_valid = 1;
+    fprintf(stderr, "[THREAD] CPU capacities: %s; game threads on %d cores\n", listing, CPU_COUNT(&s_core_big));
+}
+void resot_android_thread_cores(int big)
+{
+    pthread_once(&s_core_once, core_scan);
+    /* A refusal (a cpuset narrower than the mask) leaves the scheduler's choice. */
+    if (s_core_big_valid && sched_setaffinity(0, sizeof(cpu_set_t), big ? &s_core_big : &s_core_all) != 0) {
+        static int told;
+        if (!told++) fprintf(stderr, "[THREAD] core preference refused: %s\n", strerror(errno));
+    }
+}
+#endif
+
 static void *thread_trampoline(void *arg)
 {
 #if defined(__ANDROID__)
@@ -795,6 +846,7 @@ static void *thread_trampoline(void *arg)
      * Keep runtime work at normal priority so system UI can preempt it. */
     if (setpriority(PRIO_PROCESS, 0, 0) != 0)
         fprintf(stderr, "[THREAD] normal priority failed: %s\n", strerror(errno));
+    resot_android_thread_cores(1);
 #endif
     w32_object *o = (w32_object *)arg;
     t_self_obj = o;

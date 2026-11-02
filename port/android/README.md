@@ -626,6 +626,21 @@ The retail APU scheduler now tolerates short Android scheduling delays without
 immediately discarding elapsed audio time. Cutscene sync and thermal benefit
 await user testing; the APK was installed without launching it.
 
+Game threads now stay off the little cores: those of at least half the largest
+`cpu_capacity`, read at start and logged as `[THREAD] CPU capacities`. Pipeline
+compilers may use any core. `RESOT_BIG_CORES=0` turns this off. Windows has no such
+setting: its Direct3D and Vulkan renderers were checked only on CPUs with one core
+type, and Pinyon Shift measured no gain from thread placement on one.
+
+**GPU turbo.** `GpuTurbo=1` under `[Graphics]` in `resot-options.ini` holds an Adreno
+at its top clocks while the game is shown, through libadrenotools. Default off, no
+launcher row yet, no Windows counterpart: it is a KGSL property of Adreno, and it
+trades heat for steadier frames, so thermal caps can arrive sooner. The state outlives
+the process: after a crash it stays on until the next start of the game or a reboot.
+The `[POWER] GPU turbo` lines show when it changes. Not tested on a device.
+
+**Direct renderer path.** Both native libraries are built with the direct path of [docs/DIRECT-RENDERER.md](../../docs/DIRECT-RENDERER.md) (demo and, since 2026-11-02, retail), off by default. Windows turns it on with `RESOT_DIRECT_DRAW=1`; the app has no way yet to set that variable, so on Android it stays off. Not run on a device.
+
 ### APK publisher integrity (v0.3.2, versionCode 7)
 
 Before launcher initialization and before loading game libraries after task

@@ -63,6 +63,7 @@ static int s_joy_was[25], s_key_was[256], s_walk, s_walk_was;
 static int s_keyboard_enabled = 1, s_mouse_speed = 43, s_walk_deflection = 12000;
 static int s_look_sensitivity = 200;
 static char s_path[1200];
+static int s_gpu_turbo; /* RE-SoT: INI only, see port/android/README.md. */
 
 extern int  xbox_FramebufferKeyDown(int);
 extern void xbox_FramebufferTakeMouse(int *, int *);
@@ -148,6 +149,7 @@ static int save_config(void)
     fprintf(f, "[Graphics]\nRenderer=vulkan\nFPSLimit=%d\nVSync=%d\nInternalResolutionPercent=%d\n",
             s_fps, s_vsync,s_render_scales[s_resolution]);
     fprintf(f,"GraphicsPreset=%d\n",s_post_quality);
+    fprintf(f,"GpuTurbo=%d\n",s_gpu_turbo);
     fprintf(f,"[Diagnostics]\nConsoleLogs=%d\n",s_console_logs);
     fprintf(f, "[Controls]\nLookSensitivityPercent=%d\n",s_look_sensitivity);
     fprintf(f, "[Game]\nTutorials=%d\n",s_tutorials);
@@ -389,6 +391,11 @@ void resot_options_init(void)
     if (s_walk_deflection > 32767) s_walk_deflection = 32767;
     snprintf(s_path, sizeof s_path, "%s/resot-options.ini", resot_android_data_dir());
     s_look_sensitivity = resot_look_percent(ini_get("Controls","LookSensitivityPercent",200));
+    s_gpu_turbo = ini_get("Graphics","GpuTurbo",0) != 0;
+    {
+        extern void resot_android_gpu_turbo_option(int);
+        resot_android_gpu_turbo_option(s_gpu_turbo);
+    }
     s_fps = ini_get("Graphics", "FPSLimit", 0);
     if (s_fps != 0 && s_fps != 30 && s_fps != 60 && s_fps != 120) s_fps = 0;
     env = getenv("RECOMP_HW_VSYNC");

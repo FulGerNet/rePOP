@@ -112,6 +112,33 @@ runs on background workers, one reserved for reference programs; a program compi
 `RESOT_PS_TRANSLATE=0` (D3D11), `RESOT_NATIVE_SPECIALIZE=0` and
 `RESOT_NATIVE_TRANSLATE=0` (D3D12, Vulkan) restore the interpreters for A/B tests.
 
+### Render passes on tile GPUs
+
+A pass that loads and stores its targets costs a tile GPU a trip over the whole
+target, whatever it draws. Pinyon Shift's backlog (Forza Horizon, about 5000 draws
+a frame) reached the same conclusion; its per-draw caches matter less at reSOT's
+300. Two of its ideas apply here, written anew:
+
+- A full clear (all channels, whole surface) waits for the target's next pass and
+  becomes its load op (`ng_clear`, `ng_take_clears`). Anything else that reads the
+  target first, as a texture, in composition or in a readback, settles it
+  (`ng_settle_color`, `ng_settle_depth`). `RESOT_NATIVE_FOLD_CLEARS=0` restores the
+  separate passes.
+- Visibility methods no longer flush the queue. They wait in it in guest order
+  (`NgVisEvent`) and a flush applies them between draws, ending and beginning
+  queries inside one pass. Vulkan forbids resetting a query there, so the flush
+  resets the ones it will need first (`ng_vis_reserve`). `RESOT_NATIVE_VIS_SAME_PASS=0`
+  restores a flush per method. `s_ng.vis_queue_enabled` is the guest's state as draws
+  are queued, which the retail halo test reads; `s_ng_visibility.enabled` follows
+  encoding.
+
+Every 5 s the log reports `[HW native] per frame: ... render passes, ... queue
+flushes, ... submissions, ... clears in load ops`.
+
+Taken from the same study and not adopted: register-write elision (reSOT's constant
+writes already compare), single-sampled surfaces (NV2A surfaces here have one sample),
+and a decode/record split (SDL GPU records on the executor).
+
 Mip-aware border filtering, full stencil and broader gameplay/performance
 validation remain unfinished. See the latest
 entry in `VALIDATION.md` for observations, commands and remaining limits.

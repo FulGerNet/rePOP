@@ -200,6 +200,7 @@ every level, device or exact console accuracy.
 | Automatic Android overlay hiding | 🟡 Toggle stays visible with pad; hidden toggle/FPS remain touchable. Policy tests pass; device checks pending | 🟡 Same shared implementation and validation limit |
 | Native Vulkan renderer | 🟢 Windows and Android runs; shader/GPU comparisons pass | 🟢 Windows and Android runs; gameplay and GPU comparisons recorded |
 | Retail Vulkan black flashes / Farah Room main gate | Not reported for demo | 🟡 Framebuffer alias lifetime correction confirmed by the user on Windows; main gate not fixed: alpha test rejected it (stale diffuse alpha 0.41 logged), correction confirmed by the user on D3D11 only; Vulkan driver fault not fixed, query reuse restored without proof of cause |
+| Direct renderer path (`RESOT_DIRECT_DRAW=1`, off by default) | 🟡 Draws and most state reach the renderer as typed tokens; user played inside a level, clean log; fences, swap and pushbuffer replay still in the ring | 🟡 Same routines carried over at retail addresses and built; not yet run |
 | Native Direct3D 11 renderer | 🟢 Windows default | 🟢 Windows default |
 | Native Direct3D 12 renderer | 🟡 Optional Windows backend; startup and GPU tests pass | 🟡 Optional Windows backend; broader gameplay checks pending |
 | Widescreen Hor+ and HUD layout | 🟢 Widened view with preserved HUD proportions; artwork edges remain limited | 🟢 Widened view; ultrawide sand-tank alignment confirmed; some dialog layout limits remain |

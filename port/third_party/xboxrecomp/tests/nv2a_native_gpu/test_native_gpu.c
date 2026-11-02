@@ -484,6 +484,27 @@ int main(int argc, char **argv)
         SDL_BindGPUGraphicsPipeline(pass,gpu); SDL_SetGPUViewport(pass,&vp); SDL_SetGPUScissor(pass,&sc);
         SDL_PushGPUFragmentUniformData(cmd,0,pc,sizeof pc); SDL_DrawGPUPrimitives(pass,3,1,0,0);
         api->end(cmd,occluded->query); SDL_EndGPURenderPass(pass); api->resolve(cmd,occluded->query);
+        /* RE-SoT: as ng_flush_draws: segments inside one pass, from queries
+         * reset before it. The clear is the load op, so it precedes the draws;
+         * the second draw is occluded by the first. */
+        NgVisSegment *pass_visible, *pass_occluded;
+        REQUIRE(ng_vis_reserve(&visibility,cmd,2));
+        REQUIRE(visibility.spare_count == 2);
+        ct.load_op = SDL_GPU_LOADOP_CLEAR; ds.load_op = SDL_GPU_LOADOP_CLEAR;
+        pass_visible = ng_vis_prepare(&visibility,cmd,scale); REQUIRE(pass_visible);
+        pass = SDL_BeginGPURenderPass(cmd,&ct,1,&ds); REQUIRE(pass);
+        SDL_BindGPUGraphicsPipeline(pass,gpu); SDL_SetGPUViewport(pass,&vp); SDL_SetGPUScissor(pass,&sc);
+        SDL_PushGPUFragmentUniformData(cmd,0,pc,sizeof pc);
+        api->begin(cmd,pass_visible->query);
+        SDL_DrawGPUPrimitives(pass,3,1,0,0);
+        api->end(cmd,pass_visible->query);
+        pass_occluded = ng_vis_prepare(&visibility,cmd,scale); REQUIRE(pass_occluded);
+        api->begin(cmd,pass_occluded->query);
+        SDL_DrawGPUPrimitives(pass,3,1,0,0);
+        api->end(cmd,pass_occluded->query);
+        SDL_EndGPURenderPass(pass);
+        api->resolve(cmd,pass_visible->query); api->resolve(cmd,pass_occluded->query);
+        REQUIRE(visibility.spare_count == 0);
         REQUIRE(ng_vis_report(&visibility,address,900+address));
         if (frame == 1) REQUIRE(ng_vis_report(&visibility,address+1,901+address));
         REQUIRE(ng_vis_poll(&visibility,report_complete,&reports));
@@ -504,9 +525,11 @@ int main(int argc, char **argv)
         REQUIRE(ng_vis_submitted(&visibility,fence));
         REQUIRE(SDL_WaitForGPUFences(device,true,&fence,1));
         REQUIRE(ng_vis_poll(&visibility,report_complete,&reports));
-        REQUIRE(reports.seen[address] == 1 && reports.pixels[address] == expected_count && reports.stamp[address] == 900+address);
-        if (frame == 1) REQUIRE(reports.seen[address+1] == 1 && reports.pixels[address+1] == expected_count);
+        /* The report counts both the separate passes' and the shared pass's segments. */
+        REQUIRE(reports.seen[address] == 1 && reports.pixels[address] == expected_count*2 && reports.stamp[address] == 900+address);
+        if (frame == 1) REQUIRE(reports.seen[address+1] == 1 && reports.pixels[address+1] == expected_count*2);
         REQUIRE(visible->samples == 4096 && occluded->samples == 0);
+        REQUIRE(pass_visible->samples == 4096 && pass_occluded->samples == 0);
         pixels = (const Uint32 *)SDL_MapGPUTransferBuffer(device,transfer,false); REQUIRE(pixels);
         REQUIRE(pixels[64*128+64] == expected);
         REQUIRE(pixels[8*128+8] == 0xFF000000u);
@@ -519,11 +542,11 @@ int main(int argc, char **argv)
     REQUIRE(ng_vis_poll(&visibility,report_complete,&reports));
     REQUIRE(ng_vis_poll(&visibility,report_complete,&reports));
     REQUIRE(reports.seen[12] == 1 && reports.pixels[12] == 0);
-    REQUIRE(visibility.queries == 8 && visibility.reports == 6 && visibility.completed == 6);
+    REQUIRE(visibility.queries == 16 && visibility.reports == 6 && visibility.completed == 6);
     /* RE-SoT: frame 3 retains frame 2's samples while reusing its native
      * handles. The expected 5120 above proves old normalized samples survive.
-     * Eight logical queries require just two actual native resources. */
-    REQUIRE(visibility.allocated == 2 && visibility.reused == 6 && visibility.idle_count == 2);
+     * Sixteen logical queries require just four actual native resources. */
+    REQUIRE(visibility.allocated == 4 && visibility.reused == 12 && visibility.idle_count == 4);
     REQUIRE(!visibility.all && !visibility.pending && !visibility.first);
     /* A discarded counter without GET_REPORT still owns live GPU objects
      * until its submission finishes, then retires without publishing data. */
@@ -545,8 +568,8 @@ int main(int argc, char **argv)
         REQUIRE(ng_vis_submitted(&visibility,fence));
         REQUIRE(SDL_WaitForGPUFences(device,true,&fence,1));
         REQUIRE(ng_vis_poll(&visibility,report_complete,&reports));
-        REQUIRE(!visibility.all && visibility.completed == 6 && visibility.queries == 9);
-        REQUIRE(visibility.allocated == 2 && visibility.reused == 7 && visibility.idle_count == 2); /* RE-SoT */
+        REQUIRE(!visibility.all && visibility.completed == 6 && visibility.queries == 17);
+        REQUIRE(visibility.allocated == 4 && visibility.reused == 13 && visibility.idle_count == 4); /* RE-SoT */
         visibility.enabled = 0;
         REQUIRE(!ng_vis_prepare(&visibility,NULL,1));
     }
