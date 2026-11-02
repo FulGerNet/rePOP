@@ -119,6 +119,7 @@ static struct {
     Button btn[BTN_COUNT];
     int hover, pressed, focus, tracking;
     int game_language;
+    int language_back;                /* the next change goes backwards */
     int ui_language;                  /* 0 English, 1 French, 2 Spanish */
     Grain sand[N_SAND];
     uint32_t rng;
@@ -1523,7 +1524,10 @@ static void activate(int id)
     case BTN_GITHUB: ShellExecuteW(L.hwnd, L"open", GITHUB_URL, NULL, NULL, SW_SHOWNORMAL); break;
     case BTN_LANGUAGE: {
         char ini[MAX_PATH], value[8];
-        int next = L.game_language == 1 ? 4 : L.game_language == 4 ? 5 : 1;
+        /* English, French, Spanish; the left arrow goes back (L.language_back). */
+        int next = L.language_back ? (L.game_language == 1 ? 5 : L.game_language == 5 ? 4 : 1)
+                                   : (L.game_language == 1 ? 4 : L.game_language == 4 ? 5 : 1);
+        L.language_back = 0;
         ini_path(ini, sizeof ini);
         sprintf_s(value, sizeof value, "%d", next);
         if (ini[0] && WritePrivateProfileStringA("Game", "Language", value, ini)) {
@@ -1607,7 +1611,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wp, LPARAM l
         if (wp == VK_ESCAPE) activate(BTN_CLOSE);
         else if (wp == VK_RETURN || wp == VK_SPACE) activate(L.extracting ? BTN_CANCEL : L.focus);
         else if (wp == VK_LEFT || (wp == VK_TAB && GetKeyState(VK_SHIFT) < 0)) {
-            if (L.focus == BTN_LANGUAGE && wp != VK_TAB) activate(BTN_LANGUAGE);
+            if (L.focus == BTN_LANGUAGE && wp != VK_TAB) { L.language_back = 1; activate(BTN_LANGUAGE); }
             else move_focus(-1);
         } else if (wp == VK_RIGHT || wp == VK_TAB) {
             if (L.focus == BTN_LANGUAGE && wp != VK_TAB) activate(BTN_LANGUAGE);

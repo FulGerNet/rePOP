@@ -77,7 +77,7 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
         if (base == null) base = getFilesDir();
         DefaultOptions.ensure(this);
         view = new LauncherView(this, this);
-        view.state.gameLanguage = GameLanguage.read(base, GameLanguage.SPANISH);
+        view.state.gameLanguage = GameLanguage.read(base, GameLanguage.ENGLISH);
         logShare = new LogShare(this);
         setContentView(view);
         view.requestFocus();

@@ -10,6 +10,7 @@
  */
 
 #include "kernel.h"
+#include "resot_runtime.h"   /* RE-SoT: RESOT_RUNTIME_DEMO for the language */
 #include "../../../../windows/src/options.h"
 #include <string.h>
 
@@ -140,7 +141,12 @@ NTSTATUS __stdcall xbox_ExQueryNonVolatileSetting(
         /* RE-SoT: Honor the saved launcher choice; unsupported values fall
          * back to English in the options layer. */
         if (ValueLength >= sizeof(ULONG)) {
+#if RESOT_RUNTIME_DEMO
+            /* RE-SoT: the demo's languages were never checked: English. */
+            *(PULONG)Value = 1;
+#else
             *(PULONG)Value = (ULONG)resot_game_language();
+#endif
             if (Type) *Type = 4; /* REG_DWORD */
             if (ResultLength) *ResultLength = sizeof(ULONG);
         }

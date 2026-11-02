@@ -5,8 +5,9 @@ Spanish; other system languages fall back to English. Its separate game
 language selector is limited to English `1`, French `4` and Spanish `5`, the
 three confirmed in the supported USA retail ISO. It saves the selection in
 `resot-options.ini` under `[Game] Language` and applies it on the next game
-start. Android defaults the game language to Spanish, while Windows defaults
-to English. This requests the game's own text; it does not translate the game
+start. The game language is English unless chosen otherwise, on both hosts.
+The retail's reSOT Options has the same choice (Language); the demo always runs
+in English. This requests the game's own text; it does not translate the game
 or create missing game assets.
 
 After 0.3.4: the Vulkan shaders no longer declare the SPIR-V extensions

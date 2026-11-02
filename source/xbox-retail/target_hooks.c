@@ -696,7 +696,14 @@ static uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
 enum { T_ROOT, T_GRAPHICS, T_CONTROLS, T_KEY0, T_KEY1, T_KEY2, T_JOY0, T_JOY1, T_JOY2,
        T_RESET, T_GFX = 10, T_LOOK = 15, T_CHEATS_LABEL = 16, T_MAP_TITLE = 17,
-       T_KEYS = 20, T_JOYS = 50, T_MAP_PART = 80, T_MAPS = 90 };
+       T_LANG_TITLE = 18, T_KEYS = 20, T_JOYS = 50, T_MAP_PART = 80, T_MAPS = 90,
+       T_LANGS = 120 };
+/* Language: the three of the USA retail disc, as Xbox language IDs (the
+ * launcher's [Game] Language, port/windows/src/options.h). The game reads the
+ * language when it starts, so a choice applies at the next start. */
+#define LANGS 3
+static const int s_lang_ids[LANGS] = { 1, 4, 5 };
+static const char *const s_lang_names[LANGS] = { "English", "French", "Spanish" };
 static const char *const s_static_texts[] = {
     "reSOT Options", "Graphics", "Controls",
     "Keyboard: move and fight", "Keyboard: actions", "Keyboard: menus and camera",
@@ -789,6 +796,18 @@ static void resot_text(uint32_t index, char *out, unsigned size)
         resot_native_label(RESOT_NATIVE_GRAPHICS, (int)(index - T_GFX), out, size);
     else if (index == T_LOOK)
         resot_native_label(RESOT_NATIVE_CONTROLS, 0, out, size);
+    else if (index == T_LANG_TITLE)
+        snprintf(out, size, "Language");
+    else if (index >= T_LANGS && index < T_LANGS + LANGS) {
+        int id = s_lang_ids[index - T_LANGS];
+        /* The menu font has no '-' or brackets (s_map_parts): words only. */
+        if (id == resot_game_language_next() && id != resot_game_language())
+            snprintf(out, size, "%s: at the next start", s_lang_names[index - T_LANGS]);
+        else if (id == resot_game_language_next())
+            snprintf(out, size, "%s: selected", s_lang_names[index - T_LANGS]);
+        else
+            snprintf(out, size, "%s", s_lang_names[index - T_LANGS]);
+    }
     else if (index >= T_KEYS && index < T_KEYS + RESOT_NATIVE_ACTIONS)
         resot_native_label(RESOT_NATIVE_KEYS, (int)(index - T_KEYS), out, size);
     else if (index >= T_JOYS && index < T_JOYS + RESOT_NATIVE_ACTIONS)
@@ -858,7 +877,7 @@ void sub_000F84A0(void)
 enum { DO_OPEN, DO_MSG };
 typedef struct { uint32_t text; int what; int arg; uint32_t choice; } NativeChoice;
 typedef struct { uint32_t title; float top, step; int n; NativeChoice c[12]; uint32_t page; } NativePage;
-enum { P_ROOT, P_GFX, P_CTRL, P_K0, P_K1, P_K2, P_J0, P_J1, P_J2,
+enum { P_ROOT, P_GFX, P_CTRL, P_K0, P_K1, P_K2, P_J0, P_J1, P_J2, P_LANG,
        P_MAPS, P_MAP0, P_MAP1, P_MAP2, P_PAGES };
 #define MSG_ID(page, item) ((uint32_t)(page) << 8 | (uint32_t)(item))
 #define MSG_RESET 0xFF00u
@@ -889,13 +908,17 @@ static void native_layout(NativePage *pages)
     int i, j;
     NativePage *p;
     memset(pages, 0, sizeof(NativePage) * P_PAGES);
-    /* reSOT Options: Graphics, Controls, Cheats, and Special Load Map (main
-     * menu only, see native_build_and_bind). */
-    p = &pages[P_ROOT]; p->title = T_ROOT; p->top = 0.3833f; p->step = 0.0667f; p->n = 4;
+    /* reSOT Options: Graphics, Controls, Cheats, Language, and Special Load Map
+     * (main menu only, see native_build_and_bind). */
+    p = &pages[P_ROOT]; p->title = T_ROOT; p->top = 0.35f; p->step = 0.0667f; p->n = 5;
     native_choice(p, 0, T_GRAPHICS, DO_OPEN, P_GFX);
     native_choice(p, 1, T_CONTROLS, DO_OPEN, P_CTRL);
     native_choice(p, 2, T_CHEATS_LABEL, DO_MSG, (int)MSG_CHEATS);
-    native_choice(p, 3, T_MAP_TITLE, DO_OPEN, P_MAPS);
+    native_choice(p, 3, T_LANG_TITLE, DO_OPEN, P_LANG);
+    native_choice(p, 4, T_MAP_TITLE, DO_OPEN, P_MAPS);
+    p = &pages[P_LANG]; p->title = T_LANG_TITLE; p->top = 0.3833f; p->step = 0.0667f; p->n = LANGS;
+    for (i = 0; i < LANGS; i++)
+        native_choice(p, i, T_LANGS + (uint32_t)i, DO_MSG, (int)MSG_ID(P_LANG, i));
     p = &pages[P_GFX]; p->title = T_GRAPHICS; p->top = 0.3833f; p->step = 0.0667f;
     p->n = RESOT_NATIVE_GRAPHICS_ITEMS;
     for (i = 0; i < p->n; i++)
@@ -1049,10 +1072,10 @@ static void native_build_and_bind(MenuCtx *x, uint32_t menu, uint32_t cur)
     s_bind_ctx = x;
     native_layout(pages);
     /* The pause menu has no Special Load Map: its four pages (33 choices)
-     * are not built there. */
+     * are not built there. Language, before it, stays. */
     if (x != &s_ctx[CTX_MAIN]) {
         memset(&pages[P_MAPS], 0, sizeof(NativePage) * (P_PAGES - P_MAPS));
-        pages[P_ROOT].n = 3;
+        pages[P_ROOT].n = 4;
     }
     for (i = 0; i < P_PAGES; i++)
         if (pages[i].n)
@@ -1351,6 +1374,8 @@ void sub_00039B20(void)
     }
     else if (id == MSG_RESET)
         resot_native_reset_bindings();
+    else if ((id >> 8) == P_LANG && (id & 0xFF) < LANGS)
+        resot_game_language_choose(s_lang_ids[id & 0xFF]);   /* labels follow the revision */
     else if ((id >> 8) == P_GFX)
         resot_native_activate(RESOT_NATIVE_GRAPHICS, (int)(id & 0xFF));
     else if ((id >> 8) == P_CTRL)

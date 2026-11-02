@@ -93,7 +93,8 @@ French or Spanish; other languages fall back to English. Choose `Game
 language` to cycle between the three languages confirmed in the supported USA
 retail ISO: English (1), French (4) and Spanish (5). The choice is saved in
 `resot-options.ini` as `[Game] Language` and applies next time the game starts.
-Windows defaults the game language to English. The launcher translation does
+The game language is English by default, on both hosts; the retail's reSOT
+Options has the same choice (Language), and the demo always runs in English. The launcher translation does
 not change the game's text language.
 
 Without any game, a file dialog asks for the game's Xbox ISO. The launcher

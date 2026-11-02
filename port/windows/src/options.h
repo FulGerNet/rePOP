@@ -9,8 +9,13 @@ void resot_options_init(void);
 /* Create the bundled INI only when absent, before the Windows launcher. */
 void resot_options_prepare_config(void);
 /* Xbox EEPROM language ID requested by the launcher (English=1, French=4,
- * Spanish=5, as confirmed in the supported USA ISO). */
+ * Spanish=5, as confirmed in the supported USA ISO). English by default.
+ * resot_game_language is the one this run started with, the one the kernel
+ * reports; the one chosen since (reSOT Options, retail) applies at the next
+ * start, and is saved as [Game] Language at once. */
 int resot_game_language(void);
+int resot_game_language_next(void);
+void resot_game_language_choose(int language);
 static inline int resot_language_supported(int language)
 {
     return language == 1 || language == 4 || language == 5;

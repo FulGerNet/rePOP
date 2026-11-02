@@ -96,7 +96,7 @@ static int s_keyboard_enabled=1, s_mouse_speed=43, s_walk_deflection=12000;
 static int s_look_sensitivity=200;
 /* Game behavior: Tutorials is saved ([Game] Tutorials); the Dagger of time
  * (-1 as the game has it, 0 off, 1 on) applies to the running game only. */
-static int s_game_expanded, s_tutorials=1, s_dagger=-1, s_game_language=1;
+static int s_game_expanded, s_tutorials=1, s_dagger=-1, s_game_language=1, s_game_language_next=1;
 /* Cheats: the title's built-in switch (port/game/resot_cheats.h), as the
  * game reports it (-1 not readable yet) and a change asked for here (-1
  * none), taken by the game thread. */
@@ -123,6 +123,16 @@ static void mark_dirty(void) { InterlockedIncrement(&s_revision); InterlockedExc
 long resot_native_revision(void) { return InterlockedCompareExchange(&s_revision,0,0); }
 int resot_game_tutorials(void) { return s_tutorials; }
 int resot_game_language(void) { return s_game_language; }
+int resot_game_language_next(void) { return s_game_language_next; }
+void resot_game_language_choose(int language)
+{
+    char value[8];
+    if(!resot_language_supported(language)||language==s_game_language_next)return;
+    s_game_language_next=language;
+    sprintf_s(value,sizeof value,"%d",language);
+    if(s_path[0])WritePrivateProfileStringA("Game","Language",value,s_path);
+    mark_dirty();
+}
 int resot_game_dagger(void) { return s_dagger; }
 int resot_game_cheats_request(void) { return (int)InterlockedExchange(&s_cheats_request,-1); }
 void resot_game_cheats_report(int on) { InterlockedExchange(&s_cheats_state,on); InterlockedExchange(&s_dirty,1); }
@@ -767,6 +777,7 @@ void resot_options_init(void)
     strcat(s_path,"resot-options.ini");
     s_game_language=(int)GetPrivateProfileIntA("Game","Language",1,s_path);
     if(!resot_language_supported(s_game_language))s_game_language=1;
+    s_game_language_next=s_game_language;
     s_look_sensitivity=resot_look_percent((int)GetPrivateProfileIntA("Controls","LookSensitivityPercent",200,s_path));
     GetPrivateProfileStringA("Graphics","Renderer","d3d11",name,sizeof name,s_path);
     env=getenv("RESOT_RENDERER");
