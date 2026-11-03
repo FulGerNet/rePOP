@@ -20,6 +20,7 @@
 #include <string.h>
 #include <math.h>
 #include "options.h"
+#include "cursor.h"
 #include "launcher.h"
 #include "console_logs.h"
 
@@ -968,6 +969,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         extern void xbox_FramebufferSetWowProvider(void (*)(char *, size_t));
         xbox_FramebufferSetWowProvider(resot_current_wow);
         xbox_FramebufferSetMenuPointer(resot_menu_pointer_event,resot_menu_scene,resot_menu_pointer_viewport);
+    }
+    {
+        extern void xbox_FramebufferSetMenuCursor(void *);
+        xbox_FramebufferSetMenuCursor(resot_light_cursor());
     }
     resot_options_init();
 

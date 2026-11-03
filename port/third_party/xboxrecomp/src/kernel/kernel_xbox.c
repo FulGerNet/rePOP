@@ -122,7 +122,7 @@ NTSTATUS __stdcall xbox_XeUnloadSection(PXBE_SECTION_HEADER Section)
  * SMBus. For recompilation, we return sensible defaults:
  *   - Region: North America
  *   - Video: NTSC, widescreen+HDTV enabled
- *   - Language: selected in the launcher (English 1, French 4, Spanish 5)
+ *   - Language: RE-SoT Options (English 1, German 3, French 4, Spanish 5, Italian 6)
  *   - Audio: Stereo, Dolby Digital
  *   - DVD Region: Region 1 (North America)
  * ============================================================================ */
@@ -138,7 +138,7 @@ NTSTATUS __stdcall xbox_ExQueryNonVolatileSetting(
 
     switch (ValueIndex) {
     case XC_LANGUAGE:
-        /* RE-SoT: Honor the saved launcher choice; unsupported values fall
+        /* RE-SoT: Honor the saved five-language Options choice; invalid IDs fall
          * back to English in the options layer. */
         if (ValueLength >= sizeof(ULONG)) {
 #if RESOT_RUNTIME_DEMO

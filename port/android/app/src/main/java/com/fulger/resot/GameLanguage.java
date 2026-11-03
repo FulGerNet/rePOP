@@ -9,7 +9,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Xbox EEPROM language IDs confirmed in the supported USA retail ISO. */
+/** Xbox EEPROM language IDs; choices stay available for USA and EU discs. */
 final class GameLanguage {
     static final int ENGLISH = 1;
     static final int SPANISH = 5;
@@ -17,6 +17,8 @@ final class GameLanguage {
     static int next(int current) {
         if (current == ENGLISH) return 4;
         if (current == 4) return SPANISH;
+        if (current == SPANISH) return 3;
+        if (current == 3) return 6;
         return ENGLISH;
     }
 
@@ -24,11 +26,13 @@ final class GameLanguage {
         switch (language) {
         case 4: return context.getString(R.string.language_french);
         case 5: return context.getString(R.string.language_spanish);
+        case 3: return context.getString(R.string.language_german);
+        case 6: return context.getString(R.string.language_italian);
         default: return context.getString(R.string.language_english);
         }
     }
 
-    static boolean supported(int language) { return language == ENGLISH || language == 4 || language == SPANISH; }
+    static boolean supported(int language) { return language == ENGLISH || language == 3 || language == 4 || language == SPANISH || language == 6; }
 
     static int read(File directory, int fallback) {
         File ini = new File(directory, "resot-options.ini");

@@ -10,7 +10,7 @@
 
 **Prince of Persia: The Sands of Time, recompiled from Xbox to native Windows and Android.**
 
-**Current version: v0.4.4** ([release notes](docs/releases/v0.4.4.md)).
+**Current version: v0.5.0** ([release notes](docs/releases/v0.5.0.md)).
 
 reSOT is a static recompilation and port of the original Xbox retail game and
 the E3 2003 demo. The game's own x86 code is lifted to C and compiled as a
@@ -32,6 +32,7 @@ remains derived from the original game and is not covered by reSOT's MIT licence
 | --- | --- | --- |
 | `xbox-demo` | E3 2003 demo, built 2003-07-18 | 🟢 Tested and completable on Windows and Android: every level of the demo, menus, movies, audio and controls, plus the restored Load Map menu. |
 | `xbox-retail` | NTSC retail, title `0x5553001D`, built 2003-10-20 | 🟢 Tested and completable on Windows and Android: the whole game, with corrected timing, audio, rendering and HUD; English, French and Spanish. |
+| `xbox-retail` with EU disc assets | PAL EU data, running the recompiled NTSC executable | 🟡 Windows: startup, movies, menu and an existing cave-area save loaded in a 40-second check. Italian menu and German-language startup checked on Windows in v0.5.0; full EU game not checked. Android: EU installation and checked runtime substitution implemented; device run pending. |
 
 Performance depends on the device, renderer, scene and graphics settings. In a
 heavy retail scene (about 1,600 draws a frame) on Windows, Vulkan, RTX 3060 at
@@ -65,7 +66,7 @@ observations and limits are in [VALIDATION.md](docs/VALIDATION.md).
 | Save/load and memory units | 🟢 | 🟢 |
 | Keyboard, mouse and physical controllers | 🟢 | 🟢 |
 | Native menus, pause and reSOT Options | 🟢 Load Map and reSOT Options in main and pause menus; "E3 Demo" title and E3 logo as in the E3 build; "Quit to Demos Menu" hidden | 🟢 reSOT Options in main and pause menus; Xbox Live entries hidden |
-| Game language (English, French, Spanish) | ⚪ English only: the demo's languages are not checked | 🟡 Chosen on the Language page of reSOT Options, applied at the next start |
+| Game language (English, French, Spanish, Deutsch, Italiano) | ⚪ English only: the demo's languages are not checked | 🟡 Five permanent choices in reSOT Options, applied at the next start; missing German/Italian banks fall back to English without clearing the preference. EU language checks are recorded in VALIDATION.md. |
 | Special Load Map (reSOT Options) | 🟡 All 20 maps of the BF; 4 of 12 faulted in scripted direct requests, the menu's own path not yet checked on those | 🟡 30 area maps loaded as a saved game; 1401 Corridor Start and 8101 Tower Base replaced by maps with a checkpoint; 3101 Tower starts with a fall (Retry works) |
 | Built-in cheats switch (reSOT Options and F7) | 🟢 OVA 8 `mb_CheatsEnabled`, no BF rebuild | 🟢 Same for OVA 22 |
 | F7 Game behavior: Tutorials, Dagger of time, Cheats | 🟡 Dagger effect not checked; Tutorials not available | 🟡 Tutorials saved in the universe; Cheats On/Off |
@@ -96,6 +97,7 @@ observations and limits are in [VALIDATION.md](docs/VALIDATION.md).
 | Android play with native Vulkan | 🟢 | 🟢 |
 | Android gameplay touch controls | 🟢 Custom layout, vibration | 🟢 Same shared controls |
 | Mouse/touch selection of menu rows | 🟡 Text and literal-text choices; broader interaction checks pending | 🟢 Yes/No choices and save-carousel arrows |
+| Windows light-halo mouse cursor | 🟡 Built; embedded cursor loads, visual check pending | 🟢 User confirmed the new look in the Windows session |
 | Automatic Android overlay hiding | 🟡 Policy tests pass; device checks pending | 🟡 Same |
 | Adreno 640 / MediaTek / Samsung | 🟢 Tested after the SDL mip correction | 🟢 Poco colored-pixel corruption fixed |
 | Mali GPUs (Mali-G57, Mali-G710, Mali-G78) | 🟡 Crash on Start Game traced to SPIR-V extensions older drivers reject; shaders rebuilt without them; not yet run on a Mali device | 🟡 Same |
@@ -120,9 +122,18 @@ needed beside it. Space or controller A skips videos. F5 toggles the
 FPS/current-world panel, F6 the diagnostics panel, F7 the host options, F8 the
 debug views and F11 fullscreen.
 
+The Windows launcher also recognises the PAL EU disc. Its `VIDEO/30fps`
+movies (or `25fps` when needed) are found automatically, without moving or
+changing disc files. Other recognised Sands of Time disc revisions can be
+tried with a compatibility notice; selected/remembered folders take precedence
+over automatic detection. This reuses the built-in NTSC runtime, not the other
+disc's executable. Missing or incompatible data can still fail to load.
+
 **Android:** install the APK and use the launcher to install your own ISO. The
 app keeps demo and retail under `Android/data/com.fulger.resot/files/xbox-demo`
-and `xbox-retail` and reads `default.xbe` from the game folder. Use the touch
+and `xbox-retail` and checks the disc's `default.xbe`. Retail EU data uses the checked NTSC
+image embedded in the locally built APK, as on Windows; no manual XBE
+replacement is required. Use the touch
 controls or a physical controller. Compatible Adreno devices can also select a
 user-supplied custom Vulkan driver from the launcher; none is bundled.
 
@@ -226,6 +237,7 @@ regenerated from the user's own checked XBE and is never edited by hand.
 
 | Version | Highlights | Notes |
 | --- | --- | --- |
+| 0.5.0 | EU retail disc installation on Windows and Android; five permanent language choices including Deutsch and Italiano; missing-language fallback; Windows light-halo cursor. Android versionCode 15. | [v0.5.0](docs/releases/v0.5.0.md) |
 | 0.4.4 | Direct renderer on by default on every renderer; retail recorded pushbuffers as direct draws; game and renderer in parallel (heavy retail scene about 64 to 143 fps, Vulkan); light halo fix; game language in reSOT Options only. Android versionCode 14. | [v0.4.4](docs/releases/v0.4.4.md) |
 | 0.4.3 | English, French and Spanish (retail); translated launchers; one shader per render state on D3D11 and D3D12; less stutter; F8 debug views; new Android icon background. | [v0.4.3](docs/releases/v0.4.3.md) |
 | 0.4.2 | HD main menu logos; retail name keyboard with mouse and touch; sand tank HUD; Vulkan black flashes; demo 6201 PrisonA entry. | [v0.4.2](docs/releases/v0.4.2.md) |

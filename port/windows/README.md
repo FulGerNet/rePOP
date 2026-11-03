@@ -1,5 +1,34 @@
 # reSOT on Windows
 
+Version **0.5.0** adds five permanent choices in reSOT Options > Language:
+English, French, Spanish, Deutsch and Italiano. German/Italian use the EU
+disc data; if their sound banks are absent, English is used for that run
+without resetting the preference or removing either choice from the menu.
+Changes apply at the next start.
+
+PAL EU disc data is recognised as **PAL retail (EU)** and can be installed
+from `.iso`, `.xiso` or `.xiso.iso` just like the USA disc. The native retail
+EXE uses its embedded, checked NTSC image with those assets. Movie lookups
+try the original `VIDEO/<file>` first, then EU `VIDEO/30fps/<file>` and
+`VIDEO/25fps/<file>`. The original files are never rewritten. This fixes the
+EU startup's “dirty or damaged” screen caused by a missing movie path.
+Startup, menu, movies and a cave-area save were checked. The full EU game
+has not been replayed; German/Italian checks are recorded in VALIDATION.md.
+
+Other revisions identified as Sands of Time remain launchable with a notice.
+An explicit `RESOT_ASSET_DIR` or remembered `[Launcher] RetailDir` is kept
+ahead of auto-detected folders, including when a known USA disc is also
+installed. This attempts compatible data with the compiled runtime; it does
+not execute an arbitrary XBE or suppress genuine read failures. Build-time
+SHA-256 verification is unchanged.
+
+Windows uses a soft warm-white light halo as its pointer in the launcher,
+native game menus and F7 options, with the click point at its centre. The
+pointer stays hidden during camera control. Each executable embeds a cursor
+extracted at build time from its own `prince.bf` (texture key `0x2E004392`);
+no separate cursor file is needed when playing. Retail appearance confirmed
+by the user; demo built and its embedded cursor loaded, visual check pending.
+
 Version 0.4.4 brings the direct renderer by default, the retail pushbuffers as direct draws,
 game and renderer in parallel, the light halo fix, and drops the launcher's language button
 (the language is in reSOT Options). Version 0.4.3 brings faster Direct3D 11 and 12 shaders, less stutter and the F8 debug views.
@@ -17,7 +46,7 @@ animated Prince of Persia title to the launcher. Version 0.3.3 ran the game and 
 a retail mid-game freeze, reduces audio crackle and brings the new animated
 logo. Version 0.3.2 added Reduced/Standard/Full graphics presets and a background
 stable-release check with optional Update / Close buttons styled like the
-launcher. The displayed version is 0.4.4. Offline/rate-limit errors are ignored.
+launcher. The displayed version is 0.5.0. Offline/rate-limit errors are ignored.
 No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
 request and reSOT version in its User-Agent. Update opens the official release
 page, without downloading/installing an executable automatically.
@@ -91,13 +120,11 @@ focused button (at first, this executable's game), the arrow keys move
 between buttons, Esc closes.
 
 The launcher UI follows the Windows display language when it is English,
-French or Spanish; other languages fall back to English. Choose `Game
-language` to cycle between the three languages confirmed in the supported USA
-retail ISO: English (1), French (4) and Spanish (5). The choice is saved in
-`resot-options.ini` as `[Game] Language` and applies next time the game starts.
-The game language is English by default, on both hosts; the retail's reSOT
-Options has the same choice (Language), and the demo always runs in English. The launcher translation does
-not change the game's text language.
+French or Spanish; other languages fall back to English. Game language is
+chosen in reSOT Options > Language: English (1), French (4), Spanish (5),
+Deutsch (3), Italiano (6). It is saved as [Game] Language in resot-options.ini
+and applies on the next start. The demo stays in English. Launcher translation
+and game language are separate.
 
 Without any game, a file dialog asks for the game's Xbox ISO. The launcher
 runs extract-xiso (`port/third_party/extract-xiso`, built into the
@@ -225,7 +252,7 @@ redistribute it. Packaging again preserves existing save folders.
 - Visual Studio with the C++ desktop workload (the scripts default to the
   `Visual Studio 18 2026` generator; pass `-Generator` for another)
 - CMake 3.20+
-- Python 3.10+ with `capstone` (`pip install capstone`)
+- Python 3.10+ with `capstone` and `Pillow` (`pip install capstone Pillow`)
 
 The game files go in `Assets/<target>/` first; see "Supply your game files"
 in the [README](../../README.md#supply-your-game-files).

@@ -1,6 +1,6 @@
 #ifndef RESOT_VERSION_H
 #define RESOT_VERSION_H
-#define RESOT_VERSION "0.4.4"
-#define RESOT_VERSION_W L"0.4.4"
-#define RESOT_VERSION_PARTS 0,4,4,0
+#define RESOT_VERSION "0.5.0"
+#define RESOT_VERSION_W L"0.5.0"
+#define RESOT_VERSION_PARTS 0,5,0,0
 #endif

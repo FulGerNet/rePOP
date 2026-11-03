@@ -1,9 +1,31 @@
 # reSOT for Android
 
+Version **0.5.0** (versionCode **15**) accepts the USA and known PAL EU
+retail ISO in the same installer. For an EU disc the launcher enables Start
+Game, and the host checks its default.xbe identity before selecting the
+checked NTSC runtime image embedded in the local retail library. The EU XBE
+is not mapped at NTSC addresses. No manual file replacement is needed;
+keep the EU default.xbe and all EU assets as extracted. NTSC retains its disc
+image; the demo's existing executable hash check is unchanged. Unknown XBE
+revisions remain rejected on Android.
+
+Both hosts offer English, French, Spanish, Deutsch and Italiano in reSOT
+Options > Language, regardless of disc edition. Choices persist under
+[Game] Language and apply at the next start. German and Italian use EU assets;
+when their sound banks are absent (USA disc), English is used for that run
+while the selected preference and all five choices remain available.
+EU movies are resolved under VIDEO/30fps, then VIDEO/25fps, when a flat movie
+path is absent. Build and host-side loader checks do not certify device
+playability; see VALIDATION.md for the exact tests and remaining limits.
+
+The Windows BF-derived light-halo pointer is specific to the Windows mouse
+host. Android retains its touch controls and has no Windows CUR resource or
+cursor extraction build dependency. The shared framebuffer's cursor setter
+is guarded by `_WIN32`; the Android APK was rebuilt after this change.
+
 The launcher UI follows the system language when it is English, French or
-Spanish; other system languages fall back to English. Its separate game
-language selector is limited to English `1`, French `4` and Spanish `5`, the
-three confirmed in the supported USA retail ISO. It saves the selection in
+Spanish; other system languages fall back to English. The game language choices use Xbox IDs: English `1`, German `3`, French `4`,
+Spanish `5` and Italian `6`. It saves the selection in
 `resot-options.ini` under `[Game] Language` and applies it on the next game
 start. The game language is English unless chosen otherwise, on both hosts.
 The retail's reSOT Options has the same choice (Language); the demo always runs
@@ -32,7 +54,7 @@ animated Prince of Persia title to the launcher. Version 0.3.3 ran the game and 
 a retail mid-game freeze, reduces audio crackle and brings the new animated
 logo. Version 0.3.2 added Reduced/Standard/Full graphics presets and a background
 stable-release check with optional Update / Close buttons styled like the
-launcher. The displayed version is 0.4.4. Offline/rate-limit errors are ignored.
+launcher. The displayed version is 0.5.0. Offline/rate-limit errors are ignored.
 No game files, logs or settings are uploaded; GitHub receives the normal HTTPS
 request and reSOT version in its User-Agent. Update opens the official release
 page, without downloading/installing an executable automatically.
@@ -170,9 +192,10 @@ An extracted disc can also be copied there from a computer; any folder in
 `files/` with game files is found. File and folder names are matched without
 regard to case (the retail disc has `VIDEO/` and `SOUND/`, the game asks in
 other spellings), as on Windows, also on devices whose storage is
-case-sensitive. Unlike Windows, **`default.xbe` must be in
-the game folder**: the Android libraries do not embed it, read it from there
-and refuse it unless its SHA-256 is the one in `source/<target>/target.h`.
+case-sensitive. **The disc's `default.xbe` must remain in the game folder**
+for identity verification. The demo and NTSC retail read their checked image
+from it. Known EU retail uses the embedded checked NTSC runtime image instead;
+its original EU file stays untouched. Other executable hashes are rejected.
 
 ## Launcher
 
@@ -420,7 +443,7 @@ release key before handing it to anyone.
 
 | Windows (`port/windows/src`) | Android (`port/android/src`) |
 | --- | --- |
-| `main.c`: WinMain, embedded XBE, vectored exception handler | `main_android.c`: SDL_main, XBE read from the game folder and hashed, SIGSEGV handler; the game on a 64 MB-stack thread |
+| `main.c`: WinMain, embedded XBE, vectored exception handler | `main_android.c`: SDL_main, disc XBE hashed; EU uses the embedded NTSC image; SIGSEGV handler; the game on a 64 MB-stack thread |
 | x86-64 MMIO decoder (`mmio_decode.h`) | the AArch64 decoder in the same header: LDR/STR forms, LDP/STP, LDAR/STLR |
 | D3D11 by default, D3D12/Vulkan optional | Vulkan only, the same native encoder |
 | `xinput_device.c` (XInput, keyboard) | `input_android.c` (SDL3 gamepads, keyboard, touch) |

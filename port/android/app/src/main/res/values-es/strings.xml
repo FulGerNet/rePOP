@@ -70,4 +70,7 @@
     <string name="launcher_non_game_xbe_note">Esta carpeta contiene un default.xbe que no pertenece a Prince of Persia: Las Arenas del Tiempo.</string>
     <string name="launcher_missing_xbe_note">Falta default.xbe: el juego de Android lo lee desde esta carpeta.</string>
     <string name="launcher_unidentified_game_note">Se encontraron archivos sin identificar: copia aquí el default.xbe del disco.</string>
+    <string name="launcher_retail_eu">Versión comercial PAL (EU)</string>
+    <string name="language_german">Alemán</string>
+    <string name="language_italian">Italiano</string>
 </resources>

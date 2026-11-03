@@ -1,5 +1,32 @@
 # Regression tests
 
+## Android retail runtime image and language preferences
+
+`python tools/test-android-retail-image.py --eu <EU default.xbe>` compiles
+the production Android image selector and SHA-256 code on Windows. It checks
+NTSC image retention, EU substitution by an owned copy of the checked NTSC
+image, and rejection of an unknown disc or mismatched built-in image. It
+reads the owner's XBEs but never modifies them; products stay in ignored
+build/android-image-tests. This is not an Android device test.
+
+`python tools/test-game-language.py` uses a JDK to test the actual Android
+language preference implementation with minimal UI stubs. All five choices,
+cycling, read/write persistence, invalid ID rejection and preservation of
+unrelated settings are checked with a temporary INI. No game data or device
+is used.
+
+## Retail disc variants and movie paths
+
+Run `python tools/test-retail-disc-path.py` on Windows with MSVC/CMake. It
+executes the production path translator in retail and demo builds against
+synthetic disc trees: flat file priority, EU 30fps/25fps fallback, absent
+movies, nested paths and save isolation. It also executes the real Windows
+launcher detector against a synthetic unverified retail certificate without
+opening windows or starting the update worker. Optional `--eu <folder>` and
+`--ntsc <folder>` arguments verify actual disc hashes, labels and selection
+priority, including a preferred unverified disc beside a known USA disc.
+Temporary fixtures and executables stay under ignored `build/disc-path-tests`.
+
 ## Android diagnostic archive and expiry
 
 Run `python tools/test-diagnostic-archive.py` with a JDK on PATH. It uses the

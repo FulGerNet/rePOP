@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "options.h"
+#include "cursor.h"
 
 enum { PW = 520, PH = 612, BODY_TOP = 64, BODY_BOTTOM = 566,
        ROW_H = 29, APPLY_SIZE = WM_APP + 44 };
@@ -322,7 +323,9 @@ static int event(void *handle, unsigned message, uintptr_t wp, intptr_t lp)
         return native_event(handle,message,wp,lp);
     }
     if (message==WM_SYSKEYDOWN && wp==VK_F4 && (lp&(1L<<29))) return 0;
-    if (message==WM_SETCURSOR) { SetCursor(LoadCursorA(NULL,IDC_ARROW)); return 1; }
+    if (message==WM_SETCURSOR && LOWORD(lp)==HTCLIENT) {
+        SetCursor(resot_light_cursor()); return 1;
+    }
     /* Capture changes, resize and focus messages can arrive synchronously
      * inside SetCapture/SetWindowPos. They need no options lock or handling. */
     switch(message) {

@@ -38,7 +38,9 @@
 #include <string.h>
 #include <wchar.h>
 #include "launcher.h"
+#include "cursor.h"
 #include "../../game/resot_version.h"
+#include "../../../source/xbox-retail/disc_variants.h"
 
 #if !defined(RESOT_DEMO_XBE_SHA256) || !defined(RESOT_RETAIL_XBE_SHA256)
 #error "CMakeLists.txt passes both targets' XBE hashes (source/<target>/target.h)"
@@ -84,12 +86,12 @@ enum { BTN_DEMO, BTN_GAME, BTN_ISO, BTN_GITHUB, BTN_LANGUAGE, BTN_CLOSE, BTN_CAN
 typedef struct {
     int kind;                /* GAME_* */
     int present;             /* prince.bf, video and sound are there */
-    int exact;               /* default.xbe is the build reSOT was lifted from */
+    int exact;               /* known disc assets; the runtime XBE is embedded */
     wchar_t line[160];       /* what is installed */
     wchar_t note[200];       /* a warning, or empty */
 } GameInfo;
 
-typedef struct { GameInfo info; char dir[MAX_PATH]; } Install;
+typedef struct { GameInfo info; char dir[MAX_PATH]; int preferred; } Install;
 typedef struct { RECT r; int enabled, visible; } Button;
 typedef struct { float x, y, vx, vy, size, alpha, phase; int glint; } Grain;
 typedef struct { float x, y, vx, vy, size, age, life; int glint; } Ember;
@@ -261,10 +263,15 @@ static void detect_game(const char *dir, GameInfo *g)
             wcscpy_s(g->line, 160, ui_text(L"NTSC retail  \u2022  2003-10-20", L"Version commerciale NTSC  \u2022  20/10/2003", L"Versi\u00F3n comercial NTSC  \u2022  20/10/2003"));
             return;
         }
+        if (!strcmp(hex, RESOT_RETAIL_EU_DISC_SHA256)) {
+            g->kind = GAME_RETAIL; g->exact = 1;
+            wcscpy_s(g->line, 160, ui_text(L"PAL retail (EU)", L"Version commerciale PAL (EU)", L"Versi\u00F3n comercial PAL (EU)"));
+            return;
+        }
         if (xbe_title(xbe, &title_id, name) && wcsstr(name, L"Prince of Persia")) {
             g->kind = title_id == 0x5553001Du ? GAME_RETAIL : GAME_DEMO;
             swprintf(g->line, 160, L"%ls  \u2022  %ls", g->kind == GAME_RETAIL ? ui_text(L"Retail", L"Jeu complet", L"Completo") : ui_text(L"Demo", L"D\u00E9mo", L"Demo"), ui_text(L"other revision", L"autre r\u00E9vision", L"otra revisi\u00F3n"));
-            wcscpy_s(g->note, 200, ui_text(L"A default.xbe here is not the build reSOT supports; the game may not run.", L"Le default.xbe de ce dossier ne correspond pas \u00E0 la version prise en charge par reSOT ; le jeu peut ne pas d\u00E9marrer.", L"El default.xbe de esta carpeta no es la versi\u00F3n compatible con reSOT; puede que el juego no inicie."));
+            wcscpy_s(g->note, 200, ui_text(L"These disc files have not been checked. Start Game will try them with reSOT's built-in runtime.", L"Ces fichiers du disque ne sont pas v\u00E9rifi\u00E9s. D\u00E9marrer essaiera de les charger avec reSOT.", L"Estos archivos no se han verificado. Iniciar intentar\u00E1 cargarlos con reSOT."));
             return;
         }
         wcscpy_s(g->note, 200, ui_text(L"A folder holds a default.xbe that is not Prince of Persia: The Sands of Time.", L"Ce dossier contient un default.xbe qui n\u2019est pas celui de Prince of Persia : Les Sables du Temps.", L"La carpeta contiene un default.xbe que no pertenece a Prince of Persia: Las Arenas del Tiempo."));
@@ -323,7 +330,7 @@ static void remember_dir(int kind, const char *game_dir)
     WritePrivateProfileStringA("Launcher", kind == GAME_DEMO ? "DemoDir" : "RetailDir", value, ini);
 }
 
-static void consider(const char *dir)
+static void consider(const char *dir, int preferred)
 {
     GameInfo g;
     Install *slot;
@@ -337,8 +344,9 @@ static void consider(const char *dir)
         return;
     }
     slot = &L.inst[g.kind];
-    if (!slot->dir[0] || (!slot->info.exact && g.exact)) {
+    if (!slot->dir[0] || (!slot->preferred && (preferred || (!slot->info.exact && g.exact)))) {
         slot->info = g;
+        slot->preferred = preferred;
         strncpy_s(slot->dir, sizeof slot->dir, dir, _TRUNCATE);
     }
 }
@@ -352,19 +360,19 @@ static void scan_installs(void)
     HANDLE search;
     memset(L.inst, 0, sizeof L.inst);
     L.note[0] = 0;
-    consider(L.start_dir);
+    consider(L.start_dir, 1);
     if (!to_ansi(L.exe_dir, dir, sizeof dir)) return;
-    consider(dir);
-    if (remembered_dir("DemoDir", path, sizeof path)) consider(path);
-    if (remembered_dir("RetailDir", path, sizeof path)) consider(path);
-    if (remembered_dir("GameDir", path, sizeof path)) consider(path);
+    consider(dir, 0);
+    if (remembered_dir("DemoDir", path, sizeof path)) consider(path, 1);
+    if (remembered_dir("RetailDir", path, sizeof path)) consider(path, 1);
+    if (remembered_dir("GameDir", path, sizeof path)) consider(path, 1);
     snprintf(path, sizeof path, "%s\\*", dir);
     search = FindFirstFileA(path, &found);
     if (search == INVALID_HANDLE_VALUE) return;
     do {
         if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.cFileName[0] == '.') continue;
         if (snprintf(path, sizeof path, "%s\\%s", dir, found.cFileName) < (int)sizeof path)
-            consider(path);
+            consider(path, 0);
     } while (FindNextFileA(search, &found));
     FindClose(search);
 }
@@ -1513,9 +1521,11 @@ static void activate(int id)
     case BTN_GITHUB: ShellExecuteW(L.hwnd, L"open", GITHUB_URL, NULL, NULL, SW_SHOWNORMAL); break;
     case BTN_LANGUAGE: {
         char ini[MAX_PATH], value[8];
-        /* English, French, Spanish; the left arrow goes back (L.language_back). */
-        int next = L.language_back ? (L.game_language == 1 ? 5 : L.game_language == 5 ? 4 : 1)
-                                   : (L.game_language == 1 ? 4 : L.game_language == 4 ? 5 : 1);
+        /* Same five choices as reSOT Options, regardless of disc edition. */
+        const int languages[] = {1, 4, 5, 3, 6};
+        int at = 0;
+        for (int i = 0; i < 5; ++i) if (languages[i] == L.game_language) at = i;
+        int next = languages[(at + (L.language_back ? 4 : 1)) % 5];
         L.language_back = 0;
         ini_path(ini, sizeof ini);
         sprintf_s(value, sizeof value, "%d", next);
@@ -1568,7 +1578,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wp, LPARAM l
         return hit(p.x, p.y) >= 0 ? HTCLIENT : HTCAPTION;
     }
     case WM_SETCURSOR:
-        if (LOWORD(lp) == HTCLIENT) { SetCursor(LoadCursor(NULL, IDC_HAND)); return TRUE; }
+        if (LOWORD(lp) == HTCLIENT) { SetCursor(resot_light_cursor()); return TRUE; }
         break;
     case WM_MOUSEMOVE:
         if (!L.tracking) {
@@ -1659,7 +1669,7 @@ static int create_window(void)
     wc.lpfnWndProc = window_proc;
     wc.hInstance = GetModuleHandleW(NULL);
     wc.hIcon = LoadIconW(wc.hInstance, MAKEINTRESOURCEW(1));
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hCursor = resot_light_cursor();
     wc.lpszClassName = L"reSOTLauncher";
     wc.style = CS_DROPSHADOW;
     RegisterClassExW(&wc);
@@ -1735,7 +1745,8 @@ int resot_launcher_run(const char *target_id, char *game_dir, size_t game_dir_si
         char ini[MAX_PATH];
         ini_path(ini, sizeof ini);
         L.game_language = ini[0] ? (int)GetPrivateProfileIntA("Game", "Language", 1, ini) : 1;
-        if (L.game_language != 1 && L.game_language != 4 && L.game_language != 5) L.game_language = 1;
+        if (L.game_language != 1 && L.game_language != 3 && L.game_language != 4
+            && L.game_language != 5 && L.game_language != 6) L.game_language = 1;
     }
     /* The other target's executable: this one's name with the other ID
      * (sot-xbox-demo.exe <-> sot-xbox-retail.exe, -abi builds alike). */

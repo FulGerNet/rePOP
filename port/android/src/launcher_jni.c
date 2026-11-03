@@ -18,6 +18,7 @@
 
 #include "host_files.h"
 #include "sha256.h"
+#include "../../../source/xbox-retail/disc_variants.h"
 
 #if !defined(RESOT_DEMO_XBE_SHA256) || !defined(RESOT_RETAIL_XBE_SHA256)
 #error "CMakeLists.txt passes both targets' XBE hashes (source/<target>/target.h)"
@@ -88,6 +89,8 @@ JNIEXPORT jobjectArray JNICALL Java_com_fulger_resot_Native_identify(JNIEnv *env
                 result = strings(env, "demo", "1", "E3 2003 demo  •  2003-07-18", "");
             else if (!strcmp(hex, RESOT_RETAIL_XBE_SHA256))
                 result = strings(env, "retail", "1", "NTSC retail  •  2003-10-20", "");
+            else if (!strcmp(hex, RESOT_RETAIL_EU_DISC_SHA256))
+                result = strings(env, "retail", "1", "PAL retail (EU)", "");
             else if (xbe_title(xbe, &title_id, name) && strstr(name, "Prince of Persia"))
                 result = strings(env, title_id == 0x5553001Du ? "retail" : "demo", "0",
                                  title_id == 0x5553001Du ? "Retail  •  other revision"

@@ -166,7 +166,7 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
             s.exact[k] = s.installed[k] && "1".equals(found[k][1]);
             s.line[k] = s.installed[k] ? localizedInstallLine(k, s.exact[k], found[k][2]) : "";
             s.dir[k] = s.installed[k] ? dirs[k].getAbsolutePath() : "";
-            if (s.installed[k] && !found[k][3].isEmpty() && s.note.isEmpty()) s.note = found[k][3];
+            if (s.installed[k] && !found[k][3].isEmpty() && s.note.isEmpty()) s.note = localizedNativeNote(found[k][3]);
         }
         if (!s.installed[0] && !s.installed[1] && s.note.isEmpty())
             s.note = getString(R.string.launcher_no_game_files,
@@ -175,6 +175,7 @@ public final class LauncherActivity extends Activity implements LauncherView.Lis
     }
 
     private String localizedInstallLine(int kind, boolean exact, String source) {
+        if ("PAL retail (EU)".equals(source)) return getString(R.string.launcher_retail_eu);
         if (exact) return getString(kind == 0 ? R.string.launcher_demo_exact : R.string.launcher_retail_exact);
         if (kind == 0 && source.contains("recognised"))
             return getString(R.string.launcher_demo_files);

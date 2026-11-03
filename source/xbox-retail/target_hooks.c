@@ -18,6 +18,7 @@
 #include "../../port/game/guest_probe.h"
 #include "target.h"
 #include "../../port/game/resot_menu_pointer.h"
+#include "../../port/third_party/xboxrecomp/src/kernel/kernel.h"
 #if defined(_MSC_VER)
 #define RESOT_TLS __declspec(thread)
 #else
@@ -698,12 +699,55 @@ enum { T_ROOT, T_GRAPHICS, T_CONTROLS, T_KEY0, T_KEY1, T_KEY2, T_JOY0, T_JOY1, T
        T_RESET, T_GFX = 10, T_LOOK = 15, T_CHEATS_LABEL = 16, T_MAP_TITLE = 17,
        T_LANG_TITLE = 18, T_KEYS = 20, T_JOYS = 50, T_MAP_PART = 80, T_MAPS = 90,
        T_LANGS = 120 };
-/* Language: the three of the USA retail disc, as Xbox language IDs (the
- * launcher's [Game] Language, port/windows/src/options.h). The game reads the
- * language when it starts, so a choice applies at the next start. */
-#define LANGS 3
-static const int s_lang_ids[LANGS] = { 1, 4, 5 };
-static const char *const s_lang_names[LANGS] = { "English", "French", "Spanish" };
+/* Language: Xbox EEPROM IDs, independent of the installed disc's assets.
+ * NTSC 0x0001F6E2 / 0x0001F6DB select "german" / "italian";
+ * 0x0001F3AF / 0x0001F3B9
+ * register their sound paths. The choice applies at the next start. */
+#define LANGS 5
+static const int s_lang_ids[LANGS] = { 1, 4, 5, 3, 6 };
+static const char *const s_lang_names[LANGS] = { "English", "French", "Spanish", "Deutsch", "Italiano" };
+
+/* NTSC's static language initializer at 0x00369310 only maps Xbox IDs
+ * 1/4/5 into Jade 0/1/2 (stores at 0x00369315, 0x00369325..0x0036933B).
+ * Extend that mapping: the table at 0x0001F744 selects Italian at index 3
+ * (0x0001F6DB), German at index 4 (0x0001F6E2). The BF and sound banks
+ * use these Jade IDs, not the Xbox EEPROM IDs. No EU code is executed. */
+void sub_00369310(void)
+{
+    int xbox_language = resot_game_language();
+    uint32_t jade = xbox_language == 4 ? 1u : xbox_language == 5 ? 2u
+                  : xbox_language == 6 ? 3u : xbox_language == 3 ? 4u : 0u;
+    /* The USA disc lacks soundx3/4. Keep the saved choice and all menu
+     * entries, but use English for this run if that language's banks are
+     * absent. 0x000D7C86..0x000D7CAE formats soundx<Jade ID>. */
+    if (jade >= 3u) {
+        const char *extensions[] = {"fat", "big"};
+        for (unsigned i = 0; i < 2; ++i) {
+            char guest_path[80];
+            xbox_host_char host_path[MAX_PATH];
+            FILE *bank = NULL;
+            snprintf(guest_path, sizeof guest_path, "D:\\sound\\soundx%u.%s", jade, extensions[i]);
+            if (xbox_translate_path(guest_path, host_path, MAX_PATH)) {
+#if defined(_WIN32)
+                bank = _wfopen(host_path, L"rb");
+#else
+                bank = fopen(host_path, "rb");
+#endif
+            }
+            if (!bank) {
+                fprintf(stderr, "[LANGUAGE] Xbox=%d: missing sound bank; using English, preference retained\n", xbox_language);
+                jade = 0;
+                break;
+            }
+            fclose(bank);
+        }
+    }
+    GMEM32(0x00758F20u) = (uint32_t)xbox_language;
+    GMEM32(0x00758F24u) = jade;
+    fprintf(stderr, "[LANGUAGE] Xbox=%d Jade=%u\n", xbox_language, jade);
+    g_eax = 0;
+    g_esp += 4;
+}
 static const char *const s_static_texts[] = {
     "reSOT Options", "Graphics", "Controls",
     "Keyboard: move and fight", "Keyboard: actions", "Keyboard: menus and camera",

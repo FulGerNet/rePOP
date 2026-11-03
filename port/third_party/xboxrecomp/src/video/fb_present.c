@@ -24,6 +24,11 @@
 #if defined(_WIN32) || defined(__ANDROID__)
 #if defined(_WIN32)
 #include <windows.h>
+/* RE-SoT: the Windows host supplies its own BF-derived menu cursor; keep
+ * resource loading out of the shared runtime and Android build. */
+static HCURSOR s_menu_cursor;
+void xbox_FramebufferSetMenuCursor(void *cursor)
+{ s_menu_cursor = (HCURSOR)cursor; }
 #else
 #include "../platform/win32_compat.h"
 #include <time.h> /* RE-SoT: precise mobile frame pacing without a busy tail. */
@@ -858,7 +863,9 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
      * the camera rather than pointing at anything. */
     case WM_SETCURSOR:
         if (LOWORD(l) == HTCLIENT) {
-            SetCursor(resot_menu_scene() == 1 ? LoadCursor(NULL, IDC_ARROW) : NULL);
+            /* RE-SoT: custom light glow in menus, hidden for camera control. */
+            SetCursor(resot_menu_scene() == 1
+                ? (s_menu_cursor ? s_menu_cursor : LoadCursor(NULL, IDC_ARROW)) : NULL);
             return TRUE;
         }
         break;

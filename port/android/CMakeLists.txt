@@ -15,7 +15,7 @@ cmake_minimum_required(VERSION 3.22)
 # Both game libraries are in every APK; GameActivity loads one of them in its
 # own process. A target whose lifted sources are absent (tools/recomp.ps1 has
 # not been run for it) is left out, and the launcher reports it.
-project(reSOT_android C CXX)
+project(reSOT_android C CXX ASM)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -111,6 +111,26 @@ function(resot_android_game id lib runtime_define)
         return()
     endif()
     add_library(${lib} SHARED ${RUNTIME_SOURCES} ${HOST_SOURCES} "${dir}/target_hooks.c" ${gen})
+    if(id STREQUAL "xbox-retail")
+        # EU disc data uses the same lifted NTSC runtime as Windows. Keep
+        # its checked image in this locally built library; never map EU code
+        # at NTSC addresses. No binary or generated image is published.
+        set(guest_xbe "${RESOT_ROOT}/Assets/${id}/default.xbe")
+        file(READ "${dir}/target.h" facts)
+        string(REGEX MATCH "#define[ \t]+RESOT_XBE_SHA256[ \t]+\"([A-Fa-f0-9]+)\"" match "${facts}")
+        string(TOUPPER "${CMAKE_MATCH_1}" expected_hash)
+        file(SHA256 "${guest_xbe}" actual_hash)
+        string(TOUPPER "${actual_hash}" actual_hash)
+        if(NOT expected_hash OR NOT actual_hash STREQUAL expected_hash)
+            message(FATAL_ERROR "Unsupported retail runtime image (SHA-256 mismatch)")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${guest_xbe}" "${dir}/target.h")
+        set(image_asm "${CMAKE_CURRENT_BINARY_DIR}/retail-runtime-image.S")
+        file(GENERATE OUTPUT "${image_asm}" CONTENT
+            ".section .rodata\n.balign 16\n.global resot_retail_xbe_start\n.hidden resot_retail_xbe_start\nresot_retail_xbe_start:\n.incbin \"${guest_xbe}\"\n.global resot_retail_xbe_end\n.hidden resot_retail_xbe_end\nresot_retail_xbe_end:\n.section .note.GNU-stack,\"\",%progbits\n")
+        set_source_files_properties("${image_asm}" PROPERTIES OBJECT_DEPENDS "${guest_xbe}")
+        target_sources(${lib} PRIVATE "${image_asm}" "${CMAKE_CURRENT_LIST_DIR}/src/retail_image.c")
+    endif()
     add_dependencies(${lib} resot_native_shaders)
     target_compile_definitions(${lib} PRIVATE ${runtime_define}=1 _GNU_SOURCE
         "RESOT_DEFAULT_ASPECT=\"16:9\"")

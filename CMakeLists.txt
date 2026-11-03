@@ -91,8 +91,19 @@ function(resot_add_target id exe_name)
         message(FATAL_ERROR "Unsupported ${id} default.xbe (SHA-256 mismatch)")
     endif()
     set(guest_resource "${CMAKE_CURRENT_BINARY_DIR}/${id}-guest-image.rc")
-    file(GENERATE OUTPUT "${guest_resource}" CONTENT "101 RCDATA \"${guest_xbe}\"\n")
-    set_source_files_properties("${guest_resource}" PROPERTIES OBJECT_DEPENDS "${guest_xbe}")
+    # Extract locally from each target's own BF; game pixels stay in build/.
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set(halo_cursor "${CMAKE_CURRENT_BINARY_DIR}/${id}-halo.cur")
+    set(guest_bf "${CMAKE_CURRENT_SOURCE_DIR}/Assets/${id}/prince.bf")
+    add_custom_command(OUTPUT "${halo_cursor}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/halo-cursor.py"
+                "${guest_bf}" "${halo_cursor}"
+        DEPENDS "${guest_bf}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/halo-cursor.py"
+        VERBATIM)
+    add_custom_target(resot_halo_cursor DEPENDS "${halo_cursor}")
+    file(GENERATE OUTPUT "${guest_resource}" CONTENT
+        "101 RCDATA \"${guest_xbe}\"\n102 CURSOR \"${halo_cursor}\"\n")
+    set_source_files_properties("${guest_resource}" PROPERTIES OBJECT_DEPENDS "${guest_xbe};${halo_cursor}")
     add_executable(${exe_name} WIN32
         port/windows/src/main.c
         port/windows/src/launcher.c
@@ -105,6 +116,7 @@ function(resot_add_target id exe_name)
         "${guest_resource}"
         ${hooks}
         ${gen})
+    add_dependencies(${exe_name} resot_halo_cursor)
     target_link_libraries(${exe_name} PRIVATE
         xboxrecomp d3d11 dxgi dxguid xinput winmm dbghelp bcrypt ole32 shell32 uuid
         msimg32 windowscodecs winhttp)

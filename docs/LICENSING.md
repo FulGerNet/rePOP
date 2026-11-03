@@ -37,6 +37,13 @@ upstream copyright and licence are in `port/third_party/apksig/LICENSE` and
 packaged in the APK as `licenses/LICENSE-apksig.txt`. The jar is resolved by
 Gradle from Google's Maven repository; binary caches are not committed.
 
+**Android retail runtime image (0.5.0).** Local APK builds embed the owner's
+checked NTSC default.xbe inside libresot_retail.so to use EU disc assets with
+the same static recompilation. The build and loader verify its SHA-256. The
+image remains game-owned and outside the MIT licence, just like the image
+embedded in Windows EXEs. No XBE or generated assembly/image output is
+committed. EU BF, sound and video assets still come from the owner's disc.
+
 **Android (`port/android`).** The APK carries the same altered SDL3 3.4.18,
 built from the checked source archive by `tools/setup-android.ps1` (the same
 `port/third_party/sdl-gpu-query/` additions, and the Vulkan query function

@@ -470,6 +470,31 @@ translate:
             swprintf_s(host_path_buf, buf_size, L"%s\\%s", base_dir, remainder_wide);
         }
 
+#if RESOT_RUNTIME_RETAIL
+        /* RE-SoT: the NTSC XBE requests VIDEO/<movie>.int; the EU disc
+         * stores those movies in VIDEO/30fps and VIDEO/25fps. Prefer the
+         * original file, then the 30fps edition for the NTSC game clock.
+         * Only alias a direct movie leaf, never saves or nested paths. */
+        if (base_dir == s_game_dir && !sub_dir
+            && !_wcsnicmp(remainder_wide, L"video\\", 6)
+            && remainder_wide[6] && !wcschr(remainder_wide + 6, L'\\')
+            && GetFileAttributesW(host_path_buf) == INVALID_FILE_ATTRIBUTES) {
+            const wchar_t *rates[] = { L"30fps", L"25fps" };
+            WCHAR candidate[MAX_PATH];
+            for (int r = 0; r < 2; ++r) {
+                int n = _snwprintf_s(candidate, MAX_PATH, _TRUNCATE,
+                    L"%s\\video\\%s\\%s", base_dir, rates[r], remainder_wide + 6);
+                DWORD attrs = n >= 0 ? GetFileAttributesW(candidate) : INVALID_FILE_ATTRIBUTES;
+                if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)
+                    && wcslen(candidate) < buf_size) {
+                    wcscpy_s(host_path_buf, buf_size, candidate);
+                    fprintf(stderr, "  [PATH] retail movie fallback: %S\n", candidate);
+                    break;
+                }
+            }
+        }
+#endif
+
         /* An empty remainder means the title opened the device itself, so
          * the join above leaves a trailing separator -- which CreateFileW
          * rejects even with FILE_FLAG_BACKUP_SEMANTICS, turning an existing
@@ -757,6 +782,32 @@ translate:
 
 #if defined(__ANDROID__)
         resolve_case(host_path_buf, strlen(base_dir));
+#endif
+#if RESOT_RUNTIME_RETAIL
+        /* RE-SoT: same EU movie layout as Windows, resolving disc case on
+         * Android before checking candidates. Leave real I/O failures intact. */
+        if (base_dir == s_game_dir && !sub_dir
+            && match_prefix(remainder_posix, "video/") == 6
+            && remainder_posix[6] && !strchr(remainder_posix + 6, '/')
+            && access(host_path_buf, F_OK) != 0) {
+            const char *rates[] = { "30fps", "25fps" };
+            char candidate[MAX_PATH];
+            struct stat st;
+            for (int r = 0; r < 2; ++r) {
+                int n = snprintf(candidate, sizeof candidate, "%s/video/%s/%s",
+                    base_dir, rates[r], remainder_posix + 6);
+                if (n < 0 || n >= (int)sizeof candidate) continue;
+#if defined(__ANDROID__)
+                resolve_case(candidate, strlen(base_dir));
+#endif
+                if (stat(candidate, &st) == 0 && S_ISREG(st.st_mode)
+                    && strlen(candidate) < buf_size) {
+                    strcpy(host_path_buf, candidate);
+                    fprintf(stderr, "  [PATH] retail movie fallback: %s\n", candidate);
+                    break;
+                }
+            }
+        }
 #endif
         XBOX_TRACE(XBOX_LOG_PATH, "%s -> %s", xbox_path, host_path_buf);
         return TRUE;

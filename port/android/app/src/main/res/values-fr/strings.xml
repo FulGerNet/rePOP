@@ -70,4 +70,7 @@
     <string name="launcher_non_game_xbe_note">Ce dossier contient un default.xbe qui n’est pas celui de Prince of Persia : Les Sables du Temps.</string>
     <string name="launcher_missing_xbe_note">default.xbe est absent : le jeu Android le lit dans ce dossier.</string>
     <string name="launcher_unidentified_game_note">Fichiers de jeu non identifiés : ajoutez le default.xbe du disque dans ce dossier.</string>
+    <string name="launcher_retail_eu">Version commerciale PAL (EU)</string>
+    <string name="language_german">Allemand</string>
+    <string name="language_italian">Italien</string>
 </resources>

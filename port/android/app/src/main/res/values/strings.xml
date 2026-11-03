@@ -70,4 +70,7 @@
     <string name="launcher_non_game_xbe_note">This folder contains a default.xbe that is not Prince of Persia: The Sands of Time.</string>
     <string name="launcher_missing_xbe_note">default.xbe is missing: the Android game reads it from this folder.</string>
     <string name="launcher_unidentified_game_note">Game files found but not identified: add the disc\'s default.xbe to that folder.</string>
+    <string name="launcher_retail_eu">PAL retail (EU)</string>
+    <string name="language_german">German</string>
+    <string name="language_italian">Italian</string>
 </resources>

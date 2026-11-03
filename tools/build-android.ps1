@@ -6,8 +6,9 @@
 #   .\tools\build-android.ps1 -Install        # and adb install it on the connected device
 #
 # The lifted sources come from tools/recomp.ps1 (source/<target>/gen), as for
-# Windows; a target without them is left out of the APK. Game data is never
-# packaged: the app installs it from the user's ISO into Android/data.
+# Windows; a target without them is left out of the APK. Retail embeds the
+# owner's checked NTSC runtime XBE for EU data compatibility, as Windows does.
+# Disc assets are installed from the user's ISO into Android/data.
 param(
     [switch]$Debug,
     [switch]$Install

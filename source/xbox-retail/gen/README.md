@@ -9,7 +9,7 @@ which evidence put it in its folder (`Folder:` line).
 | `base/` | 208 | Ubisoft Base library code no evidence assigns to one part |
 | `bink/` | 259 | RAD Bink video decoder |
 | `collision/` | 14 | Collision (Jade ENGine COLlision) |
-| `compiler/` | 426 | Compiler-generated C++ exception unwinding and global set-up (.text$x, .text$yc/yd) |
+| `compiler/` | 425 | Compiler-generated C++ exception unwinding and global set-up (.text$x, .text$yc/yd) |
 | `engine/` | 2210 | Jade engine code no evidence assigns to one module |
 | `files/` | 156 | BIG file archive and disk access (Jade SDK BIGfiles, Base disk) |
 | `main/` | 58 | Start-up, main loop and full-screen videos (Jade MainXbox) |

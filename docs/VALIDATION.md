@@ -1,5 +1,189 @@
 # Validation log
 
+## 2026-11-03: v0.5.0, Android EU runtime and five language choices
+
+Android now accepts the known supplied EU retail disc directly. Its installer
+keeps the original EU default.xbe and assets. The launcher marks that disc
+launchable; the native host hashes its default.xbe before selecting an owned
+copy of the checked NTSC image embedded in libresot_retail.so. NTSC still
+uses its disc image. Unknown executable hashes remain rejected on Android;
+the demo's image loading is unchanged. CMake verifies the canonical NTSC hash
+before generating an ignored .S with .incbin; the runtime verifies it again
+before substitution. No executable data is committed.
+
+reSOT Options > Language has five permanent choices on both hosts, regardless
+of disc: English, French, Spanish, Deutsch, Italiano. They are saved as Xbox
+IDs 1, 4, 5, 3, 6. Static analysis of the supported NTSC XBE showed that its
+initializer at 0x00369310 maps only 1/4/5 to Jade 0/1/2. A hand-written
+replacement adds Italian (Xbox 6 -> Jade 3) and German (Xbox 3 -> Jade 4).
+The Jade table at 0x0001F744 selects the italian string at 0x0001F6DB for
+index 3 and german at 0x0001F6E2 for index 4; sound bank selection uses that
+index at 0x000D7C86..0x000D7CAE. The replacement checks the additional
+soundx3/4 FAT/BIG files and falls back to English if absent, retaining the
+requested setting and all five menu rows. This avoids forcing a USA disc
+to open banks it does not contain. Demo language stays English.
+
+Commands and observed results:
+
+- `python tools/check-hlsl.py`: all listed entries passed.
+- `tools/recomp.ps1 -Target xbox-retail -SkipAnalysis`: hash verified;
+  regenerated through the normal pipeline, no seeds changed. 14,416 functions
+  lifted, zero failed. Generated changes remove only the replaced initializer
+  and update the declaration/count metadata. Windows retail build passed.
+- `tools/recomp.ps1 -Target xbox-demo -BuildOnly`: passed. Both Windows
+  EXEs report FileVersion/ProductVersion 0.5.0.
+- `tools/build-android.ps1`: release APK built successfully; the build's
+  signing identity check passed. aapt reports versionName 0.5.0,
+  versionCode 15. APK inspection found the exact 4,603,904-byte NTSC image
+  in its AArch64 retail ELF (machine 183), hash
+  753C58B191279BF4D1A8B28A936DF36AA222ED566487AB1FBDFCD090E91EE379.
+- `python tools/test-android-retail-image.py --eu <supplied EU default.xbe>`:
+  production loader/SHA code passed: NTSC retained, EU replaced with a
+  separate owned canonical buffer, unknown disc rejected, wrong runtime
+  rejected without changing the original allocation.
+- `python tools/test-game-language.py`: actual Android preference code passed
+  five-choice cycling, read/write persistence, invalid-ID rejection and
+  preservation of unrelated INI settings, using minimal UI stubs and no device.
+- Three Windows/Vulkan runs with `[Game] Language=6`, `3`, `6`, respectively,
+  EU, EU, USA assets, and this command (dump basename changed per case):
+
+```powershell
+.\tools\run.ps1 -Target xbox-retail -Seconds 22 -Windowed -Set @{
+  RESOT_ASSET_DIR=$discDirectory
+  RECOMP_PAD_SCRIPT='3000:a:150,6000:a:150,9000:a:150,12000:start:150'
+  RECOMP_FB_WINDOW_DUMP_EVERY='120'
+  RECOMP_FB_DUMP="$root/logs/v050-eu-it.bmp"
+}
+```
+
+EU Italian logs Xbox=6/Jade=3, opens soundx3 and pop_in3; screenshot shows
+"Nuova partita", "Seleziona", "Indietro". EU German logs Xbox=3/Jade=4,
+opens soundx4 and pop_in4, loads the menus and renders the initial Prince
+scene. The final German framebuffer is the scene, not a German menu-text
+capture. USA with Italian selected logs the missing-bank fallback and
+Xbox=6/Jade=0, loads menus and keeps the preference. Evidence is in
+logs/v050-{eu-it,eu-de,usa-it}-{err,out}.txt and corresponding .bmp files.
+The test script restored bin/resot-options.ini byte-for-byte to its saved
+contents (verified), keeping the user's EU launcher selection.
+
+- `adb devices`: no attached devices. Android EU install, launch, languages,
+  audio and gameplay have NOT been run on an Android device. Host loader
+  tests and an APK build are not a claim of device playability.
+- `git diff --check`: passed.
+
+No full EU playthrough or exhaustive language/audio/scene validation was
+performed. The shared implementation is built for Android and Windows;
+Windows language smoke tests do not establish Android runtime results.
+
+## 2026-11-03: EU retail disc assets and launcher recognition
+
+The supplied EU folder and source `.xiso.iso` contain the same 4,141,056-byte
+`default.xbe`, SHA-256
+`F15584C5D259F48A4216259AA2B91755B44D75A04BB12227D1BC6C30262337E2`.
+Its certificate records title ID `0x5553001D` (cert+0x08), region 4
+(cert+0xA0), version 2 (cert+0xAC). The BF is 365,107,200 bytes; USA is
+365,119,488. The ISO's XBE was hashed directly from its XDVDFS root entry.
+REA rejected XBE as an unsupported format; metadata and layout evidence
+came from local Python parsing. `disc_variants.h` contains disc identity,
+not EU code addresses. No seeds, generated C or build-time hashes changed.
+
+Baseline command (PowerShell; `$eu` is the supplied extracted EU directory,
+`$root` is the repository):
+
+```powershell
+.\tools\run.ps1 -Target xbox-retail -Seconds 22 -Windowed -Set @{
+  RESOT_ASSET_DIR=$eu
+  RECOMP_FB_WINDOW_DUMP_EVERY='60'
+  RECOMP_FB_DUMP="$root/logs/eu-baseline.bmp"
+}
+```
+
+Observed: the screenshot shows the game's dirty/damaged-disc screen. The log
+records two failed `video\pop_in0.int` opens (STATUS_OBJECT_NAME_NOT_FOUND).
+The EU disc has VIDEO/30fps and VIDEO/25fps instead of flat movies.
+The shared retail translator now preserves existing flat files, then tries
+30fps and 25fps for missing direct VIDEO leaves. Assets are not modified,
+failed reads are not ignored, and BF corruption is not bypassed.
+
+The Windows launcher names the known disc PAL retail (EU). Other identified
+Sands of Time revisions can be attempted with a compatibility notice. An
+explicit or remembered folder takes precedence over automatic detection,
+even with a known USA disc installed. The local ignored INI selects the EU
+folder; its former contents are in logs/pre-eu-resot-options.ini.
+
+Checks and observations:
+
+- `python tools/check-hlsl.py`: all listed shader entries passed.
+- `tools/recomp.ps1 -Target xbox-retail -BuildOnly` and the same for
+  `xbox-demo`: both Windows executables rebuilt.
+- `python tools/test-retail-disc-path.py --eu <EU folder> --ntsc <USA folder>`:
+  production retail/demo path tests pass (flat priority, 30fps/25fps,
+  absent/nested movies and save isolation). The real launcher detector
+  recognises both hashes, preserves preferred EU/unverified folders, and
+  favours known discs over unverified ones only during automatic selection.
+- EU runtime command:
+
+```powershell
+.\tools\run.ps1 -Target xbox-retail -Seconds 40 -Windowed -Set @{
+  RESOT_ASSET_DIR=$eu
+  RECOMP_PAD_SCRIPT='4000:start:200,7000:a:200,11000:start:200,15000:a:200,18000:start:200,22000:a:200,26000:start:200,30000:a:200'
+  RECOMP_FB_WINDOW_DUMP_EVERY='120'
+  RECOMP_FB_DUMP="$root/logs/eu-video-fix.bmp"
+}
+```
+
+Windows/Vulkan reads startup textures and movies via VIDEO/30fps, loads
+MenuBoot/Menu and resumes an existing cave-area save (3202_Cascade,
+3201_Grotte, then 3203_Bassin in the log). The framebuffer shows the cave.
+Logs are retained in logs/eu-video-fix-err.txt and -out.txt. No damaged-disc
+screen was seen after the fix. This was a bounded smoke check, not a
+full-game playthrough, new-game check, or language/audio validation.
+
+- NTSC regression: same command with USA assets, `-Seconds 20`, input script
+  shortened to its first four entries, and dump named
+  logs/ntsc-disc-regression.bmp. Movies/menu load with no EU fallback;
+  framebuffer shows the menu's Graphics page. Log retained in
+  logs/ntsc-disc-regression-err.txt.
+- `tools/build-android.ps1`: release APK built successfully. EU naming and
+  shared movie fallback compile. No Android device run was performed.
+  Android still requires the checked NTSC default.xbe in the game folder;
+  the EU XBE has different addresses and is rejected. EU data with the
+  user's NTSC XBE is not device-validated (see Android README).
+- `git diff --check`: passed.
+
+Full EU playthrough, all movies, German/Italian choices, saving to EU data,
+other disc revisions and Android EU-data gameplay remain unchecked. Genuine
+read failures retain the game's original failure path.
+
+## 2026-11-03: Windows light-halo cursor
+
+Both Windows targets now use a generated cursor in the launcher, native game
+menus and F7 options. The 48x48 image uses BF texture `0x2E004392`, converts
+additive black to transparency, tints it warm white and centres the hotspot.
+Camera control still hides the pointer. The source texture is 64x64: demo
+BGRA in `1101_Hall_wow_ff0b3977.bin` (BF entry 11), retail BC1 in
+`1501_ReceptionHall_wow_ff0f37b7.bin` (BF entry 177). These are BF keys and
+indices, not XBE addresses. `tools/halo-cursor.py` reads the FAT, decompresses
+the resource stream and writes only ignored build outputs. No external PoP
+tool code or extracted image is published.
+
+Commands: `python tools/check-hlsl.py`;
+`tools/recomp.ps1 -Target xbox-demo -BuildOnly`;
+`tools/recomp.ps1 -Target xbox-retail -BuildOnly`;
+`tools/build-android.ps1`. All passed (build logs: `logs/cursor-demo-build.txt`,
+`logs/cursor-retail-build.txt`, `logs/cursor-android-build.txt`). MSBuild and
+Gradle first failed under sandbox restrictions; the approved reruns passed.
+The independent LZO decoder's complete output for both containers was
+byte-identical to the BF Lab reference decoder, used locally for comparison.
+Windows `LoadLibraryExW` / `LoadImageW` / `GetIconInfo` loaded resource 102
+from both built EXEs and reported cursor hotspots (24,24).
+
+The retail session reached Choose Your Profile; the user confirmed the new
+appearance: "ottimo e perfetto". Demo visual appearance, launcher/F7 visual
+checks, camera/menu transitions, other DPI settings and Android device
+execution were not separately checked in this pass.
+
+
 ## 2026-11-02 (late night): RESOT_FLIP_AHEAD default 2
 
 Correction of the v0.4.4 commit and notes, which gave about 140 fps for the heavy scene: that

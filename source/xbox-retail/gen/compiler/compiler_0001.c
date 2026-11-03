@@ -1,7 +1,7 @@
 /**
  * PoP SoT xbox-retail - compiler, chunk 1
  * Compiler-generated C++ exception unwinding and global set-up (.text$x, .text$yc/yd)
- * Functions: 176 (0x00368B86 - 0x00369CF0)
+ * Functions: 175 (0x00368B86 - 0x00369CF0)
  */
 
 #define RECOMP_GENERATED_CODE
@@ -2302,57 +2302,6 @@ loc_003692FA: ;
 
 loc_00369304: ;
     POP32(esp, ecx);
-    esp += 4; return; /* ret */
-
-}
-
-/**
- * sub_00369310
- * Original: 0x00369310 - 0x00369346 (54 bytes, 14 insns)
- * Folder: compiler (between: 0x00369240 and 0x00369970)
- * Category: game_vtable
- * CC: cdecl, 0 params, returns int_or_void
- * Frame: fpo_leaf
- */
-void sub_00369310(void)
-{
-    int _flags = 0; /* fallback flag var */
-    uint32_t _fa = 0, _fb = 0;
-    int32_t _fas = 0, _fbs = 0;
-    (void)_fa; (void)_fb; (void)_fas; (void)_fbs;
-
-loc_00369310: ;
-    PUSH32(esp, 0x00369315u); RECOMP_ABI_CALL(0x00332E48u, sub_00332E48); /* call 0x00332E48 */
-
-loc_00369315: ;
-    MEM32(0x758F20) = eax;
-    eax--;
-    _fa = (uint32_t)(eax) & 0xFFFFFFFFu;
-    _fas = (int32_t)(int32_t)(_fa); _fb = (_fa == 0x7FFFFFFFu); /* dec result/SF/OF; CF unchanged */
-    if ((_fa == 0)) goto loc_0036933B; /* je: equal / zero */
-
-loc_0036931D: ;
-    _fb = (uint32_t)(3) & 0xFFFFFFFFu; _fbs = (int32_t)(int32_t)(_fb); /* sub source, before the write */
-    eax = eax - 3;
-    _fa = (uint32_t)(eax) & 0xFFFFFFFFu; _fas = (int32_t)(int32_t)(_fa); /* sub result */
-    if ((_fa == 0)) goto loc_00369330; /* je: equal / zero */
-
-loc_00369322: ;
-    eax--;
-    _fa = (uint32_t)(eax) & 0xFFFFFFFFu;
-    _fas = (int32_t)(int32_t)(_fa); _fb = (_fa == 0x7FFFFFFFu); /* dec result/SF/OF; CF unchanged */
-    if ((_fa != 0)) goto loc_0036933B; /* jne: not equal / not zero */
-
-loc_00369325: ;
-    MEM32(0x758F24) = 2;
-    esp += 4; return; /* ret */
-
-loc_00369330: ;
-    MEM32(0x758F24) = 1;
-    esp += 4; return; /* ret */
-
-loc_0036933B: ;
-    MEM32(0x758F24) = 0;
     esp += 4; return; /* ret */
 
 }
